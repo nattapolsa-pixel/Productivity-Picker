@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pick Productivity Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+<style>
+  :root{--indigo:#6366f1;--violet:#8b5cf6;--teal:#14b8a6;--amber:#f59e0b;--rose:#f43f5e;--sky:#0ea5e9;--emerald:#10b981;--ink:#1e293b;--muted:#64748b;--card:#fff}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Prompt',system-ui,sans-serif;color:var(--ink);background:linear-gradient(135deg,#eef2ff 0%,#f8fafc 45%,#ecfeff 100%);background-attachment:fixed;min-height:100vh}
+  .layout{display:flex;min-height:100vh}
+  /* sidebar */
+  .sidebar{width:250px;flex-shrink:0;background:#fff;box-shadow:4px 0 30px -18px rgba(30,41,59,.35);display:flex;flex-direction:column;padding:22px 16px;position:sticky;top:0;height:100vh}
+  .brand{font-size:19px;font-weight:700;background:linear-gradient(90deg,var(--indigo),var(--teal));-webkit-background-clip:text;background-clip:text;color:transparent;padding:4px 8px 18px;line-height:1.3}
+  .brand span{display:block;font-size:11px;font-weight:400;color:var(--muted);-webkit-text-fill-color:var(--muted)}
+  .nav{display:flex;align-items:center;gap:12px;border:0;background:transparent;font-family:inherit;font-size:14.5px;font-weight:500;color:var(--muted);padding:12px 14px;border-radius:12px;cursor:pointer;text-align:left;width:100%;transition:.18s;margin-bottom:4px}
+  .nav:hover{background:#f1f5f9;color:var(--ink)}
+  .nav.active{background:linear-gradient(90deg,var(--indigo),var(--violet));color:#fff;box-shadow:0 8px 18px -8px rgba(99,102,241,.75)}
+  .nav svg{width:19px;height:19px;flex-shrink:0}
+  .sidebadge{margin-top:auto;background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;padding:8px 12px;border-radius:12px;font-size:11.5px;line-height:1.5}
+  /* content */
+  .content{flex:1;padding:26px 28px 60px;min-width:0}
+  .pagehead{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:22px}
+  .pagehead h1{font-size:26px;font-weight:700}
+  .daterange{color:var(--muted);font-size:13px}.daterange b{color:var(--ink)}
+  .page{display:none}.page.active{display:block;animation:fade .45s}
+  @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  /* kpi */
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:15px;margin-bottom:20px}
+  .kpi{background:var(--card);border-radius:18px;padding:17px;position:relative;overflow:hidden;box-shadow:0 10px 30px -14px rgba(30,41,59,.2);transition:transform .25s}
+  .kpi:hover{transform:translateY(-4px)}
+  .kpi .bar{position:absolute;top:0;left:0;right:0;height:4px}
+  .kpi .lbl{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:8px}
+  .kpi .val{font-size:27px;font-weight:700;line-height:1}
+  .kpi .unit{font-size:12px;color:var(--muted);font-weight:400;margin-left:3px}
+  /* cards */
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+  .card{background:var(--card);border-radius:18px;padding:20px;box-shadow:0 10px 30px -14px rgba(30,41,59,.18)}
+  .card.wide{grid-column:span 2}
+  .card h3{font-size:15px;font-weight:600}.card .sub{font-size:12px;color:var(--muted);margin:2px 0 12px}
+  .chartbox{position:relative;height:300px}.chartbox.tall{height:380px}
+  .note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:12px;padding:12px 14px;font-size:12.5px;line-height:1.6;margin-top:14px}
+  .controls{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  .seg{display:inline-flex;background:#f1f5f9;border-radius:11px;padding:4px}
+  .seg button{border:0;background:transparent;font-family:inherit;font-size:13px;font-weight:500;color:var(--muted);padding:7px 16px;border-radius:8px;cursor:pointer;transition:.2s}
+  .seg button.active{background:linear-gradient(90deg,var(--indigo),var(--violet));color:#fff}
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:11px 12px;text-align:left;border-bottom:1px solid #eef2f7}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr:hover td{background:#f8fafc}
+  .rank{display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;border-radius:7px;background:#eef2ff;color:#4338ca;font-weight:600;font-size:12px}
+  .pill{background:#ecfeff;color:#0e7490;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:500}
+  /* heatmap */
+  .heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;margin-top:6px}
+  .tile{border-radius:14px;padding:16px;color:#fff;transition:transform .2s}.tile:hover{transform:scale(1.04)}
+  .tile .z{font-size:20px;font-weight:700}.tile .q{font-size:13px;opacity:.95;margin-top:4px}.tile .p{font-size:11px;opacity:.85;margin-top:2px}
+  @media(max-width:900px){.layout{flex-direction:column}.sidebar{width:100%;height:auto;flex-direction:row;overflow-x:auto;position:static;padding:12px}.brand{display:none}.nav{white-space:nowrap;margin:0 4px 0 0}.sidebadge{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.card.wide{grid-column:span 1}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar">
+    <div class="brand">Pick Productivity<span>คลังสินค้า · BPS / PTT</span></div>
+    <button class="nav active" data-page="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> ภาพรวม</button>
+    <button class="nav" data-page="prod"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg> Productivity</button>
+    <button class="nav" data-page="zones"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21"/><line x1="8" y1="3" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="21"/></svg> โซน &amp; ผังคลัง</button>
+    <button class="nav" data-page="pickers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg> พนักงาน (Picker)</button>
+    <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> ช่วงเวลา</button>
+    <button class="nav" data-page="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8l-9-5-9 5v8l9 5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg> สินค้า (Items)</button>
+    <div class="sidebadge">preview · ข้อมูลตัวอย่าง ~2,000 แถว<br>สลับข้อมูลเต็มได้ภายหลัง</div>
+  </nav>
+
+  <main class="content">
+    <div class="pagehead"><h1 id="ptitle">ภาพรวม</h1><div class="daterange" id="daterange"></div></div>
+
+    <!-- OVERVIEW -->
+    <section class="page active" data-page="overview">
+      <div class="kpis" id="kpis"></div>
+      <div class="grid">
+        <div class="card wide">
+          <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
+          <div class="sub">แท่ง = จำนวนชิ้น (ซ้าย) · เส้น = Productivity เฉลี่ย หยิบ/ชม. (ขวา)</div>
+          <div class="controls"><div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button data-mode="week">รายสัปดาห์</button><button data-mode="month">รายเดือน</button></div></div>
+          <div class="chartbox"><canvas id="trend"></canvas></div>
+        </div>
+        <div class="card wide">
+          <h3>สัดส่วนตามประเภท (BPS vs PTT)</h3><div class="sub">จำนวนชิ้น</div>
+          <div class="chartbox"><canvas id="cat"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PRODUCTIVITY -->
+    <section class="page" data-page="prod">
+      <div class="card wide">
+        <h3>Productivity รายคน — Top 12 (หยิบ/ชม.)</h3>
+        <div class="sub">ตัดวันที่โดนกติกา &gt;3ชม. &amp; &gt;1,000 = 0 ออกแล้ว</div>
+        <div class="chartbox tall"><canvas id="picker"></canvas></div>
+        <div class="note">⚠️ ค่าที่สูงผิดปกติ (เช่น 2,000+) มักมาจากการหยิบช่วงเวลาสั้นมาก — พอได้ตารางกะ A/B/C กับตัวหาร UOM ที่ถูกต้อง ผมจะปรับสูตรให้แม่นขึ้น</div>
+      </div>
+    </section>
+
+    <!-- ZONES -->
+    <section class="page" data-page="zones">
+      <div class="card wide" style="margin-bottom:18px">
+        <h3>ปริมาณหยิบตามโซน</h3><div class="sub">จำนวนชิ้นแยกตาม Zone (2 ตัวหน้าของ Location)</div>
+        <div class="chartbox"><canvas id="zone"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>ผังคลัง · Heatmap ความหนาแน่นการหยิบ</h3>
+        <div class="sub">สีเข้ม = หยิบเยอะ · <i>ผังจริงตามตำแหน่งคลังรอข้อมูลเพิ่มเติม</i></div>
+        <div class="heat" id="heat"></div>
+      </div>
+    </section>
+
+    <!-- PICKERS -->
+    <section class="page" data-page="pickers">
+      <div class="card wide">
+        <h3>ตารางพนักงานหยิบ (เรียงตามปริมาณ)</h3>
+        <div class="sub">รหัส Picker · โซนหลัก · จำนวนบรรทัด · จำนวนชิ้น · Productivity</div>
+        <div style="overflow-x:auto"><table id="ptable"></table></div>
+        <div class="note">รหัสตัวเลขคือ Picker ID — เมื่อได้ตาราง map รหัส→ชื่อ จะแสดงเป็นชื่อจริงให้</div>
+      </div>
+    </section>
+
+    <!-- TIME -->
+    <section class="page" data-page="time">
+      <div class="card wide">
+        <h3>ช่วงเวลาที่หยิบ (Time Slot)</h3><div class="sub">จำนวนชิ้นตามชั่วโมง — ดูช่วงงานหนัก</div>
+        <div class="chartbox tall"><canvas id="slot"></canvas></div>
+      </div>
+    </section>
+
+    <!-- ITEMS -->
+    <section class="page" data-page="items">
+      <div class="card wide">
+        <h3>สินค้าหยิบเยอะสุด — Top 10</h3><div class="sub">รหัส Item · จำนวนชิ้น</div>
+        <div class="chartbox tall"><canvas id="item"></canvas></div>
+        <div class="note">แสดงเป็นรหัสสินค้า — เมื่อต่อ master (master_product_native) จะแสดงชื่อสินค้าจริง</div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+const DATA = {"meta":{"rows":2002,"date_min":"2026-07-14","date_max":"2026-07-15","note":"preview จากข้อมูลตัวอย่าง ~2,000 แถว (ยังไม่ใช่ข้อมูลเต็ม 33,398)"},"kpis":{"lines":2002,"qty":29386,"pickers":40,"zones":9,"avg_prod":373.4},"daily":[{"date":"2026-07-14","lines":803,"qty":11233,"pickers":18,"avg_prod":728.4},{"date":"2026-07-15","lines":1199,"qty":18153,"pickers":33,"avg_prod":179.7}],"by_zone":[{"zone":"BE","qty":12425,"lines":343,"pickers":3},{"zone":"AI","qty":6109,"lines":287,"pickers":19},{"zone":"AH","qty":5775,"lines":197,"pickers":19},{"zone":"AK","qty":2166,"lines":352,"pickers":25},{"zone":"AJ","qty":1716,"lines":475,"pickers":25},{"zone":"BK","qty":578,"lines":99,"pickers":5},{"zone":"HB","qty":324,"lines":138,"pickers":3},{"zone":"BJ","qty":269,"lines":107,"pickers":5},{"zone":"GB","qty":24,"lines":4,"pickers":1}],"by_picker":[{"picker":"10148786","qty":5706,"lines":184,"avg_prod":1110.7,"zone":"BE"},{"picker":"MPPTG0407","qty":4083,"lines":130,"avg_prod":554.3,"zone":"BE"},{"picker":"10132713","qty":3208,"lines":49,"avg_prod":2291.4,"zone":"BE"},{"picker":"10084384","qty":2876,"lines":156,"avg_prod":509.6,"zone":"AI"},{"picker":"MPPTG0525","qty":1617,"lines":130,"avg_prod":365.2,"zone":"AK"},{"picker":"25136","qty":1513,"lines":61,"avg_prod":198.2,"zone":"AI"},{"picker":"63003952","qty":1269,"lines":59,"avg_prod":2115.0,"zone":"AI"},{"picker":"10135289","qty":1173,"lines":88,"avg_prod":136.1,"zone":"AJ"},{"picker":"10134297","qty":1100,"lines":81,"avg_prod":364.1,"zone":"AJ"},{"picker":"10084402","qty":797,"lines":147,"avg_prod":41.1,"zone":"AJ"},{"picker":"10145207","qty":712,"lines":81,"avg_prod":37.4,"zone":"AJ"},{"picker":"10140284","qty":656,"lines":122,"avg_prod":243.0,"zone":"BK"}],"by_timeslot":[{"hour":0,"label":"00:00","qty":1710,"lines":94},{"hour":1,"label":"01:00","qty":2676,"lines":195},{"hour":2,"label":"02:00","qty":1162,"lines":42},{"hour":3,"label":"03:00","qty":303,"lines":34},{"hour":7,"label":"07:00","qty":1013,"lines":70},{"hour":8,"label":"08:00","qty":1166,"lines":74},{"hour":9,"label":"09:00","qty":1035,"lines":61},{"hour":10,"label":"10:00","qty":374,"lines":35},{"hour":11,"label":"11:00","qty":34,"lines":12},{"hour":12,"label":"12:00","qty":1202,"lines":63},{"hour":13,"label":"13:00","qty":3382,"lines":208},{"hour":14,"label":"14:00","qty":5361,"lines":335},{"hour":15,"label":"15:00","qty":1322,"lines":140},{"hour":16,"label":"16:00","qty":67,"lines":12},{"hour":19,"label":"19:00","qty":3675,"lines":225},{"hour":20,"label":"20:00","qty":1195,"lines":113},{"hour":21,"label":"21:00","qty":1934,"lines":136},{"hour":22,"label":"22:00","qty":1775,"lines":153}],"by_category":[{"cat":"BPS","qty":12425,"lines":343,"pickers":3},{"cat":"PTT","qty":16961,"lines":1659,"pickers":38}],"by_item":[{"sku":"250000140","qty":2496,"lines":35},{"sku":"230010149","qty":2100,"lines":27},{"sku":"230010114","qty":2060,"lines":40},{"sku":"230010151","qty":1850,"lines":16},{"sku":"250001008","qty":1842,"lines":30},{"sku":"230010112","qty":1640,"lines":39},{"sku":"250000038","qty":1170,"lines":42},{"sku":"230010111","qty":1140,"lines":33},{"sku":"110058203","qty":768,"lines":11},{"sku":"300009234","qty":750,"lines":13}]};
+
+const fmt=n=>Number(n).toLocaleString('en-US');
+const PALETTE=['#6366f1','#14b8a6','#f59e0b','#f43f5e','#0ea5e9','#8b5cf6','#10b981','#ec4899','#f97316','#22c55e','#3b82f6','#eab308'];
+const TITLES={overview:'ภาพรวม',prod:'Productivity',zones:'โซน & ผังคลัง',pickers:'พนักงาน (Picker)',time:'ช่วงเวลา',items:'สินค้า (Items)'};
+Chart.register(ChartDataLabels);
+Chart.defaults.font.family="'Prompt',sans-serif";Chart.defaults.color='#64748b';
+document.getElementById('daterange').innerHTML='ช่วงข้อมูล: <b>'+DATA.meta.date_min+'</b> ถึง <b>'+DATA.meta.date_max+'</b>';
+
+// KPIs (overview)
+const kpiDefs=[
+  {lbl:'บรรทัดที่หยิบ',val:DATA.kpis.lines,unit:'',grad:'linear-gradient(90deg,#6366f1,#8b5cf6)'},
+  {lbl:'จำนวนชิ้นรวม',val:DATA.kpis.qty,unit:'ชิ้น',grad:'linear-gradient(90deg,#14b8a6,#0ea5e9)'},
+  {lbl:'พนักงานหยิบ',val:DATA.kpis.pickers,unit:'คน',grad:'linear-gradient(90deg,#f59e0b,#f97316)'},
+  {lbl:'Productivity เฉลี่ย',val:DATA.kpis.avg_prod,unit:'หยิบ/ชม.',grad:'linear-gradient(90deg,#f43f5e,#ec4899)'},
+  {lbl:'โซนที่ใช้งาน',val:DATA.kpis.zones,unit:'โซน',grad:'linear-gradient(90deg,#10b981,#22c55e)'}];
+const kw=document.getElementById('kpis');
+kpiDefs.forEach(k=>{const e=document.createElement('div');e.className='kpi';e.innerHTML='<div class="bar" style="background:'+k.grad+'"></div><div class="lbl">'+k.lbl+'</div><div class="val"><span class="num" data-t="'+k.val+'">0</span><span class="unit">'+k.unit+'</span></div>';kw.appendChild(e);});
+function countUp(){document.querySelectorAll('.num').forEach(el=>{if(el.dataset.done)return;el.dataset.done=1;const t=parseFloat(el.dataset.t),dec=t%1!==0;let c=0,s=t/50;const iv=setInterval(()=>{c+=s;if(c>=t){c=t;clearInterval(iv);}el.textContent=dec?c.toFixed(1):fmt(Math.round(c));},18);});}
+
+const DL={color:'#334155',font:{size:11,weight:'600'}};
+const built={};
+const builders={
+  overview(){
+    function bucket(mode){const map={};DATA.daily.forEach(d=>{let k=d.date;const dt=new Date(d.date);if(mode==='week'){const day=(dt.getDay()+6)%7;const m=new Date(dt);m.setDate(dt.getDate()-day);k='wk '+m.toISOString().slice(5,10);}if(mode==='month')k=d.date.slice(0,7);if(!map[k])map[k]={qty:0,ps:[]};map[k].qty+=d.qty;map[k].ps.push(d.avg_prod);});const ks=Object.keys(map).sort();return{labels:ks,qty:ks.map(k=>map[k].qty),prod:ks.map(k=>Math.round(map[k].ps.reduce((a,b)=>a+b,0)/map[k].ps.length*10)/10)};}
+    let tc;function drawTrend(mode){const b=bucket(mode);const cfg={data:{labels:b.labels,datasets:[{type:'bar',label:'จำนวนชิ้น',data:b.qty,backgroundColor:'rgba(99,102,241,.85)',borderRadius:8,yAxisID:'y',datalabels:{anchor:'end',align:'end',formatter:fmt,color:'#4338ca',font:{weight:'600'}}},{type:'line',label:'Productivity',data:b.prod,borderColor:'#f43f5e',backgroundColor:'#f43f5e',tension:.35,borderWidth:3,pointRadius:5,pointBackgroundColor:'#fff',pointBorderWidth:2,yAxisID:'y1',datalabels:{align:'top',color:'#e11d48',formatter:fmt,font:{weight:'600'}}}]},options:{maintainAspectRatio:false,layout:{padding:{top:24}},plugins:{legend:{display:true,position:'top',labels:{usePointStyl

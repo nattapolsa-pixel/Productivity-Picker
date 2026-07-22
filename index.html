@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pick Productivity Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+<style>
+  :root{--indigo:#6366f1;--violet:#8b5cf6;--teal:#14b8a6;--amber:#f59e0b;--rose:#f43f5e;--sky:#0ea5e9;--emerald:#10b981;--ink:#1e293b;--muted:#64748b;--card:#fff}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Prompt',system-ui,sans-serif;color:var(--ink);background:linear-gradient(135deg,#eef2ff 0%,#f8fafc 45%,#ecfeff 100%);background-attachment:fixed;min-height:100vh}
+  .layout{display:flex;min-height:100vh}
+  .sidebar{width:250px;flex-shrink:0;background:#fff;box-shadow:4px 0 30px -18px rgba(30,41,59,.35);display:flex;flex-direction:column;padding:22px 16px;position:sticky;top:0;height:100vh}
+  .brand{font-size:19px;font-weight:700;background:linear-gradient(90deg,var(--indigo),var(--teal));-webkit-background-clip:text;background-clip:text;color:transparent;padding:4px 8px 18px;line-height:1.3}
+  .brand span{display:block;font-size:11px;font-weight:400;color:var(--muted);-webkit-text-fill-color:var(--muted)}
+  .nav{display:flex;align-items:center;gap:12px;border:0;background:transparent;font-family:inherit;font-size:14.5px;font-weight:500;color:var(--muted);padding:12px 14px;border-radius:12px;cursor:pointer;text-align:left;width:100%;transition:.18s;margin-bottom:4px}
+  .nav:hover{background:#f1f5f9;color:var(--ink)}
+  .nav.active{background:linear-gradient(90deg,var(--indigo),var(--violet));color:#fff;box-shadow:0 8px 18px -8px rgba(99,102,241,.75)}
+  .nav svg{width:19px;height:19px;flex-shrink:0}
+  .sidebadge{margin-top:auto;background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;padding:8px 12px;border-radius:12px;font-size:11.5px;line-height:1.5}
+  .content{flex:1;padding:26px 28px 60px;min-width:0}
+  .pagehead{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:22px}
+  .pagehead h1{font-size:26px;font-weight:700}
+  .daterange{color:var(--muted);font-size:13px}.daterange b{color:var(--ink)}
+  .page{display:none}.page.active{display:block;animation:fade .45s}
+  @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:15px;margin-bottom:20px}
+  .kpi{background:var(--card);border-radius:18px;padding:17px;position:relative;overflow:hidden;box-shadow:0 10px 30px -14px rgba(30,41,59,.2);transition:transform .25s}
+  .kpi:hover{transform:translateY(-4px)}
+  .kpi .bar{position:absolute;top:0;left:0;right:0;height:4px}
+  .kpi .lbl{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:8px}
+  .kpi .val{font-size:27px;font-weight:700;line-height:1}
+  .kpi .unit{font-size:12px;color:var(--muted);font-weight:400;margin-left:3px}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+  .card{background:var(--card);border-radius:18px;padding:20px;box-shadow:0 10px 30px -14px rgba(30,41,59,.18)}
+  .card.wide{grid-column:span 2}
+  .card h3{font-size:15px;font-weight:600}.card .sub{font-size:12px;color:var(--muted);margin:2px 0 12px}
+  .chartbox{position:relative;height:300px}.chartbox.tall{height:380px}
+  .note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:12px;padding:12px 14px;font-size:12.5px;line-height:1.6;margin-top:14px}
+  .controls{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  .seg{display:inline-flex;background:#f1f5f9;border-radius:11px;padding:4px}
+  .seg button{border:0;background:transparent;font-family:inherit;font-size:13px;font-weight:500;color:var(--muted);padding:7px 16px;border-radius:8px;cursor:pointer;transition:.2s}
+  .seg button.active{background:linear-gradient(90deg,var(--indigo),var(--violet));color:#fff}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:11px 12px;text-align:left;border-bottom:1px solid #eef2f7}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr:hover td{background:#f8fafc}
+  .rank{display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;border-radius:7px;background:#eef2ff;color:#4338ca;font-weight:600;font-size:12px}
+  .pill{background:#ecfeff;color:#0e7490;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:500}
+  .heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;margin-top:6px}
+  .tile{border-radius:14px;padding:16px;color:#fff;transition:transform .2s}.tile:hover{transform:scale(1.04)}
+  .tile .z{font-size:20px;font-weight:700}.tile .q{font-size:13px;opacity:.95;margin-top:4px}.tile .p{font-size:11px;opacity:.85;margin-top:2px}
+  @media(max-width:900px){.layout{flex-direction:column}.sidebar{width:100%;height:auto;flex-direction:row;overflow-x:auto;position:static;padding:12px}.brand{display:none}.nav{white-space:nowrap;margin:0 4px 0 0}.sidebadge{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.card.wide{grid-column:span 1}}
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar">
+    <div class="brand">Pick Productivity<span>คลังสินค้า · BPS / PTT</span></div>
+    <button class="nav active" data-page="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> ภาพรวม</button>
+    <button class="nav" data-page="prod"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg> Productivity</button>
+    <button class="nav" data-page="zones"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21"/><line x1="8" y1="3" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="21"/></svg> โซน &amp; ผังคลัง</button>
+    <button class="nav" data-page="pickers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg> พนักงาน (Picker)</button>
+    <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> ช่วงเวลา</button>
+    <button class="nav" data-page="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8l-9-5-9 5v8l9 5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg> สินค้า (Items)</button>
+    <div class="sidebadge">ข้อมูลจริง 12,739 แถว<br>15–16 ก.ค. 2026 · กรองช่วงวันที่ได้</div>
+  </nav>
+
+  <main class="content">
+    <div class="pagehead"><h1 id="ptitle">ภาพรวม</h1><div class="daterange" id="daterange"></div></div>
+
+    <section class="page active" data-page="overview">
+      <div class="kpis" id="kpis"></div>
+      <div class="grid">
+        <div class="card wide">
+          <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
+          <div class="sub">แท่ง = จำนวนชิ้น (ซ้าย) · เส้น = Productivity เฉลี่ย หยิบ/ชม. (ขวา)</div>
+          <div class="controls"><div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button data-mode="week">รายสัปดาห์</button><button data-mode="month">รายเดือน</button></div></div>
+          <div class="chartbox"><canvas id="trend"></canvas></div>
+        </div>
+        <div class="card wide">
+          <h3>สัดส่วนตามประเภท (BPS vs PTT)</h3><div class="sub">จำนวนชิ้น</div>
+          <div class="chartbox"><canvas id="cat"></canvas></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" data-page="prod">
+      <div class="card wide">
+        <h3>Productivity รายคน — Top 12 (หยิบ/ชม.)</h3>
+        <div class="sub">Productivity = จำนวนชิ้น ÷ (ชั่วโมงกะ + OT) · แยกกะเช้า/ดึก</div>
+        <div class="chartbox tall"><canvas id="picker"></canvas></div>
+        <div class="note">คิดจากชั่วโมงกะจริง: กะเช้า 07:00–16:00 (OT 16:30–19:00) · กะดึก 19:00–04:00 (OT 04:30–07:00) — ตัวหาร = 9 ชม. + OT (นับบล็อกละ 30 นาที) ปรับค่า REG_HOURS ได้ในไฟล์ app.js ถ้าหักพักเที่ยงเป็น 8 ชม.</div>
+      </div>
+    </section>
+
+    <section class="page" data-page="zones">
+      <div class="card wide" style="margin-bottom:18px">
+        <h3>ปริมาณหยิบตามโซน</h3><div class="sub">จำนวนชิ้นแยกตาม Zone (2 ตัวหน้าของ Location)</div>
+        <div class="chartbox"><canvas id="zone"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>ผังคลัง · Heatmap ความหนาแน่นการหยิบ</h3>
+        <div class="sub">สีเข้ม = หยิบเยอะ · <i>ผังจริงตามตำแหน่งคลังรอข้อมูลเพิ่มเติม</i></div>
+        <div class="heat" id="heat"></div>
+      </div>
+    </section>
+
+    <section class="page" data-page="pickers">
+      <div class="card wide">
+        <h3>ตารางพนักงานหยิบ (เรียงตามปริมาณ)</h3>
+        <div class="sub">รหัส Picker · โซนหลัก · จำนวนบรรทัด · จำนวนชิ้น · Productivity</div>
+        <div style="overflow-x:auto"><table id="ptable"></table></div>
+        <div class="note">รหัสตัวเลขคือ Picker ID — เมื่อได้ตาราง map รหัส→ชื่อ จะแสดงเป็นชื่อจริงให้</div>
+      </div>
+    </section>
+
+    <section class="page" data-page="time">
+      <div class="card wide">
+        <h3>ช่วงเวลาที่หยิบ (Time Slot)</h3><div class="sub">จำนวนชิ้นตามชั่วโมง — ดูช่วงงานหนัก</div>
+        <div class="chartbox tall"><canvas id="slot"></canvas></div>
+      </div>
+    </section>
+
+    <section class="page" data-page="items">
+      <div class="card wide">
+        <h3>สินค้าหยิบเยอะสุด — Top 10</h3><div class="sub">รหัส Item · จำนวนชิ้น</div>
+        <div class="chartbox tall"><canvas id="item"></canvas></div>
+        <div class="note">แสดงเป็นรหัสสินค้า — เมื่อต่อ master (master_product_native) จะแสดงชื่อสินค้าจริง</div>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
