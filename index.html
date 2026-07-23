@@ -136,6 +136,36 @@
     </section>
   </main>
 </div>
+<!-- Modal สำหรับอัปโหลดไฟล์ CSV/Excel ตรงเข้า BigQuery -->
+<div id="uploadModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.65);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+  <div style="background:#fff;border-radius:20px;padding:30px;width:90%;max-width:550px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+      <h2 style="font-size:20px;font-weight:700;margin:0;color:#1e293b;">📤 อัปโหลดไฟล์เข้า BigQuery โดยตรง</h2>
+      <button id="btnCloseUpload" style="background:none;border:none;font-size:24px;cursor:pointer;color:#64748b;">&times;</button>
+    </div>
+    <p style="font-size:13px;color:#64748b;margin-bottom:20px;">เลือกหรือลากวางไฟล์ <b>Pick Detail (.xlsx, .csv)</b> ระบบจะส่งตรงเข้า <b>BigQuery</b> พร้อมตัดข้อมูลซ้ำให้อัตโนมัติทันทีครับ!</p>
+    
+    <div id="dropZone" style="border:2px dashed #3b82f6;background:#eff6ff;border-radius:14px;padding:35px 20px;text-align:center;cursor:pointer;transition:.2s;">
+      <div style="font-size:36px;margin-bottom:10px;">📄</div>
+      <div style="font-size:15px;font-weight:600;color:#1d4ed8;">คลิกเพื่อเลือกไฟล์ หรือ ลากวางไฟล์ Excel / CSV ที่นี่</div>
+      <div style="font-size:12px;color:#64748b;margin-top:6px;">รองรับไฟล์ Pick Detail (.xlsx, .xls, .csv) สกัดโดยตรงจาก WMS</div>
+      <input type="file" id="csvFileInput" accept=".csv, .xlsx, .xls" style="display:none;" />
+    </div>
+
+    <div id="uploadProgress" style="display:none;margin-top:20px;">
+      <div style="font-size:13.5px;font-weight:600;color:#334155;margin-bottom:8px;" id="uploadStatusText">กำลังอ่านและประมวลผลไฟล์...</div>
+      <div style="width:100%;background:#e2e8f0;border-radius:10px;height:10px;overflow:hidden;">
+        <div id="progressBar" style="width:0%;background:linear-gradient(90deg,#2563eb,#3b82f6);height:100%;transition:width .3s;"></div>
+      </div>
+    </div>
+
+    <div style="margin-top:25px;display:flex;justify-content:flex-end;gap:10px;">
+      <button id="btnCancelUpload" style="border:1px solid #cbd5e1;background:#fff;padding:9px 18px;border-radius:10px;cursor:pointer;font-weight:500;color:#475569;">ยกเลิก</button>
+      <button id="btnStartUpload" style="border:0;background:#2563eb;color:#fff;padding:9px 22px;border-radius:10px;cursor:pointer;font-weight:600;display:none;">เริ่มส่งเข้า BigQuery</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="data.js"></script>
 <script src="app.js"></script>
