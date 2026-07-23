@@ -54,25 +54,44 @@ function uploadToBigQuery_(rows) {
   const truncSql = "TRUNCATE TABLE `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail_staging`";
   bqQueryAll_(truncSql);
 
-  const insertRows = rows.map(r => ({
-    json: {
-      pickdetailkey: String(r.pickdetailkey || '').trim(),
-      lpn: r.lpn ? String(r.lpn).trim() : null,
-      qty: r.qty != null ? parseInt(r.qty, 10) : 0,
-      sku: r.sku ? String(r.sku).trim() : null,
-      owner: r.owner ? String(r.owner).trim() : null,
-      uom_qty: r.uom_qty != null ? parseFloat(r.uom_qty) : 1.0,
-      category: r.category ? String(r.category).trim().toUpperCase() : null,
-      picker_id: r.picker_id ? String(r.picker_id).trim() : null,
-      location: r.location ? String(r.location).trim() : null,
-      pick_ts_source: r.pick_ts_source ? String(r.pick_ts_source).trim() : null
-    }
-  })).filter(r => r.json.pickdetailkey !== '');
+  const cleanVal = (v) => {
+    if (v == null || v === undefined || v === '') return 'NULL';
+    let s = String(v).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    return "'" + s + "'";
+  };
 
-  const BATCH_SIZE = 5000;
-  for (let i = 0; i < insertRows.length; i += BATCH_SIZE) {
-    const chunk = insertRows.slice(i, i + BATCH_SIZE);
-    BigQuery.TableData.insertAll({ rows: chunk }, BQ_PROJECT, BQ_DATASET, 'pick_detail_staging');
+  const cleanNum = (v, def) => {
+    if (v == null || v === '') return String(def);
+    let n = parseFloat(String(v));
+    return isNaN(n) ? String(def) : String(n);
+  };
+
+  const validRows = rows.filter(r => r.pickdetailkey && String(r.pickdetailkey).trim() !== '');
+
+  const BATCH_SIZE = 1000;
+  for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
+    const chunk = validRows.slice(i, i + BATCH_SIZE);
+    const valueSqls = chunk.map(r => {
+      return "(" +
+        cleanVal(r.pickdetailkey) + "," +
+        cleanVal(r.lpn) + "," +
+        cleanNum(r.qty, 0) + "," +
+        cleanVal(r.sku) + "," +
+        cleanVal(r.owner) + "," +
+        cleanNum(r.uom_qty, 1.0) + "," +
+        cleanVal(r.category ? String(r.category).toUpperCase() : '') + "," +
+        cleanVal(r.picker_id) + "," +
+        cleanVal(r.location) + "," +
+        cleanVal(r.pick_ts_source) +
+      ")";
+    }).join(",");
+
+    const insertSql =
+      "INSERT INTO `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail_staging` " +
+      "(pickdetailkey, lpn, qty, sku, owner, uom_qty, category, picker_id, location, pick_ts_source) " +
+      "VALUES " + valueSqls;
+
+    bqQueryAll_(insertSql);
   }
 
   const mergeSql =
@@ -93,7 +112,7 @@ function uploadToBigQuery_(rows) {
   bqQueryAll_(mergeSql);
   bqQueryAll_(truncSql);
 
-  return { message: 'Uploaded and merged successfully', rowsProcessed: insertRows.length };
+  return { message: 'Uploaded and merged successfully', rowsProcessed: validRows.length };
 }
 
 function textJson_(str) {
