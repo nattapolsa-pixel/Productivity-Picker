@@ -145,7 +145,7 @@ USING (
       `STORERKEY`                              AS owner,
       SAFE_CAST(`UOMQTY` AS NUMERIC)           AS uom_qty,
       UPPER(`EXT_UDF_STR7`)                    AS category,
-      `EXT_UDF_STR8`                           AS picker_id,
+      COALESCE(NULLIF(`EXT_UDF_STR8`, ''), NULLIF(`EXT_UDF_STR10`, '')) AS picker_id,
       `EXT_UDF_STR16`                          AS location,
       `EXT_UDF_DATE1`                          AS pick_ts_source,
       ROW_NUMBER() OVER (PARTITION BY `PICKDETAILKEY` ORDER BY `EXT_UDF_DATE1` DESC) AS rn
@@ -159,7 +159,12 @@ WHEN NOT MATCHED THEN
   INSERT (pickdetailkey, lpn, qty, sku, owner, uom_qty, category,
           picker_id, location, pick_ts_source, loaded_at)
   VALUES (S.pickdetailkey, S.lpn, S.qty, S.sku, S.owner, S.uom_qty, S.category,
-          S.picker_id, S.location, S.pick_ts_source, CURRENT_TIMESTAMP());
+          S.picker_id, S.location, S.pick_ts_source, CURRENT_TIMESTAMP())
+WHEN MATCHED AND (T.pick_ts_source IS NULL AND S.pick_ts_source IS NOT NULL) THEN
+  UPDATE SET 
+    T.pick_ts_source = S.pick_ts_source,
+    T.picker_id = S.picker_id,
+    T.loaded_at = CURRENT_TIMESTAMP();
 
 
 -- =============================================================================

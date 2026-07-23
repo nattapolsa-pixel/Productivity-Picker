@@ -100,6 +100,8 @@ SELECT
   sku,
   owner,
   uom_qty,
+  -- คำนวณจำนวนหน่วยหยิบจริง (Pick Units: ชิ้น สำหรับ BPS / กล่องสำหรับ PTT)
+  SAFE_DIVIDE(qty, COALESCE(NULLIF(uom_qty, 0), 1)) AS pick_qty,
   UPPER(category) AS category,
   picker_id,
   location,
@@ -135,7 +137,7 @@ WHERE pick_ts_local IS NOT NULL;
 -- 4) VIEW วิเคราะห์ PRODUCTIVITY  (หยิบ/ชั่วโมง)
 -- =============================================================================
 --  กติกา:
---   - Productivity = ยอดหยิบ (SUM qty) / ชั่วโมงทำงาน   [ต่อ Picker ต่อวัน]
+--   - Productivity = ยอดหยิบ (SUM pick_qty) / ชั่วโมงทำงาน   [ต่อ Picker ต่อวัน]
 --   - ถ้า ชั่วโมงทำงาน > 3  และ  Productivity > 1000  ->  ให้ = 0 (กันเคสหยิบชิ้นเล็กจำนวนมาก)
 --   - ตอนหา Average ให้ตัดค่า 0 ทิ้ง (ดูตัวอย่าง query ด้านล่าง)
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_productivity_daily` AS
@@ -143,7 +145,7 @@ WITH base AS (
   SELECT
     picker_id,
     DATE(pick_ts_local) AS pick_date,
-    SUM(qty)            AS total_qty,       -- ยอดหยิบ (ชิ้น)
+    SUM(pick_qty)       AS total_qty,       -- ยอดหยิบ (หน่วยหยิบจริง)
     COUNT(*)            AS pick_lines,      -- จำนวนบรรทัดที่หยิบ
     MIN(pick_ts_local)  AS first_pick,
     MAX(pick_ts_local)  AS last_pick
@@ -193,7 +195,7 @@ WITH vol AS (
   SELECT
     pick_date,
     COUNT(*)                    AS pick_lines,
-    SUM(qty)                    AS total_qty,
+    SUM(pick_qty)               AS total_qty,
     COUNT(DISTINCT picker_id)   AS active_pickers,
     COUNT(DISTINCT zone)        AS zones_used
   FROM `productivity-pick.pick_analytics.v_pick_enriched`
@@ -216,7 +218,7 @@ ORDER BY v.pick_date;
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_dash_weekly` AS
 SELECT week_start,
        COUNT(*) AS pick_lines,
-       SUM(qty) AS total_qty,
+       SUM(pick_qty) AS total_qty,
        COUNT(DISTINCT picker_id) AS active_pickers
 FROM `productivity-pick.pick_analytics.v_pick_enriched`
 GROUP BY week_start;
@@ -225,7 +227,7 @@ GROUP BY week_start;
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_dash_monthly` AS
 SELECT month_start,
        COUNT(*) AS pick_lines,
-       SUM(qty) AS total_qty,
+       SUM(pick_qty) AS total_qty,
        COUNT(DISTINCT picker_id) AS active_pickers
 FROM `productivity-pick.pick_analytics.v_pick_enriched`
 GROUP BY month_start;
@@ -235,7 +237,7 @@ CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_dash_by_zone` AS
 SELECT zone,
        ARRAY_AGG(DISTINCT owner IGNORE NULLS) AS owners_in_zone,
        COUNT(*)  AS pick_lines,
-       SUM(qty)  AS total_qty,
+       SUM(pick_qty)  AS total_qty,
        COUNT(DISTINCT picker_id) AS pickers
 FROM `productivity-pick.pick_analytics.v_pick_enriched`
 GROUP BY zone ORDER BY total_qty DESC;
@@ -243,7 +245,7 @@ GROUP BY zone ORDER BY total_qty DESC;
 -- 5.5 สรุปตาม Picker (+ โซนที่ทำบ่อยสุด + productivity เฉลี่ยตัดศูนย์)
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_dash_by_picker` AS
 WITH vol AS (
-  SELECT picker_id, COUNT(*) AS pick_lines, SUM(qty) AS total_qty
+  SELECT picker_id, COUNT(*) AS pick_lines, SUM(pick_qty) AS total_qty
   FROM `productivity-pick.pick_analytics.v_pick_enriched`
   GROUP BY picker_id
 ),
@@ -278,7 +280,7 @@ ORDER BY v.total_qty DESC;
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_dash_by_item` AS
 SELECT sku,
        COUNT(*) AS pick_lines,
-       SUM(qty) AS total_qty
+       SUM(pick_qty) AS total_qty
 FROM `productivity-pick.pick_analytics.v_pick_enriched`
 GROUP BY sku ORDER BY total_qty DESC;
 
@@ -286,7 +288,7 @@ GROUP BY sku ORDER BY total_qty DESC;
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_dash_by_timeslot` AS
 SELECT time_slot, pick_hour,
        COUNT(*) AS pick_lines,
-       SUM(qty) AS total_qty
+       SUM(pick_qty) AS total_qty
 FROM `productivity-pick.pick_analytics.v_pick_enriched`
 GROUP BY time_slot, pick_hour ORDER BY pick_hour;
 
@@ -294,7 +296,7 @@ GROUP BY time_slot, pick_hour ORDER BY pick_hour;
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_dash_by_category` AS
 SELECT category,
        COUNT(*) AS pick_lines,
-       SUM(qty) AS total_qty,
+       SUM(pick_qty) AS total_qty,
        COUNT(DISTINCT picker_id) AS pickers
 FROM `productivity-pick.pick_analytics.v_pick_enriched`
 GROUP BY category;

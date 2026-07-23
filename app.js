@@ -362,3 +362,199 @@ async function loadData(force){
 // init
 document.querySelectorAll('.nav').forEach(n => n.onclick = () => show(n.dataset.page));
 loadData();
+
+// ===== ระบบอัปโหลดไฟล์ Pick Detail (.csv) ตรงเข้า BigQuery =====
+(function initWebUploader(){
+  const btnOpen = document.getElementById('btnUploadModal');
+  const btnClose = document.getElementById('btnCloseUpload');
+  const btnCancel = document.getElementById('btnCancelUpload');
+  const btnStart = document.getElementById('btnStartUpload');
+  const modal = document.getElementById('uploadModal');
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('csvFileInput');
+  const progressBox = document.getElementById('uploadProgress');
+  const progressBar = document.getElementById('progressBar');
+  const statusText = document.getElementById('uploadStatusText');
+
+  if(!btnOpen || !modal) return;
+
+  let selectedFile = null;
+
+  const openModal = () => { modal.style.display = 'flex'; resetUI(); };
+  const closeModal = () => { modal.style.display = 'none'; resetUI(); };
+
+  btnOpen.onclick = openModal;
+  if(btnClose) btnClose.onclick = closeModal;
+  if(btnCancel) btnCancel.onclick = closeModal;
+
+  if(dropZone){
+    dropZone.onclick = () => fileInput.click();
+    dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = '#2563eb'; };
+    dropZone.ondragleave = () => { dropZone.style.borderColor = '#3b82f6'; };
+    dropZone.ondrop = (e) => {
+      e.preventDefault();
+      dropZone.style.borderColor = '#3b82f6';
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+    };
+  }
+
+  if(fileInput){
+    fileInput.onchange = (e) => {
+      if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
+    };
+  }
+
+  function handleFile(file) {
+    const ext = file.name.toLowerCase();
+    if (!ext.endsWith('.csv') && !ext.endsWith('.xlsx') && !ext.endsWith('.xls')) {
+      alert('กรุณาเลือกไฟล์ประเภท .csv หรือ .xlsx เท่านั้นครับ');
+      return;
+    }
+    selectedFile = file;
+    dropZone.innerHTML = `
+      <div style="font-size:36px;margin-bottom:10px;">✅</div>
+      <div style="font-size:15px;font-weight:700;color:#059669;">เลือกไฟล์: ${file.name}</div>
+      <div style="font-size:12px;color:#64748b;margin-top:6px;">ขนาด: ${(file.size/1048576).toFixed(2)} MB · คลิกหากต้องการเปลี่ยนไฟล์</div>
+    `;
+    btnStart.style.display = 'inline-block';
+  }
+
+  function resetUI() {
+    selectedFile = null;
+    if(fileInput) fileInput.value = '';
+    if(btnStart) btnStart.style.display = 'none';
+    if(progressBox) progressBox.style.display = 'none';
+    if(progressBar) progressBar.style.width = '0%';
+    if(dropZone){
+      dropZone.innerHTML = `
+        <div style="font-size:36px;margin-bottom:10px;">📄</div>
+        <div style="font-size:15px;font-weight:600;color:#1d4ed8;">คลิกเพื่อเลือกไฟล์ หรือ ลากวางไฟล์ Excel / CSV ที่นี่</div>
+        <div style="font-size:12px;color:#64748b;margin-top:6px;">รองรับไฟล์ Pick Detail (.xlsx, .xls, .csv) สกัดโดยตรงจาก WMS</div>
+      `;
+    }
+  }
+
+  if(btnStart){
+    btnStart.onclick = async () => {
+      if (!selectedFile || !DATA_URL) return;
+      btnStart.style.display = 'none';
+      progressBox.style.display = 'block';
+      statusText.textContent = '⏳ กำลังอ่านข้อมูลไฟล์...';
+      progressBar.style.width = '20%';
+
+      try {
+        const ext = selectedFile.name.toLowerCase();
+        let rows = [];
+
+        if ((ext.endsWith('.xlsx') || ext.endsWith('.xls')) && typeof XLSX !== 'undefined') {
+          statusText.textContent = '⚙️ กำลังประมวลผลไฟล์ Excel (.xlsx)...';
+          progressBar.style.width = '35%';
+          const buffer = await selectedFile.arrayBuffer();
+          const workbook = XLSX.read(buffer, { type: 'array' });
+          const firstSheet = workbook.SheetNames[0];
+          const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { header: 1 });
+          rows = parseExcelToRows(sheetData);
+        } else {
+          statusText.textContent = '⚙️ กำลังประมวลผลไฟล์ CSV...';
+          progressBar.style.width = '35%';
+          const text = await selectedFile.text();
+          rows = parseCSVToRows(text);
+        }
+
+        if (rows.length === 0) throw new Error('ไม่พบข้อมูลในไฟล์ หรือรูปแบบไฟล์ไม่ถูกต้อง');
+
+        statusText.textContent = `🚀 กำลังส่งข้อมูล ${rows.length.toLocaleString()} แถว ตรงเข้า BigQuery...`;
+        progressBar.style.width = '70%';
+
+        const res = await fetch(DATA_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'upload_rows', rows: rows })
+        });
+
+        const json = await res.json();
+        if (json.status !== 'success') throw new Error(json.message || 'เกิดข้อผิดพลาดในการนำเข้า BigQuery');
+
+        progressBar.style.width = '100%';
+        statusText.textContent = `🎉 นำเข้าสำเร็จ ${json.rowsProcessed.toLocaleString()} แถว! กำลังรีเฟรชแดชบอร์ด...`;
+
+        setTimeout(() => {
+          closeModal();
+          loadData(true);
+        }, 1500);
+
+      } catch (err) {
+        alert('การนำเข้าล้มเหลว: ' + err.message);
+        resetUI();
+      }
+    };
+  }
+
+  function parseExcelToRows(sheetData) {
+    if (!sheetData || sheetData.length <= 2) return [];
+    const parsedRows = [];
+    for (let i = 2; i < sheetData.length; i++) {
+      const cols = sheetData[i];
+      if (!cols || cols.length === 0) continue;
+      const key = (cols[1] != null ? String(cols[1]) : '').trim();
+      if (!key) continue;
+
+      parsedRows.push({
+        pickdetailkey: key,
+        lpn: cols[12] != null ? String(cols[12]).trim() : '',
+        qty: cols[28] != null ? parseFloat(String(cols[28])) : 0,
+        sku: cols[31] != null ? String(cols[31]).trim() : '',
+        owner: cols[36] != null ? String(cols[36]).trim() : '',
+        uom_qty: cols[40] != null ? parseFloat(String(cols[40])) : 1.0,
+        category: cols[55] != null ? String(cols[55]).trim() : '',
+        picker_id: String(cols[56] || cols[58] || '').trim(),
+        location: cols[64] != null ? String(cols[64]).trim() : '',
+        pick_ts_source: cols[66] != null ? String(cols[66]).trim() : ''
+      });
+    }
+    return parsedRows;
+  }
+
+  function parseCSVToRows(csvText) {
+    const lines = csvText.split(/\r?\n/);
+    if (lines.length <= 2) return [];
+
+    const parsedRows = [];
+    for (let i = 2; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      const cols = parseCSVLine(line);
+      const key = (cols[1] || '').trim();
+      if (!key) continue;
+
+      parsedRows.push({
+        pickdetailkey: key,
+        lpn: cols[12] || '',
+        qty: cols[28] ? parseFloat(cols[28]) : 0,
+        sku: cols[31] || '',
+        owner: cols[36] || '',
+        uom_qty: cols[40] ? parseFloat(cols[40]) : 1.0,
+        category: cols[55] || '',
+        picker_id: (cols[56] || cols[58] || '').trim(),
+        location: cols[64] || '',
+        pick_ts_source: cols[66] || ''
+      });
+    }
+    return parsedRows;
+  }
+
+  function parseCSVLine(str) {
+    const arr = [];
+    let quote = false;
+    let col = '';
+    for (let c = 0; c < str.length; c++) {
+      const cc = str[c];
+      if (cc === '"') { quote = !quote; }
+      else if (cc === ',' && !quote) { arr.push(col); col = ''; }
+      else { col += cc; }
+    }
+    arr.push(col);
+    return arr;
+  }
+})();

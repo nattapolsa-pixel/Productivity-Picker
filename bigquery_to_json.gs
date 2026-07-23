@@ -34,6 +34,68 @@ function doGet(e) {
   }
 }
 
+function doPost(e) {
+  try {
+    const postData = JSON.parse(e.postData.contents);
+    if (postData.action === 'upload_rows' && Array.isArray(postData.rows)) {
+      const result = uploadToBigQuery_(postData.rows);
+      CacheService.getScriptCache().remove('dash_n');
+      return json_({ status: 'success', message: result.message, rowsProcessed: result.rowsProcessed });
+    }
+    return json_({ status: 'error', message: 'Invalid action or missing rows payload' });
+  } catch (err) {
+    return json_({ status: 'error', message: String(err && err.message || err) });
+  }
+}
+
+function uploadToBigQuery_(rows) {
+  if (!rows || rows.length === 0) return { message: 'No rows provided', rowsProcessed: 0 };
+
+  const truncSql = "TRUNCATE TABLE `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail_staging`";
+  bqQueryAll_(truncSql);
+
+  const insertRows = rows.map(r => ({
+    json: {
+      pickdetailkey: String(r.pickdetailkey || '').trim(),
+      lpn: r.lpn ? String(r.lpn).trim() : null,
+      qty: r.qty != null ? parseInt(r.qty, 10) : 0,
+      sku: r.sku ? String(r.sku).trim() : null,
+      owner: r.owner ? String(r.owner).trim() : null,
+      uom_qty: r.uom_qty != null ? parseFloat(r.uom_qty) : 1.0,
+      category: r.category ? String(r.category).trim().toUpperCase() : null,
+      picker_id: r.picker_id ? String(r.picker_id).trim() : null,
+      location: r.location ? String(r.location).trim() : null,
+      pick_ts_source: r.pick_ts_source ? String(r.pick_ts_source).trim() : null
+    }
+  })).filter(r => r.json.pickdetailkey !== '');
+
+  const BATCH_SIZE = 5000;
+  for (let i = 0; i < insertRows.length; i += BATCH_SIZE) {
+    const chunk = insertRows.slice(i, i + BATCH_SIZE);
+    BigQuery.TableData.insertAll({ rows: chunk }, BQ_PROJECT, BQ_DATASET, 'pick_detail_staging');
+  }
+
+  const mergeSql =
+    "MERGE `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail` T " +
+    "USING (" +
+    "  SELECT * EXCEPT(rn) FROM (" +
+    "    SELECT s.*, ROW_NUMBER() OVER (PARTITION BY pickdetailkey ORDER BY pick_ts_source DESC) AS rn " +
+    "    FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail_staging` s " +
+    "  ) WHERE rn = 1" +
+    ") S " +
+    "ON T.pickdetailkey = S.pickdetailkey " +
+    "WHEN NOT MATCHED THEN " +
+    "  INSERT (pickdetailkey, lpn, qty, sku, owner, uom_qty, category, picker_id, location, pick_ts_source, loaded_at) " +
+    "  VALUES (S.pickdetailkey, S.lpn, S.qty, S.sku, S.owner, S.uom_qty, S.category, S.picker_id, S.location, S.pick_ts_source, CURRENT_TIMESTAMP()) " +
+    "WHEN MATCHED AND (T.pick_ts_source IS NULL AND S.pick_ts_source IS NOT NULL) THEN " +
+    "  UPDATE SET T.pick_ts_source = S.pick_ts_source, T.picker_id = S.picker_id, T.loaded_at = CURRENT_TIMESTAMP();";
+
+  bqQueryAll_(mergeSql);
+  bqQueryAll_(truncSql);
+
+  return { message: 'Uploaded and merged successfully', rowsProcessed: insertRows.length };
+}
+
 function textJson_(str) {
   return ContentService.createTextOutput(str).setMimeType(ContentService.MimeType.JSON);
 }
@@ -67,7 +129,7 @@ function buildDashboardData_() {
     "FORMAT_DATE('%Y-%m-%d', pick_date) AS d, " +
     "zone, picker_id AS picker, sku, " +
     "EXTRACT(HOUR FROM pick_ts_local)*60 + EXTRACT(MINUTE FROM pick_ts_local) AS tmin, " +
-    "CAST(qty AS INT64) AS qty " +
+    "CAST(ROUND(SAFE_DIVIDE(qty, COALESCE(NULLIF(uom_qty, 0), 1))) AS INT64) AS qty " +
     "FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".v_pick_enriched` " +
     "WHERE pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + " DAY)";
 
