@@ -327,7 +327,7 @@ function setUpdating(on){
 
 // ===== โหลดข้อมูล: แสดง cache ทันที -> อัปเดตสดเบื้องหลัง =====
 async function loadData(force){
-  document.querySelectorAll('.nav').forEach(n => n.onclick = () => show(n.dataset.page));
+  document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
   if(!DATA_URL){ updateFresh(); boot(); return; }
 
   // 1) มี cache ในเครื่อง -> แสดงทันที ไม่ต้องรอ BigQuery
@@ -360,7 +360,7 @@ async function loadData(force){
 }
 
 // init
-document.querySelectorAll('.nav').forEach(n => n.onclick = () => show(n.dataset.page));
+document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
 loadData();
 
 // ===== ระบบอัปโหลดไฟล์ Pick Detail (.csv) ตรงเข้า BigQuery =====
