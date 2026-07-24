@@ -841,8 +841,9 @@ loadData();
     if (!workbook.SheetNames || !workbook.SheetNames.length) {
       throw new Error('ไฟล์ไม่มี Worksheet');
     }
-    const firstSheet = workbook.SheetNames[0];
-    const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], {
+    const source = findPickDetailWorksheet(workbook);
+    const firstSheet = source.sheetName;
+    const sheetData = XLSX.utils.sheet_to_json(source.sheet, {
       header:1,
       raw:true,
       defval:''
@@ -858,15 +859,58 @@ loadData();
       }
     });
     return {
-      rows: parsePickRows(sheetData),
+      rows: parsePickRows(sheetData, source.headerRowIndex),
       meta: {
         schemaVersion: UPLOAD_SCHEMA_VERSION,
         filename: file.name,
         sheetName: firstSheet,
+        headerRow: source.headerRowIndex + 1,
         sourceRowCount: Math.max(sheetData.length - 2, 0),
         headers: headers
       }
     };
+  }
+
+  function findPickDetailWorksheet(workbook) {
+    const maxRequiredColumn = Math.max(...REQUIRED_HEADERS.map(header => header.index));
+    for(const sheetName of workbook.SheetNames) {
+      const sheet = workbook.Sheets[sheetName];
+      if(!sheet) continue;
+
+      for(let rowIndex = 0; rowIndex < 10; rowIndex++) {
+        const matches = REQUIRED_HEADERS.every(header => {
+          const value = readWorksheetCellValue(sheet, rowIndex, header.index);
+          return String(value == null ? '' : value).trim().toUpperCase() === header.name;
+        });
+        if(!matches) continue;
+
+        let range;
+        try {
+          range = sheet['!ref']
+            ? XLSX.utils.decode_range(sheet['!ref'])
+            : {s:{r:rowIndex,c:0}, e:{r:rowIndex,c:maxRequiredColumn}};
+        } catch(_) {
+          range = {s:{r:rowIndex,c:0}, e:{r:rowIndex,c:maxRequiredColumn}};
+        }
+        range.s.r = rowIndex;
+        range.s.c = 0;
+        range.e.r = Math.max(range.e.r, rowIndex);
+        range.e.c = Math.max(range.e.c, maxRequiredColumn);
+        sheet['!ref'] = XLSX.utils.encode_range(range);
+
+        return {sheetName, sheet, headerRowIndex:rowIndex};
+      }
+    }
+    throw new Error(
+      'ไม่พบหัวตาราง Pick Detail ใน 10 แถวแรกของทุก Worksheet กรุณาใช้ไฟล์ Export จาก WMS รูปแบบเดียวกับ Pick 20'
+    );
+  }
+
+  function readWorksheetCellValue(sheet, rowIndex, columnIndex) {
+    const cell = Array.isArray(sheet)
+      ? (sheet[rowIndex] && sheet[rowIndex][columnIndex])
+      : sheet[XLSX.utils.encode_cell({r:rowIndex, c:columnIndex})];
+    return cell ? cell.v : '';
   }
 
   async function postUploadWithRetry(payload) {
@@ -1000,7 +1044,7 @@ loadData();
     return s;
   }
 
-  function parsePickRows(sheetData) {
+  function parsePickRows(sheetData, headerRowIndex) {
     if (!sheetData || sheetData.length <= 2) return [];
     const parsedRows = [];
     for (let i = 2; i < sheetData.length; i++) {
@@ -1019,7 +1063,7 @@ loadData();
         String(cols[56] || cols[58] || '').trim(),
         cols[64] != null ? String(cols[64]).trim() : '',
         fmtExcelDate(cols[66]),
-        i + 1
+        Number(headerRowIndex || 0) + i + 1
       ]);
     }
     return parsedRows;
