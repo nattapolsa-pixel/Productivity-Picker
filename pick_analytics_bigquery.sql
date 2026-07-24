@@ -107,13 +107,37 @@ SELECT
   location,
   SUBSTR(location, 1, 2) AS zone,                       -- Zone = 2 ตัวหน้าของ Location
   pick_ts_source,
-  -- เวลาที่ parse จากข้อความ (ยังไม่ปรับ timezone)
-  SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', pick_ts_source) AS pick_ts,
+  -- เวลาที่ parse จากข้อความ (รองรับทั้ง DD/MM/YYYY HH:mm และ US Format M/D/YY h:mm AM/PM)
+  COALESCE(
+    SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', pick_ts_source),
+    SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M:%S', pick_ts_source),
+    SAFE.PARSE_DATETIME('%m/%d/%y %I:%M %p', pick_ts_source),
+    SAFE.PARSE_DATETIME('%m/%d/%Y %I:%M %p', pick_ts_source),
+    SAFE.PARSE_DATETIME('%m/%d/%y %H:%M', pick_ts_source),
+    SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M:%S', pick_ts_source)
+  ) AS pick_ts,
   -- กติกา: PTT -> ลบ 7 ชั่วโมง, BPS -> เท่าเดิม
   CASE
     WHEN UPPER(category) = 'PTT'
-      THEN DATETIME_SUB(SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', pick_ts_source), INTERVAL 7 HOUR)
-    ELSE SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', pick_ts_source)
+      THEN DATETIME_SUB(
+        COALESCE(
+          SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', pick_ts_source),
+          SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M:%S', pick_ts_source),
+          SAFE.PARSE_DATETIME('%m/%d/%y %I:%M %p', pick_ts_source),
+          SAFE.PARSE_DATETIME('%m/%d/%Y %I:%M %p', pick_ts_source),
+          SAFE.PARSE_DATETIME('%m/%d/%y %H:%M', pick_ts_source),
+          SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M:%S', pick_ts_source)
+        ), INTERVAL 7 HOUR
+      )
+    ELSE
+      COALESCE(
+        SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', pick_ts_source),
+        SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M:%S', pick_ts_source),
+        SAFE.PARSE_DATETIME('%m/%d/%y %I:%M %p', pick_ts_source),
+        SAFE.PARSE_DATETIME('%m/%d/%Y %I:%M %p', pick_ts_source),
+        SAFE.PARSE_DATETIME('%m/%d/%y %H:%M', pick_ts_source),
+        SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M:%S', pick_ts_source)
+      )
   END AS pick_ts_local
 FROM `productivity-pick.pick_analytics.pick_detail`;
 

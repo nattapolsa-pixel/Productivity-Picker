@@ -690,16 +690,18 @@ loadData();
   // *** ใช้ getUTC* เสมอ เพราะ XLSX.js สร้าง Date จาก UTC ที่ตรงกับเวลาในไฟล์ Excel ***
   function fmtExcelDate(v) {
     if (v == null || v === '') return '';
+
+    // Case 1: JS Date instance (CellDates: true in XLSX)
     if (v instanceof Date) {
-      // XLSX (cellDates:true) สร้าง Date.UTC จากค่าใน Excel → ต้องใช้ getUTC* เพื่อได้เวลาที่ถูกต้อง
       const dd = String(v.getUTCDate()).padStart(2, '0');
       const mm = String(v.getUTCMonth() + 1).padStart(2, '0');
       const hh = String(v.getUTCHours()).padStart(2, '0');
       const mi = String(v.getUTCMinutes()).padStart(2, '0');
       return `${dd}/${mm}/${v.getUTCFullYear()} ${hh}:${mi}`;
     }
+
+    // Case 2: Excel serial date number
     if (typeof v === 'number' && v > 1000) {
-      // Excel serial date → แปลงมือ ใช้ XLSX.SSF ถ้ามี หรือคำนวณเอง
       const epoch = Math.round((v - 25569) * 86400 * 1000);
       const d = new Date(epoch);
       if (!isNaN(d.getTime())) {
@@ -710,7 +712,48 @@ loadData();
         return `${dd}/${mm}/${d.getUTCFullYear()} ${hh}:${mi}`;
       }
     }
-    return String(v).trim();   // string เดิม (เช่น "20/07/2026 19:43") ส่งตรง
+
+    let s = String(v).trim();
+    if (!s) return '';
+
+    // Case 3: Already DD/MM/YYYY HH:mm or DD/MM/YYYY HH:mm:ss (e.g. "23/07/2026 16:21")
+    const dmyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::\d{2})?$/);
+    if (dmyMatch) {
+      const dd = String(dmyMatch[1]).padStart(2, '0');
+      const mm = String(dmyMatch[2]).padStart(2, '0');
+      const yyyy = dmyMatch[3];
+      const hh = String(dmyMatch[4]).padStart(2, '0');
+      const mi = dmyMatch[5];
+      return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+    }
+
+    // Case 4: US Date Format M/D/YY h:mm AM/PM (e.g. "7/19/26 8:09 AM" or "7/19/2026 08:09 AM")
+    const usMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM|am|pm)?$/i);
+    if (usMatch) {
+      const month = parseInt(usMatch[1], 10);
+      const day = parseInt(usMatch[2], 10);
+      let year = parseInt(usMatch[3], 10);
+      if (year < 100) year += 2000;
+      let hour = parseInt(usMatch[4], 10);
+      const min = String(usMatch[5]).padStart(2, '0');
+      const ampm = usMatch[6] ? usMatch[6].toUpperCase() : '';
+
+      if (ampm === 'PM' && hour < 12) hour += 12;
+      if (ampm === 'AM' && hour === 12) hour = 0;
+
+      const dd = String(day).padStart(2, '0');
+      const mm = String(month).padStart(2, '0');
+      const hh = String(hour).padStart(2, '0');
+      return `${dd}/${mm}/${year} ${hh}:${min}`;
+    }
+
+    // Case 5: ISO YYYY-MM-DD HH:mm:ss
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+    if (isoMatch) {
+      return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]} ${isoMatch[4]}:${isoMatch[5]}`;
+    }
+
+    return s;
   }
 
   function parseExcelToRows(sheetData) {
@@ -763,7 +806,7 @@ loadData();
         (cols[55] || '').trim(),
         (cols[56] || cols[58] || '').trim(),
         (cols[64] || '').trim(),
-        (cols[66] || '').trim()
+        fmtExcelDate(cols[66])   // Column BO: แปลง Date เป็น "DD/MM/YYYY HH:mm"
       ]);
     }
     return parsedRows;
