@@ -38,7 +38,7 @@ function doPost(e) {
   try {
     const postData = JSON.parse(e.postData.contents);
     if (postData.action === 'upload_rows' && Array.isArray(postData.rows)) {
-      const result = uploadToBigQuery_(postData.rows);
+      const result = uploadToBigQuery_(postData.rows, postData.fmt);
       CacheService.getScriptCache().remove('dash_n');
       return json_({ status: 'success', message: result.message, rowsProcessed: result.rowsProcessed });
     }
@@ -48,58 +48,80 @@ function doPost(e) {
   }
 }
 
-function uploadToBigQuery_(rows) {
+function uploadToBigQuery_(rows, fmt) {
   if (!rows || rows.length === 0) return { message: 'No rows provided', rowsProcessed: 0 };
 
-  const truncSql = "TRUNCATE TABLE `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail_staging`";
-  bqQueryAll_(truncSql);
-
-  const cleanVal = (v) => {
-    if (v == null || v === undefined || v === '') return 'NULL';
-    let s = String(v).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-    return "'" + s + "'";
-  };
-
-  const cleanNum = (v, def) => {
-    if (v == null || v === '') return String(def);
-    let n = parseFloat(String(v));
-    return isNaN(n) ? String(def) : String(n);
-  };
-
-  const validRows = rows.filter(r => r.pickdetailkey && String(r.pickdetailkey).trim() !== '');
-
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
-    const chunk = validRows.slice(i, i + BATCH_SIZE);
-    const valueSqls = chunk.map(r => {
-      return "(" +
-        cleanVal(r.pickdetailkey) + "," +
-        cleanVal(r.lpn) + "," +
-        cleanNum(r.qty, 0) + "," +
-        cleanVal(r.sku) + "," +
-        cleanVal(r.owner) + "," +
-        cleanNum(r.uom_qty, 1.0) + "," +
-        cleanVal(r.category ? String(r.category).toUpperCase() : '') + "," +
-        cleanVal(r.picker_id) + "," +
-        cleanVal(r.location) + "," +
-        cleanVal(r.pick_ts_source) +
-      ")";
-    }).join(",");
-
-    const insertSql =
-      "INSERT INTO `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail_staging` " +
-      "(pickdetailkey, lpn, qty, sku, owner, uom_qty, category, picker_id, location, pick_ts_source) " +
-      "VALUES " + valueSqls;
-
-    bqQueryAll_(insertSql);
+  // ตรวจสอบว่า BigQuery API Service ถูก Enable แล้ว
+  if (typeof BigQuery === 'undefined' || !BigQuery.Tabledata || !BigQuery.Tabledata.insertAll) {
+    throw new Error('BigQuery API ยังไม่ได้ถูก Enable — ไปที่ Apps Script > Services > เพิ่ม BigQuery API ก่อนครับ');
   }
 
+  const TABLE_STAGING = 'pick_detail_staging';
+  const isArray = (fmt === 'array');   // frontend ส่งเป็น Array เพื่อลด payload
+
+  // filter แถวที่ไม่มี pickdetailkey
+  const validRows = rows.filter(r => {
+    const key = isArray ? r[0] : r.pickdetailkey;
+    return key && String(key).trim() !== '';
+  });
+  if (validRows.length === 0) return { message: 'No valid rows after filtering', rowsProcessed: 0 };
+
+  // เคลียร์ staging table (ทำครั้งเดียวตอนต้น ไม่ต้องทำซ้ำ  2 ครั้ง)
+  const truncSql = "TRUNCATE TABLE `" + BQ_PROJECT + "." + BQ_DATASET + "." + TABLE_STAGING + "`";
+  bqQueryAll_(truncSql);
+
+  // Streaming Insert เข้า staging — batch 2000 ลด API trips ~4x
+  const BATCH_SIZE = 2000;
+  for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
+    const chunk = validRows.slice(i, i + BATCH_SIZE);
+    const insertRows = chunk.map((r, idx) => {
+      const key        = isArray ? r[0] : r.pickdetailkey;
+      const lpn        = isArray ? r[1] : r.lpn;
+      const qty        = isArray ? r[2] : r.qty;
+      const sku        = isArray ? r[3] : r.sku;
+      const owner      = isArray ? r[4] : r.owner;
+      const uom_qty    = isArray ? r[5] : r.uom_qty;
+      const category   = isArray ? r[6] : r.category;
+      const picker_id  = isArray ? r[7] : r.picker_id;
+      const location   = isArray ? r[8] : r.location;
+      const pick_ts    = isArray ? r[9] : r.pick_ts_source;
+      return {
+        insertId: String(key).trim() + '_' + (i + idx),
+        json: {
+          pickdetailkey : String(key  || '').trim(),
+          lpn           : String(lpn  || '').trim(),
+          qty           : parseFloat(qty)  || 0,
+          sku           : String(sku  || '').trim(),
+          owner         : String(owner || '').trim(),
+          uom_qty       : parseFloat(uom_qty) || 1.0,
+          category      : String(category || '').toUpperCase().trim(),
+          picker_id     : String(picker_id || '').trim(),
+          location      : String(location  || '').trim(),
+          pick_ts_source: String(pick_ts   || '').trim()
+        }
+      };
+    });
+
+    const resp = BigQuery.Tabledata.insertAll(
+      { rows: insertRows, skipInvalidRows: true, ignoreUnknownValues: true },
+      BQ_PROJECT, BQ_DATASET, TABLE_STAGING
+    );
+
+    if (resp && resp.insertErrors && resp.insertErrors.length > 0) {
+      const e0 = resp.insertErrors[0];
+      const msg = (e0.errors && e0.errors[0]) ? e0.errors[0].message : JSON.stringify(e0);
+      throw new Error('insertAll error (row ' + e0.index + '): ' + msg);
+    }
+    // ไม่ต้อง sleep — streaming insert ส่งไปแล้วเร็วมาก
+  }
+
+  // MERGE จาก staging -> pick_detail (dedup + upsert)
   const mergeSql =
     "MERGE `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail` T " +
     "USING (" +
     "  SELECT * EXCEPT(rn) FROM (" +
     "    SELECT s.*, ROW_NUMBER() OVER (PARTITION BY pickdetailkey ORDER BY pick_ts_source DESC) AS rn " +
-    "    FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail_staging` s " +
+    "    FROM `" + BQ_PROJECT + "." + BQ_DATASET + "." + TABLE_STAGING + "` s " +
     "  ) WHERE rn = 1" +
     ") S " +
     "ON T.pickdetailkey = S.pickdetailkey " +
@@ -110,7 +132,7 @@ function uploadToBigQuery_(rows) {
     "  UPDATE SET T.pick_ts_source = S.pick_ts_source, T.picker_id = S.picker_id, T.loaded_at = CURRENT_TIMESTAMP();";
 
   bqQueryAll_(mergeSql);
-  bqQueryAll_(truncSql);
+  bqQueryAll_(truncSql);   // เคลียร์ staging หลังเสร็จ
 
   return { message: 'Uploaded and merged successfully', rowsProcessed: validRows.length };
 }

@@ -440,7 +440,7 @@ loadData();
       btnStart.style.display = 'none';
       progressBox.style.display = 'block';
       statusText.textContent = '⏳ กำลังอ่านข้อมูลไฟล์...';
-      progressBar.style.width = '20%';
+      progressBar.style.width = '15%';
 
       try {
         const ext = selectedFile.name.toLowerCase();
@@ -448,29 +448,35 @@ loadData();
 
         if ((ext.endsWith('.xlsx') || ext.endsWith('.xls')) && typeof XLSX !== 'undefined') {
           statusText.textContent = '⚙️ กำลังประมวลผลไฟล์ Excel (.xlsx)...';
-          progressBar.style.width = '35%';
+          progressBar.style.width = '30%';
           const buffer = await selectedFile.arrayBuffer();
-          const workbook = XLSX.read(buffer, { type: 'array' });
+          const workbook = XLSX.read(buffer, { type: 'array', dense: true });
           const firstSheet = workbook.SheetNames[0];
-          const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { header: 1 });
+          const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { header: 1, raw: true, defval: '' });
           rows = parseExcelToRows(sheetData);
         } else {
           statusText.textContent = '⚙️ กำลังประมวลผลไฟล์ CSV...';
-          progressBar.style.width = '35%';
+          progressBar.style.width = '30%';
           const text = await selectedFile.text();
           rows = parseCSVToRows(text);
         }
 
         if (rows.length === 0) throw new Error('ไม่พบข้อมูลในไฟล์ หรือรูปแบบไฟล์ไม่ถูกต้อง');
 
-        statusText.textContent = `🚀 กำลังส่งข้อมูล ${rows.length.toLocaleString()} แถว ตรงเข้า BigQuery...`;
-        progressBar.style.width = '70%';
+        // ส่งเป็น Array แทน Object → ลด payload ~55%
+        // format: [pickdetailkey, lpn, qty, sku, owner, uom_qty, category, picker_id, location, pick_ts_source]
+        const sizeKB = Math.round(JSON.stringify(rows).length / 1024);
+        statusText.textContent = `🚀 กำลังส่งข้อมูล ${rows.length.toLocaleString()} แถว (~${sizeKB} KB) เข้า BigQuery...`;
+        progressBar.style.width = '55%';
 
         const res = await fetch(DATA_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action: 'upload_rows', rows: rows })
+          body: JSON.stringify({ action: 'upload_rows', fmt: 'array', rows: rows })
         });
+
+        progressBar.style.width = '85%';
+        statusText.textContent = '⏳ BigQuery กำลัง Merge ข้อมูล...';
 
         const json = await res.json();
         if (json.status !== 'success') throw new Error(json.message || 'เกิดข้อผิดพลาดในการนำเข้า BigQuery');
@@ -478,10 +484,7 @@ loadData();
         progressBar.style.width = '100%';
         statusText.textContent = `🎉 นำเข้าสำเร็จ ${json.rowsProcessed.toLocaleString()} แถว! กำลังรีเฟรชแดชบอร์ด...`;
 
-        setTimeout(() => {
-          closeModal();
-          loadData(true);
-        }, 1500);
+        setTimeout(() => { closeModal(); loadData(true); }, 1200);
 
       } catch (err) {
         alert('การนำเข้าล้มเหลว: ' + err.message);
@@ -498,19 +501,20 @@ loadData();
       if (!cols || cols.length === 0) continue;
       const key = (cols[1] != null ? String(cols[1]) : '').trim();
       if (!key) continue;
-
-      parsedRows.push({
-        pickdetailkey: key,
-        lpn: cols[12] != null ? String(cols[12]).trim() : '',
-        qty: cols[28] != null ? parseFloat(String(cols[28])) : 0,
-        sku: cols[31] != null ? String(cols[31]).trim() : '',
-        owner: cols[36] != null ? String(cols[36]).trim() : '',
-        uom_qty: cols[40] != null ? parseFloat(String(cols[40])) : 1.0,
-        category: cols[55] != null ? String(cols[55]).trim() : '',
-        picker_id: String(cols[56] || cols[58] || '').trim(),
-        location: cols[64] != null ? String(cols[64]).trim() : '',
-        pick_ts_source: cols[66] != null ? String(cols[66]).trim() : ''
-      });
+      // ส่งเป็น Array แทน Object → ลด JSON payload ~55%
+      // index: [0]=key [1]=lpn [2]=qty [3]=sku [4]=owner [5]=uom_qty [6]=cat [7]=picker_id [8]=loc [9]=ts
+      parsedRows.push([
+        key,
+        cols[12] != null ? String(cols[12]).trim() : '',
+        cols[28] != null ? (parseFloat(String(cols[28])) || 0) : 0,
+        cols[31] != null ? String(cols[31]).trim() : '',
+        cols[36] != null ? String(cols[36]).trim() : '',
+        cols[40] != null ? (parseFloat(String(cols[40])) || 1.0) : 1.0,
+        cols[55] != null ? String(cols[55]).trim() : '',
+        String(cols[56] || cols[58] || '').trim(),
+        cols[64] != null ? String(cols[64]).trim() : '',
+        cols[66] != null ? String(cols[66]).trim() : ''
+      ]);
     }
     return parsedRows;
   }
@@ -528,18 +532,19 @@ loadData();
       const key = (cols[1] || '').trim();
       if (!key) continue;
 
-      parsedRows.push({
-        pickdetailkey: key,
-        lpn: cols[12] || '',
-        qty: cols[28] ? parseFloat(cols[28]) : 0,
-        sku: cols[31] || '',
-        owner: cols[36] || '',
-        uom_qty: cols[40] ? parseFloat(cols[40]) : 1.0,
-        category: cols[55] || '',
-        picker_id: (cols[56] || cols[58] || '').trim(),
-        location: cols[64] || '',
-        pick_ts_source: cols[66] || ''
-      });
+      // ส่งเป็น Array แทน Object → ลด JSON payload ~55%
+      parsedRows.push([
+        key,
+        (cols[12] || '').trim(),
+        cols[28] ? (parseFloat(cols[28]) || 0) : 0,
+        (cols[31] || '').trim(),
+        (cols[36] || '').trim(),
+        cols[40] ? (parseFloat(cols[40]) || 1.0) : 1.0,
+        (cols[55] || '').trim(),
+        (cols[56] || cols[58] || '').trim(),
+        (cols[64] || '').trim(),
+        (cols[66] || '').trim()
+      ]);
     }
     return parsedRows;
   }
