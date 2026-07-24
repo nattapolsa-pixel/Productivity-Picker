@@ -37,13 +37,13 @@
   .daterange{color:var(--muted);font-size:13px}.daterange b{color:var(--ink)}
   .page{display:none}.page.active{display:block;animation:fade .45s}
   @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:15px;margin-bottom:20px}
+  .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:15px;margin-bottom:20px}
   .kpi{background:var(--card);border-radius:18px;padding:17px;position:relative;overflow:hidden;box-shadow:0 10px 30px -14px rgba(30,41,59,.2);transition:transform .25s}
   .kpi:hover{transform:translateY(-4px)}
   .kpi .bar{position:absolute;top:0;left:0;right:0;height:4px}
   .kpi .lbl{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:8px}
-  .kpi .val{font-size:27px;font-weight:700;line-height:1}
-  .kpi .unit{font-size:12px;color:var(--muted);font-weight:400;margin-left:3px}
+  .kpi .val{font-size:24px;font-weight:700;line-height:1}
+  .kpi .unit{font-size:11.5px;color:var(--muted);font-weight:400;margin-left:3px}
   .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
   .card{background:var(--card);border-radius:18px;padding:20px;box-shadow:0 10px 30px -14px rgba(30,41,59,.18)}
   .card.wide{grid-column:span 2}
@@ -64,6 +64,7 @@
   .heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;margin-top:6px}
   .tile{border-radius:14px;padding:16px;color:#fff;transition:transform .2s}.tile:hover{transform:scale(1.04)}
   .tile .z{font-size:20px;font-weight:700}.tile .q{font-size:13px;opacity:.95;margin-top:4px}.tile .p{font-size:11px;opacity:.85;margin-top:2px}
+  @media(max-width:1200px){.kpis{grid-template-columns:repeat(3,1fr)}}
   @media(max-width:900px){.layout{flex-direction:column}.sidebar{width:100%;height:auto;flex-direction:row;overflow-x:auto;position:static;padding:12px}.brand{display:none}.nav{white-space:nowrap;margin:0 4px 0 0}.sidebadge{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.card.wide{grid-column:span 1}}
 </style>
 </head>

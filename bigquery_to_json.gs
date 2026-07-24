@@ -584,7 +584,8 @@ function buildDashboardData_(useQueryCache) {
     "FORMAT_DATE('%Y-%m-%d', pick_date) AS d, " +
     "zone, picker_id AS picker, sku, " +
     "EXTRACT(HOUR FROM pick_ts_local)*60 + EXTRACT(MINUTE FROM pick_ts_local) AS tmin, " +
-    "CAST(ROUND(SAFE_DIVIDE(qty, COALESCE(NULLIF(uom_qty, 0), 1))) AS INT64) AS qty " +
+    "qty AS pcs, " +
+    "CAST(ROUND(SAFE_DIVIDE(qty, COALESCE(NULLIF(uom_qty, 0), 1))) AS INT64) AS pick_qty " +
     "FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".v_pick_enriched` " +
     "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY)";
 
@@ -602,9 +603,10 @@ function buildDashboardData_(useQueryCache) {
     const picker = r[3] || '(none)';
     const sku = r[4] || '(none)';
     const tmin = Number(r[5]) || 0;
-    const qty = Number(r[6]) || 0;
+    const pcs = Number(r[6]) || 0;
+    const pick_qty = Number(r[7]) || 0;
     const di = idx(S._d, S.dates, d), pi = idx(S._p, S.pickers, picker), si = idx(S._s, S.skus, sku);
-    S.rows.push(di, zone, pi, si, qty, tmin);
+    S.rows.push(di, zone, pi, si, pcs, pick_qty, tmin);
     total++;
   }, JOB_DEADLINE_MS, useQueryCache !== false);
   ['PTT','BPS'].forEach(c => sortDates_(sysd[c]));
@@ -612,16 +614,17 @@ function buildDashboardData_(useQueryCache) {
   return {
     meta: { generated: new Date().toISOString(), source: 'BigQuery v_pick_enriched',
             recent_days: RECENT_DAYS, rows: total },
-    PTT: { row_width: 6, dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
-    BPS: { row_width: 6, dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }
+    PTT: { row_width: 7, dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
+    BPS: { row_width: 7, dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }
   };
 }
 
 // เรียงวันที่ให้ต่อเนื่อง แล้ว remap index ของ rows ตามลำดับใหม่
 function sortDates_(S) {
+  const w = (S && S.row_width) || 7;
   const order = S.dates.map((d, i) => [d, i]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
   const remap = {}; order.forEach((o, ni) => remap[o[1]] = ni);
-  for (let i = 0; i < S.rows.length; i += 6) S.rows[i] = remap[S.rows[i]];
+  for (let i = 0; i < S.rows.length; i += w) S.rows[i] = remap[S.rows[i]];
   S.dates = order.map(o => o[0]);
 }
 

@@ -61,6 +61,31 @@ function packedRowValue(S, rowIndex, columnIndex){
   const width = Number(S && S.row_width) || 0;
   return width ? S.rows[rowIndex * width + columnIndex] : S.rows[rowIndex][columnIndex];
 }
+function packedRowData(S, i){
+  const w = Number(S && S.row_width) || 6;
+  if (w === 7) {
+    return {
+      dateIdx: S.rows[i*7],
+      zone: S.rows[i*7+1],
+      pickerIdx: S.rows[i*7+2],
+      skuIdx: S.rows[i*7+3],
+      pcs: S.rows[i*7+4],
+      pickQty: S.rows[i*7+5],
+      tmin: S.rows[i*7+6]
+    };
+  } else {
+    const q = S.rows[i*w+4];
+    return {
+      dateIdx: S.rows[i*w],
+      zone: S.rows[i*w+1],
+      pickerIdx: S.rows[i*w+2],
+      skuIdx: S.rows[i*w+3],
+      pcs: q,
+      pickQty: q,
+      tmin: S.rows[i*w+5]
+    };
+  }
+}
 
 // precompute ข้อมูลกะต่อแถว "ครั้งเดียว" หลังโหลดข้อมูล -> re-render (เปลี่ยน filter) เร็วขึ้นมาก
 function prepShifts(){
@@ -70,7 +95,8 @@ function prepShifts(){
     const count = packedRowCount(S);
     S._sh = new Array(count);
     for(let i=0;i<count;i++) {
-      S._sh[i] = shiftOf(S.dates[packedRowValue(S, i, 0)], packedRowValue(S, i, 5));
+      const r = packedRowData(S, i);
+      S._sh[i] = shiftOf(S.dates[r.dateIdx], r.tmin);
     }
   });
 }
@@ -84,10 +110,10 @@ function computeBounds(){
 }
 
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
-// row = [dateIdx, zone, pickerIdx, skuIdx, qty, minOfDay]
+// row width 7 = [dateIdx, zone, pickerIdx, skuIdx, pcs, pick_qty, minOfDay]
 function aggregate(system, from, to, sf){
   const S = DATA[system];
-  let lines = 0, qty = 0;
+  let lines = 0, pcs = 0, pickQty = 0;
   const pickers = new Set(), zones = new Set();
   const zoneMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, pickerZoneCnt = {};
   const SH = S._sh;
@@ -97,28 +123,42 @@ function aggregate(system, from, to, sf){
     const si = SH[i];
     if(si.sd < from || si.sd > to) continue;
     if(sf !== 'all' && si.sh !== sf) continue;
-    const zone = packedRowValue(S, i, 1);
-    const picker = S.pickers[packedRowValue(S, i, 2)];
-    const sku = S.skus[packedRowValue(S, i, 3)];
-    const q = packedRowValue(S, i, 4);
-    
+    const r = packedRowData(S, i);
+    const zone = r.zone;
+    const picker = S.pickers[r.pickerIdx];
+    const sku = S.skus[r.skuIdx];
+    const pVal = r.pcs;
+    const qVal = r.pickQty;
+
     // บันทึกสถิติสินค้าทั้งหมด (สำหรับหน้าค้นหา/ตั้งค่ายกเว้น)
-    (itemMapAll[sku] = itemMapAll[sku] || {qty:0,lines:0}).qty += q; itemMapAll[sku].lines++;
+    (itemMapAll[sku] = itemMapAll[sku] || {pcs:0,qty:0,lines:0}).pcs += pVal;
+    itemMapAll[sku].qty += qVal;
+    itemMapAll[sku].lines++;
 
     // หาก SKU นี้ถูกเลือกยกเว้น -> ข้ามไม่นำมาคิดสถิติรวมของระบบ
     if (excludedSkus.size > 0 && excludedSkus.has(sku)) continue;
 
-    lines++; qty += q; pickers.add(picker); zones.add(zone);
-    (zoneMap[zone] = zoneMap[zone] || {qty:0,lines:0,pk:new Set()}); zoneMap[zone].qty += q; zoneMap[zone].lines++; zoneMap[zone].pk.add(picker);
-    (itemMap[sku] = itemMap[sku] || {qty:0,lines:0}); itemMap[sku].qty += q; itemMap[sku].lines++;
-    const hr = Math.floor(packedRowValue(S, i, 5)/60);
-    (slotMap[hr] = slotMap[hr] || {qty:0,lines:0}); slotMap[hr].qty += q; slotMap[hr].lines++;
-    (pickerZoneCnt[picker] = pickerZoneCnt[picker] || {}); pickerZoneCnt[picker][zone] = (pickerZoneCnt[picker][zone]||0)+1;
-    (dayVol[si.sd] = dayVol[si.sd] || {lines:0,qty:0,pk:new Set()}); dayVol[si.sd].lines++; dayVol[si.sd].qty += q; dayVol[si.sd].pk.add(picker);
+    lines++; pcs += pVal; pickQty += qVal; pickers.add(picker); zones.add(zone);
+    (zoneMap[zone] = zoneMap[zone] || {pcs:0,qty:0,lines:0,pk:new Set()});
+    zoneMap[zone].pcs += pVal; zoneMap[zone].qty += qVal; zoneMap[zone].lines++; zoneMap[zone].pk.add(picker);
+
+    (itemMap[sku] = itemMap[sku] || {pcs:0,qty:0,lines:0});
+    itemMap[sku].pcs += pVal; itemMap[sku].qty += qVal; itemMap[sku].lines++;
+
+    const hr = Math.floor(r.tmin/60);
+    (slotMap[hr] = slotMap[hr] || {pcs:0,qty:0,lines:0});
+    slotMap[hr].pcs += pVal; slotMap[hr].qty += qVal; slotMap[hr].lines++;
+
+    (pickerZoneCnt[picker] = pickerZoneCnt[picker] || {});
+    pickerZoneCnt[picker][zone] = (pickerZoneCnt[picker][zone]||0)+1;
+
+    (dayVol[si.sd] = dayVol[si.sd] || {lines:0,pcs:0,qty:0,pk:new Set()});
+    dayVol[si.sd].lines++; dayVol[si.sd].pcs += pVal; dayVol[si.sd].qty += qVal; dayVol[si.sd].pk.add(picker);
+
     // group ต่อ (คน, วันของกะ, กะ) เพื่อคิด work-hours + OT
     const k = picker+'|'+si.sd+'|'+si.sh;
-    const b = grp[k] || (grp[k] = {picker, sd:si.sd, sh:si.sh, q:0, n:0, mx:-1});
-    b.q += q; b.n++; if(si.sm > b.mx) b.mx = si.sm;
+    const b = grp[k] || (grp[k] = {picker, sd:si.sd, sh:si.sh, pcs:0, q:0, n:0, mx:-1});
+    b.pcs += pVal; b.q += qVal; b.n++; if(r.tmin > b.mx) b.mx = r.tmin;
   }
 
   const groups = Object.values(grp);
@@ -127,14 +167,14 @@ function aggregate(system, from, to, sf){
   const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : 0;
 
   const byDate = {}; groups.forEach(g => { (byDate[g.sd] = byDate[g.sd] || []).push(g.prod); });
-  const daily = Object.keys(dayVol).sort().map(d => ({date:d, lines:dayVol[d].lines, qty:dayVol[d].qty, pickers:dayVol[d].pk.size, avg_prod:r1(mean(byDate[d]||[]))}));
+  const daily = Object.keys(dayVol).sort().map(d => ({date:d, lines:dayVol[d].lines, pcs:dayVol[d].pcs, qty:dayVol[d].qty, pickers:dayVol[d].pk.size, avg_prod:r1(mean(byDate[d]||[]))}));
 
   const byPicker = {};
-  groups.forEach(g => { const o = byPicker[g.picker] || (byPicker[g.picker] = {q:0,n:0,ot:0,prods:[],sh:{}}); o.q += g.q; o.n += g.n; o.ot += g.ot; o.prods.push(g.prod); o.sh[g.sh] = (o.sh[g.sh]||0)+g.n; });
+  groups.forEach(g => { const o = byPicker[g.picker] || (byPicker[g.picker] = {pcs:0,q:0,n:0,ot:0,prods:[],sh:{}}); o.pcs += g.pcs; o.q += g.q; o.n += g.n; o.ot += g.ot; o.prods.push(g.prod); o.sh[g.sh] = (o.sh[g.sh]||0)+g.n; });
   const by_picker = Object.entries(byPicker).map(([picker,o]) => {
     const zc = pickerZoneCnt[picker] || {}; const zone = Object.keys(zc).sort((a,b)=>zc[b]-zc[a])[0] || '-';
     const shift = Object.keys(o.sh).sort((a,b)=>o.sh[b]-o.sh[a])[0] || '-';
-    return {picker, qty:o.q, lines:o.n, ot:r1(o.ot), shift, avg_prod:r1(mean(o.prods)), zone};
+    return {picker, pcs:o.pcs, qty:o.q, lines:o.n, ot:r1(o.ot), shift, avg_prod:r1(mean(o.prods)), zone};
   }).sort((a,b)=>b.qty-a.qty);
 
   function getItemInfo(sku) {
@@ -154,27 +194,33 @@ function aggregate(system, from, to, sf){
     };
   }
 
-  const by_zone = Object.entries(zoneMap).map(([zone,v])=>({zone,qty:v.qty,lines:v.lines,pickers:v.pk.size})).sort((a,b)=>b.qty-a.qty);
+  const by_zone = Object.entries(zoneMap).map(([zone,v])=>({zone,pcs:v.pcs,qty:v.qty,lines:v.lines,pickers:v.pk.size})).sort((a,b)=>b.qty-a.qty);
   const by_item = Object.entries(itemMap).map(([sku,v])=>{
     const info = getItemInfo(sku);
-    return { sku, name: info.name, owner: info.owner, qty: v.qty, lines: v.lines };
+    return { sku, name: info.name, owner: info.owner, pcs: v.pcs, qty: v.qty, lines: v.lines };
   }).sort((a,b)=>b.qty-a.qty);
   const by_item_all = Object.entries(itemMapAll).map(([sku,v])=>{
     const info = getItemInfo(sku);
-    return { sku, name: info.name, owner: info.owner, qty: v.qty, lines: v.lines, excluded: excludedSkus.has(sku) };
+    return { sku, name: info.name, owner: info.owner, pcs: v.pcs, qty: v.qty, lines: v.lines, excluded: excludedSkus.has(sku) };
   }).sort((a,b)=>b.qty-a.qty);
 
-  const by_timeslot = Object.keys(slotMap).map(Number).sort((a,b)=>a-b).map(h=>({label:String(h).padStart(2,'0')+':00', qty:slotMap[h].qty, lines:slotMap[h].lines}));
+  const by_timeslot = Object.keys(slotMap).map(Number).sort((a,b)=>a-b).map(h=>({label:String(h).padStart(2,'0')+':00', pcs:slotMap[h].pcs, qty:slotMap[h].qty, lines:slotMap[h].lines}));
 
   const totOt = groups.reduce((s,g)=>s+g.ot,0);
-  return {kpis:{lines, qty, pickers:pickers.size, ot:r1(totOt), avg_prod:r1(mean(groups.map(g=>g.prod)))}, daily, by_zone, by_picker, by_timeslot, by_item, by_item_all};
+  return {kpis:{lines, pcs, qty:pickQty, pickers:pickers.size, ot:r1(totOt), avg_prod:r1(mean(groups.map(g=>g.prod)))}, daily, by_zone, by_picker, by_timeslot, by_item, by_item_all};
 }
 
 // qty รวมของระบบตามช่วง+กะ (สำหรับกราฟเทียบ)
 function sysQty(system, from, to, sf){
   const S = DATA[system], SH = S._sh || []; let q = 0;
   const rowCount = packedRowCount(S);
-  for(let i=0;i<rowCount;i++){ const si = SH[i]; if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)) q += packedRowValue(S, i, 4); }
+  for(let i=0;i<rowCount;i++){ const si = SH[i]; if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)) { const r = packedRowData(S, i); q += r.pickQty; } }
+  return q;
+}
+function sysPcs(system, from, to, sf){
+  const S = DATA[system], SH = S._sh || []; let q = 0;
+  const rowCount = packedRowCount(S);
+  for(let i=0;i<rowCount;i++){ const si = SH[i]; if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)) { const r = packedRowData(S, i); q += r.pcs; } }
   return q;
 }
 
@@ -260,8 +306,9 @@ function updateDateHeader(){
 function renderKPIs(){
   const k = A.kpis;
   const defs = [
-    {lbl:'บรรทัดที่หยิบ', val:k.lines, unit:'', grad:'linear-gradient(90deg,#6366f1,#8b5cf6)'},
-    {lbl:'จำนวนชิ้นรวม', val:k.qty, unit:'ชิ้น', grad:'linear-gradient(90deg,#14b8a6,#0ea5e9)'},
+    {lbl:'บรรทัดที่หยิบ', val:k.lines, unit:'บรรทัด', grad:'linear-gradient(90deg,#6366f1,#8b5cf6)'},
+    {lbl:'จำนวนชิ้นรวม', val:k.pcs, unit:'ชิ้น', grad:'linear-gradient(90deg,#14b8a6,#0ea5e9)'},
+    {lbl:'หน่วยหยิบรวม', val:k.qty, unit:'หน่วยหยิบ', grad:'linear-gradient(90deg,#3b82f6,#6366f1)'},
     {lbl:'พนักงานหยิบ', val:k.pickers, unit:'คน', grad:'linear-gradient(90deg,#f59e0b,#f97316)'},
     {lbl:'Productivity เฉลี่ย', val:k.avg_prod, unit:'หยิบ/ชม.', grad:'linear-gradient(90deg,#f43f5e,#ec4899)'},
     {lbl:'OT รวม', val:k.ot, unit:'ชม.', grad:'linear-gradient(90deg,#10b981,#22c55e)'}
@@ -292,17 +339,25 @@ const builders = {
         let k = d.date; const dt = new Date(d.date);
         if(mode === 'week'){ const day = (dt.getDay()+6)%7; const mo = new Date(dt); mo.setDate(dt.getDate()-day); k = 'wk '+mo.toISOString().slice(5,10); }
         if(mode === 'month') k = d.date.slice(0,7);
-        if(!map[k]) map[k] = {qty:0, ps:[]};
-        map[k].qty += d.qty; if(d.avg_prod>0) map[k].ps.push(d.avg_prod);
+        if(!map[k]) map[k] = {pcs:0, qty:0, ps:[]};
+        map[k].pcs += (d.pcs || d.qty);
+        map[k].qty += d.qty;
+        if(d.avg_prod>0) map[k].ps.push(d.avg_prod);
       });
       const ks = Object.keys(map).sort();
-      return {labels:ks, qty:ks.map(k=>map[k].qty), prod:ks.map(k=>map[k].ps.length?Math.round(map[k].ps.reduce((a,b)=>a+b,0)/map[k].ps.length*10)/10:0)};
+      return {
+        labels:ks,
+        pcs:ks.map(k=>map[k].pcs),
+        qty:ks.map(k=>map[k].qty),
+        prod:ks.map(k=>map[k].ps.length?Math.round(map[k].ps.reduce((a,b)=>a+b,0)/map[k].ps.length*10)/10:0)
+      };
     }
     function drawTrend(mode){
       const b = bucket(mode);
       const cfg = {data:{labels:b.labels, datasets:[
-        {type:'bar', label:'จำนวนชิ้น', data:b.qty, backgroundColor:'rgba(99,102,241,.85)', borderRadius:8, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#4338ca', font:{weight:'600'}}},
-        {type:'line', label:'Productivity', data:b.prod, borderColor:'#f43f5e', backgroundColor:'#f43f5e', tension:.35, borderWidth:3, pointRadius:5, pointBackgroundColor:'#fff', pointBorderWidth:2, yAxisID:'y1', datalabels:{align:'top', color:'#e11d48', formatter:fmt, font:{weight:'600'}}}
+        {type:'bar', label:'จำนวนชิ้น', data:b.pcs, backgroundColor:'rgba(99,102,241,.85)', borderRadius:6, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#4338ca', font:{weight:'600', size:10}}},
+        {type:'bar', label:'หน่วยหยิบ', data:b.qty, backgroundColor:'rgba(20,184,166,.85)', borderRadius:6, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#0f766e', font:{weight:'600', size:10}}},
+        {type:'line', label:'Productivity (หยิบ/ชม.)', data:b.prod, borderColor:'#f43f5e', backgroundColor:'#f43f5e', tension:.35, borderWidth:3, pointRadius:5, pointBackgroundColor:'#fff', pointBorderWidth:2, yAxisID:'y1', datalabels:{align:'top', color:'#e11d48', formatter:fmt, font:{weight:'600'}}}
       ]}, options:{maintainAspectRatio:false, layout:{padding:{top:24}}, plugins:{legend:{display:true, position:'top', labels:{usePointStyle:true, boxWidth:8}}}, scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, y1:{position:'right', grid:{drawOnChartArea:false}}}}};
       const ex = Chart.getChart('trend'); if(ex) ex.destroy();
       new Chart(document.getElementById('trend'), cfg);
@@ -312,36 +367,118 @@ const builders = {
       document.querySelectorAll('#seg button').forEach(x => x.classList.remove('active'));
       b.classList.add('active'); drawTrend(b.dataset.mode);
     });
-    const cq = sysQty('PTT', dfrom, dto, shiftF), bq = sysQty('BPS', dfrom, dto, shiftF);
-    new Chart(document.getElementById('cat'), {type:'doughnut', data:{labels:['Pick (PTT)','Pick to Sort (BPS)'], datasets:[{data:[cq, bq], backgroundColor:['#6366f1','#f59e0b'], borderWidth:4, borderColor:'#fff'}]}, options:{maintainAspectRatio:false, cutout:'60%', plugins:{legend:{position:'bottom', labels:{usePointStyle:true, boxWidth:8}}, datalabels:{color:'#fff', font:{size:14, weight:'700'}, textAlign:'center', formatter:(v,c)=>{ const t = c.chart.data.datasets[0].data.reduce((a,b)=>a+b,0)||1; return fmt(v)+'\n('+Math.round(v/t*100)+'%)'; }}}}});
+    const cqPcs = sysPcs('PTT', dfrom, dto, shiftF), bqPcs = sysPcs('BPS', dfrom, dto, shiftF);
+    const cqQty = sysQty('PTT', dfrom, dto, shiftF), bqQty = sysQty('BPS', dfrom, dto, shiftF);
+
+    new Chart(document.getElementById('cat'), {
+      type:'doughnut',
+      data:{labels:['Pick (PTT)','Pick to Sort (BPS)'], datasets:[{data:[cqQty, bqQty], backgroundColor:['#6366f1','#f59e0b'], borderWidth:4, borderColor:'#fff'}]},
+      options:{
+        maintainAspectRatio:false,
+        cutout:'60%',
+        plugins:{
+          legend:{position:'bottom', labels:{usePointStyle:true, boxWidth:8}},
+          datalabels:{color:'#fff', font:{size:13, weight:'700'}, textAlign:'center', formatter:(v,c)=>{ const t = c.chart.data.datasets[0].data.reduce((a,b)=>a+b,0)||1; return fmt(v)+' หน่วย\n('+Math.round(v/t*100)+'%)'; }},
+          tooltip:{
+            callbacks:{
+              label:(ctx)=>{
+                const idx = ctx.dataIndex;
+                const sysName = ctx.label;
+                const pVal = idx === 0 ? cqPcs : bqPcs;
+                const qVal = idx === 0 ? cqQty : bqQty;
+                return [
+                  ` ${sysName}`,
+                  ` จำนวนชิ้น: ${fmt(pVal)} ชิ้น`,
+                  ` หน่วยหยิบ: ${fmt(qVal)} หน่วย`
+                ];
+              }
+            }
+          }
+        }
+      }
+    });
   },
   prod(){
     const p = A.by_picker.slice(0, 12);
-    new Chart(document.getElementById('picker'), {type:'bar', data:{labels:p.map(x=>x.picker+' ('+x.zone+')'), datasets:[{data:p.map(x=>x.avg_prod), backgroundColor:p.map((x,i)=>PALETTE[i%PALETTE.length]), borderRadius:6}]}, options:{indexAxis:'y', maintainAspectRatio:false, layout:{padding:{right:48}}, plugins:{legend:{display:false}, datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#334155', font:{size:10, weight:'600'}}}, scales:{x:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, y:{grid:{display:false}}}}});
+    new Chart(document.getElementById('picker'), {
+      type:'bar',
+      data:{labels:p.map(x=>x.picker+' ('+x.zone+')'), datasets:[{data:p.map(x=>x.avg_prod), backgroundColor:p.map((x,i)=>PALETTE[i%PALETTE.length]), borderRadius:6}]},
+      options:{
+        indexAxis:'y', maintainAspectRatio:false, layout:{padding:{right:48}},
+        plugins:{
+          legend:{display:false},
+          datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#334155', font:{size:10, weight:'600'}},
+          tooltip:{
+            callbacks:{
+              label:(ctx)=>{
+                const picker = p[ctx.dataIndex];
+                return [
+                  ` Productivity: ${fmt(picker.avg_prod)} หยิบ/ชม.`,
+                  ` ปริมาณ: ${fmt(picker.pcs)} ชิ้น (${fmt(picker.qty)} หน่วยหยิบ)`,
+                  ` บรรทัด: ${fmt(picker.lines)} บรรทัด (OT: ${picker.ot > 0 ? picker.ot+' ชม.' : '-'})`
+                ];
+              }
+            }
+          }
+        },
+        scales:{x:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, y:{grid:{display:false}}}
+      }
+    });
   },
   zones(){
     const z = A.by_zone;
-    new Chart(document.getElementById('zone'), {type:'bar', data:{labels:z.map(x=>x.zone), datasets:[{data:z.map(x=>x.qty), backgroundColor:z.map((x,i)=>PALETTE[i%PALETTE.length]), borderRadius:7}]}, options:{maintainAspectRatio:false, layout:{padding:{top:22}}, plugins:{legend:{display:false}, datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#334155', font:{size:10, weight:'600'}}}, scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, x:{grid:{display:false}}}}});
-    const maxQ = Math.max(1, ...z.map(x=>x.qty));
+    new Chart(document.getElementById('zone'), {
+      type:'bar',
+      data:{labels:z.map(x=>x.zone), datasets:[
+        {label:'จำนวนชิ้น', data:z.map(x=>x.pcs), backgroundColor:'rgba(99,102,241,.85)', borderRadius:6},
+        {label:'หน่วยหยิบ', data:z.map(x=>x.qty), backgroundColor:'rgba(20,184,166,.85)', borderRadius:6}
+      ]},
+      options:{
+        maintainAspectRatio:false, layout:{padding:{top:22}},
+        plugins:{
+          legend:{display:true, position:'top', labels:{usePointStyle:true, boxWidth:8}},
+          datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#334155', font:{size:10, weight:'600'}}
+        },
+        scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, x:{grid:{display:false}}}
+      }
+    });
+
+    const maxQ = Math.max(1, ...z.map(x=>x.pcs));
     const heat = document.getElementById('heat'); heat.innerHTML = '';
     z.forEach(x => {
-      const t = Math.pow(x.qty/maxQ, .55), c1 = [224,231,255], c2 = [67,56,202];
+      const t = Math.pow(x.pcs/maxQ, .55), c1 = [224,231,255], c2 = [67,56,202];
       const mx = c1.map((v,i)=>Math.round(v+(c2[i]-v)*t));
       const e = document.createElement('div'); e.className = 'tile'; e.style.background = 'rgb('+mx.join(',')+')';
       if(t < .35) e.style.color = '#334155';
-      e.innerHTML = '<div class="z">'+x.zone+'</div><div class="q">'+fmt(x.qty)+' ชิ้น</div><div class="p">'+x.pickers+' คน · '+fmt(x.lines)+' บรรทัด</div>';
+      e.innerHTML = '<div class="z">'+x.zone+'</div><div class="q">'+fmt(x.pcs)+' ชิ้น <span style="font-size:11px;opacity:0.85;">('+fmt(x.qty)+' หน่วย)</span></div><div class="p">'+x.pickers+' คน · '+fmt(x.lines)+' บรรทัด</div>';
       heat.appendChild(e);
     });
   },
   pickers(){
-    let h = '<thead><tr><th>#</th><th>รหัส Picker</th><th>กะ</th><th>โซนหลัก</th><th class="num">บรรทัด</th><th class="num">ชิ้น</th><th class="num">OT (ชม.)</th><th class="num">หยิบ/ชม.</th></tr></thead><tbody>';
-    if(!A.by_picker.length) h += '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
-    A.by_picker.forEach((p,i) => { h += '<tr><td><span class="rank">'+(i+1)+'</span></td><td>'+p.picker+'</td><td>'+(SHIFT_LABEL[p.shift]||p.shift)+'</td><td><span class="pill">'+p.zone+'</span></td><td class="num">'+fmt(p.lines)+'</td><td class="num">'+fmt(p.qty)+'</td><td class="num">'+(p.ot>0?fmt(p.ot):'-')+'</td><td class="num">'+fmt(p.avg_prod)+'</td></tr>'; });
+    let h = '<thead><tr><th>#</th><th>รหัส Picker</th><th>กะ</th><th>โซนหลัก</th><th class="num">บรรทัด</th><th class="num">ชิ้น (Pcs)</th><th class="num">หน่วยหยิบ (Units)</th><th class="num">OT (ชม.)</th><th class="num">หยิบ/ชม.</th></tr></thead><tbody>';
+    if(!A.by_picker.length) h += '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
+    A.by_picker.forEach((p,i) => {
+      h += '<tr><td><span class="rank">'+(i+1)+'</span></td><td><b>'+p.picker+'</b></td><td>'+(SHIFT_LABEL[p.shift]||p.shift)+'</td><td><span class="pill">'+p.zone+'</span></td><td class="num">'+fmt(p.lines)+'</td><td class="num" style="color:#0f766e;font-weight:600;">'+fmt(p.pcs)+'</td><td class="num" style="color:#4338ca;font-weight:600;">'+fmt(p.qty)+'</td><td class="num">'+(p.ot>0?fmt(p.ot):'-')+'</td><td class="num" style="font-weight:700;color:#e11d48;">'+fmt(p.avg_prod)+'</td></tr>';
+    });
     h += '</tbody>'; document.getElementById('ptable').innerHTML = h;
   },
   time(){
     const t = A.by_timeslot;
-    new Chart(document.getElementById('slot'), {type:'bar', data:{labels:t.map(x=>x.label), datasets:[{data:t.map(x=>x.qty), backgroundColor:'rgba(20,184,166,.85)', borderRadius:6}]}, options:{maintainAspectRatio:false, layout:{padding:{top:22}}, plugins:{legend:{display:false}, datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#0f766e', font:{size:9, weight:'600'}, rotation:-90, offset:2}}, scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, x:{grid:{display:false}}}}});
+    new Chart(document.getElementById('slot'), {
+      type:'bar',
+      data:{labels:t.map(x=>x.label), datasets:[
+        {label:'จำนวนชิ้น', data:t.map(x=>x.pcs), backgroundColor:'rgba(99,102,241,.85)', borderRadius:6},
+        {label:'หน่วยหยิบ', data:t.map(x=>x.qty), backgroundColor:'rgba(20,184,166,.85)', borderRadius:6}
+      ]},
+      options:{
+        maintainAspectRatio:false, layout:{padding:{top:22}},
+        plugins:{
+          legend:{display:true, position:'top', labels:{usePointStyle:true, boxWidth:8}},
+          datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#0f766e', font:{size:9, weight:'600'}, rotation:-90, offset:2}
+        },
+        scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, x:{grid:{display:false}}}
+      }
+    });
   },
   items(){
     const it = A.by_item.slice(0, 10);
@@ -355,8 +492,14 @@ const builders = {
       data: {
         labels: labels,
         datasets: [{
-          data: it.map(x => x.qty),
+          label: 'จำนวนชิ้น',
+          data: it.map(x => x.pcs),
           backgroundColor: 'rgba(245,158,11,.9)',
+          borderRadius: 6
+        }, {
+          label: 'หน่วยหยิบ',
+          data: it.map(x => x.qty),
+          backgroundColor: 'rgba(99,102,241,.85)',
           borderRadius: 6
         }]
       },
@@ -365,7 +508,7 @@ const builders = {
         maintainAspectRatio: false,
         layout: { padding: { right: 55 } },
         plugins: {
-          legend: { display: false },
+          legend: { display: true, position: 'top', labels: { usePointStyle: true, boxWidth: 8 } },
           datalabels: { anchor: 'end', align: 'end', formatter: fmt, color: '#b45309', font: { size: 10, weight: '600' } },
           tooltip: {
             callbacks: {
@@ -379,7 +522,8 @@ const builders = {
                 return [
                   ` SKU: ${item.sku}`,
                   ` Owner: ${item.owner || '-'}`,
-                  ` จำนวน: ${fmt(item.qty)} ชิ้น (${fmt(item.lines)} บรรทัด)`
+                  ` จำนวน: ${fmt(item.pcs)} ชิ้น (${fmt(item.qty)} หน่วยหยิบ)`,
+                  ` จำนวนบรรทัด: ${fmt(item.lines)} บรรทัด`
                 ];
               }
             }
@@ -418,12 +562,12 @@ const builders = {
         );
       }
 
-      // แสดง 30 รายการแรกที่ตรงกับคำค้นหา
+      // แสดง 35 รายการแรกที่ตรงกับคำค้นหา
       const displayItems = allItems.slice(0, 35);
 
-      let h = '<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num">บรรทัด</th><th class="num">ชิ้น</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>';
+      let h = '<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num">บรรทัด</th><th class="num">จำนวนชิ้น</th><th class="num">หน่วยหยิบ</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>';
       if (!displayItems.length) {
-        h += '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
+        h += '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
       } else {
         displayItems.forEach((x, i) => {
           const isEx = excludedSkus.has(x.sku);
@@ -443,7 +587,8 @@ const builders = {
             <td ${nameStyle}>${x.name || '-'}</td>
             <td><span class="pill">${x.owner || '-'}</span></td>
             <td class="num">${fmt(x.lines)}</td>
-            <td class="num" style="font-weight:600;color:${isEx ? '#94a3b8' : '#0f766e'}">${fmt(x.qty)}</td>
+            <td class="num" style="font-weight:600;color:${isEx ? '#94a3b8' : '#0f766e'}">${fmt(x.pcs)}</td>
+            <td class="num" style="font-weight:600;color:${isEx ? '#94a3b8' : '#4338ca'}">${fmt(x.qty)}</td>
             <td style="text-align:center;display:flex;align-items:center;justify-content:center;gap:10px;">${statusBadge} ${btnAction}</td>
           </tr>`;
         });
