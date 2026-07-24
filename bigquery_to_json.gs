@@ -585,7 +585,7 @@ function buildDashboardData_(useQueryCache) {
     "zone, picker_id AS picker, sku, " +
     "EXTRACT(HOUR FROM pick_ts_local)*60 + EXTRACT(MINUTE FROM pick_ts_local) AS tmin, " +
     "qty AS pcs, " +
-    "CAST(ROUND(SAFE_DIVIDE(qty, COALESCE(NULLIF(uom_qty, 0), 1))) AS INT64) AS pick_qty " +
+    "CAST(ROUND(SAFE_DIVIDE(qty, CASE WHEN uom_qty >= 999 OR uom_qty IS NULL OR uom_qty <= 0 THEN 1 ELSE uom_qty END)) AS INT64) AS pick_qty " +
     "FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".v_pick_enriched` " +
     "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY)";
 
