@@ -33,6 +33,8 @@ let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
 let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
 let unitMode = 'units'; // 'units' (หน่วยหยิบ) หรือ 'pcs' (จำนวนชิ้น)
+let trendMode = 'day';
+let datePresetMode = 'all';
 let excludedSkus = new Set();
 let itemSearchTerm = '';
 let hasLiveData = false;
@@ -49,6 +51,34 @@ function addDays(ds, n){                     // เลื่อนวันท�
   while(d < 1){ m--; if(m<1){ m=12; y--; } d += dim(m); }
   while(d > dim(m)){ d -= dim(m); m++; if(m>12){ m=1; y++; } }
   return y+'-'+String(m).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+}
+function clampDate(ds){
+  if(!ds) return ds;
+  if(DMIN && ds < DMIN) return DMIN;
+  if(DMAX && ds > DMAX) return DMAX;
+  return ds;
+}
+function weekStart(ds){
+  const dt = new Date(ds + 'T00:00:00');
+  const day = (dt.getDay() + 6) % 7; // Monday = 0
+  return addDays(ds, -day);
+}
+function monthEnd(ds){
+  let last = ds.slice(0, 7) + '-28';
+  while(addDays(last, 1).slice(0, 7) === ds.slice(0, 7)) last = addDays(last, 1);
+  return last;
+}
+function rangeForPeriod(mode, baseDate){
+  const base = clampDate(baseDate || dto || DMAX);
+  if(!base) return {from:dfrom, to:dto};
+  if(mode === 'week'){
+    const start = weekStart(base);
+    return {from:clampDate(start), to:clampDate(addDays(start, 6))};
+  }
+  if(mode === 'month'){
+    return {from:clampDate(base.slice(0, 7) + '-01'), to:clampDate(monthEnd(base))};
+  }
+  return {from:base, to:base};
 }
 function shiftOf(ds, t){
   if(t >= 420 && t < 1140) return {sh:'morning', sd:ds,            sm:t-420};   // 07:00–18:59 -> กะเช้า
@@ -267,7 +297,7 @@ function ensureStyles(){
   const st = document.createElement('style'); st.id = 'dash-style';
   st.textContent = '.sysbar{display:flex;align-items:center;gap:12px 16px;margin:-6px 0 20px;flex-wrap:wrap}.sysbar .lab{font-size:13px;color:#64748b;font-weight:500}.systog{display:inline-flex;background:#eef2ff;border-radius:12px;padding:4px}.systog button{border:0;background:transparent;font-family:inherit;font-size:13px;font-weight:600;color:#64748b;padding:9px 16px;border-radius:9px;cursor:pointer;transition:.2s}.systog button.active{color:#fff;box-shadow:0 6px 14px -6px rgba(14,165,233,.6)}.systog button.active[data-sys="PTT"]{background:linear-gradient(90deg,#0ea5e9,#6366f1)}.systog button.active[data-sys="BPS"]{background:linear-gradient(90deg,#f59e0b,#f97316)}.shiftog button.active{background:linear-gradient(90deg,#8b5cf6,#6366f1)}.unittog button.active{background:linear-gradient(90deg,#14b8a6,#0ea5e9);color:#fff;box-shadow:0 6px 14px -6px rgba(20,184,166,.6)}'
     + '.datebar{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:6px 10px;box-shadow:0 8px 20px -16px rgba(30,41,59,.4)}.datebar input[type=date]{font-family:inherit;font-size:13px;color:#1e293b;border:1px solid #e2e8f0;border-radius:8px;padding:6px 8px;background:#f8fafc}.datebar input[type=date]:focus{outline:0;border-color:#6366f1}.datebar .sep{color:#94a3b8;font-size:13px}'
-    + '.datepreset{display:inline-flex;gap:6px;flex-wrap:wrap}.datepreset button{border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12.5px;font-weight:500;color:#475569;padding:7px 12px;border-radius:9px;cursor:pointer;transition:.18s}.datepreset button:hover{border-color:#6366f1;color:#4338ca}.datepreset button.active{background:linear-gradient(90deg,#6366f1,#8b5cf6);border-color:transparent;color:#fff}'
+    + '.datepreset{display:inline-flex;gap:6px;flex-wrap:wrap}.datepreset button{border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12.5px;font-weight:500;color:#475569;padding:7px 12px;border-radius:9px;cursor:pointer;transition:.18s}.datepreset button:hover{border-color:#6366f1;color:#4338ca}.datepreset button.active{background:linear-gradient(90deg,#6366f1,#8b5cf6);border-color:transparent;color:#fff}.datepreset button[data-range]{background:#f8fafc;color:#0f766e;border-color:#ccfbf1}.datepreset button[data-range].active{background:linear-gradient(90deg,#0d9488,#14b8a6);color:#fff}'
     + '.refreshbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12.5px;font-weight:600;color:#0e7490;padding:7px 12px;border-radius:9px;cursor:pointer;transition:.18s}.refreshbtn:hover{border-color:#14b8a6;background:#f0fdfa}.freshtxt{font-size:11.5px;color:#94a3b8}'
     + '#loadov{position:fixed;inset:0;background:#f8fafc;display:flex;align-items:center;justify-content:center;z-index:999}#loadov .sp{width:38px;height:38px;border:4px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}#loadov .msg{margin-left:14px;font-size:14px;color:#475569;font-weight:500}';
   document.head.appendChild(st);
@@ -287,7 +317,7 @@ function buildControls(){
     + '<div class="systog shiftog"><button data-sh="all">ทุกกะ</button><button data-sh="morning">🌅 เช้า</button><button data-sh="night">🌙 ดึก</button></div>'
     + '<span class="lab">วันที่:</span>'
     + `<div class="datebar"><input type="date" id="dfrom" min="${DMIN}" max="${DMAX}" value="${dfrom}"><span class="sep">→</span><input type="date" id="dto" min="${DMIN}" max="${DMAX}" value="${dto}"></div>`
-    + `<div class="datepreset"><button data-all="1">ทั้งหมด</button>${presetBtns}</div>`
+    + `<div class="datepreset"><button data-all="1">ทั้งหมด</button><button data-range="week">Weekly</button><button data-range="month">Monthly</button>${presetBtns}</div>`
     + '<button class="refreshbtn" id="refreshBtn">↻ รีเฟรช</button>'
     + '<span class="freshtxt" id="freshTxt"></span>';
   document.querySelector('.pagehead').insertAdjacentElement('afterend', bar);
@@ -311,14 +341,31 @@ function buildControls(){
   const fromEl = bar.querySelector('#dfrom'), toEl = bar.querySelector('#dto');
   function setPresetActive(){
     bar.querySelectorAll('.datepreset button').forEach(x=>x.classList.remove('active'));
-    if(dfrom===DMIN && dto===DMAX){ const a=bar.querySelector('.datepreset button[data-all]'); if(a) a.classList.add('active'); }
-    else if(dfrom===dto){ const m=bar.querySelector(`.datepreset button[data-d="${dfrom}"]`); if(m) m.classList.add('active'); }
+    if(datePresetMode === 'all'){ const a=bar.querySelector('.datepreset button[data-all]'); if(a) a.classList.add('active'); return; }
+    if(datePresetMode === 'week' || datePresetMode === 'month'){
+      const r=bar.querySelector(`.datepreset button[data-range="${datePresetMode}"]`);
+      if(r) r.classList.add('active');
+      return;
+    }
+    if(datePresetMode === 'day' && dfrom===dto){ const m=bar.querySelector(`.datepreset button[data-d="${dfrom}"]`); if(m) m.classList.add('active'); }
   }
   function applyDates(){ if(dfrom > dto){ const t=dfrom; dfrom=dto; dto=t; fromEl.value=dfrom; toEl.value=dto; } setPresetActive(); render(); }
-  fromEl.onchange = () => { dfrom = fromEl.value || DMIN; applyDates(); };
-  toEl.onchange   = () => { dto   = toEl.value   || DMAX; applyDates(); };
+  fromEl.onchange = () => { datePresetMode = 'custom'; dfrom = fromEl.value || DMIN; applyDates(); };
+  toEl.onchange   = () => { datePresetMode = 'custom'; dto   = toEl.value   || DMAX; applyDates(); };
   bar.querySelectorAll('.datepreset button').forEach(b => b.onclick = () => {
-    if(b.dataset.all){ dfrom=DMIN; dto=DMAX; } else { dfrom=b.dataset.d; dto=b.dataset.d; }
+    if(b.dataset.all){
+      datePresetMode = 'all';
+      dfrom=DMIN; dto=DMAX;
+    } else if(b.dataset.range) {
+      datePresetMode = b.dataset.range;
+      trendMode = b.dataset.range;
+      const next = rangeForPeriod(b.dataset.range, DMAX);
+      dfrom = next.from; dto = next.to;
+    } else {
+      datePresetMode = 'day';
+      trendMode = 'day';
+      dfrom=b.dataset.d; dto=b.dataset.d;
+    }
     fromEl.value=dfrom; toEl.value=dto; setPresetActive(); render();
   });
   setPresetActive();
@@ -422,32 +469,106 @@ const builders = {
       const prodData = isPcs ? b.pcsProd : b.prod;
       const prodLabel = isPcs ? 'Productivity (ชิ้น/ชม.)' : 'Productivity (หยิบ/ชม.)';
 
+      const maxMainQty = Math.max(1, ...mainQty);
       const cfg = {data:{labels:b.labels, datasets:[
-        {type:'bar', label:mainLabel, data:mainQty, backgroundColor:isPcs?'rgba(20,184,166,.85)':'rgba(99,102,241,.85)', borderRadius:6, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:isPcs?'#0f766e':'#4338ca', font:{weight:'600', size:10}}},
-        {type:'line', label:prodLabel, data:prodData, borderColor:'#f43f5e', backgroundColor:'#f43f5e', tension:.35, borderWidth:3, pointRadius:5, pointBackgroundColor:'#fff', pointBorderWidth:2, yAxisID:'y1', datalabels:{align:'top', color:'#e11d48', formatter:fmt, font:{weight:'600'}}}
-      ]}, options:{maintainAspectRatio:false, layout:{padding:{top:24}}, plugins:{legend:{display:true, position:'top', labels:{usePointStyle:true, boxWidth:8}}}, scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, y1:{position:'right', grid:{drawOnChartArea:false}}}}};
+        {
+          type:'bar',
+          label:mainLabel,
+          data:mainQty,
+          backgroundColor:isPcs?'rgba(20,184,166,.85)':'rgba(99,102,241,.85)',
+          borderRadius:6,
+          yAxisID:'y',
+          datalabels:{
+            display:(ctx)=>{
+              const v = Number(ctx.dataset.data[ctx.dataIndex] || 0);
+              return v > 0 && (v / maxMainQty >= .08 || ctx.dataset.data.length <= 2);
+            },
+            anchor:'end',
+            align:'start',
+            offset:4,
+            formatter:fmt,
+            color:'#fff',
+            backgroundColor:'rgba(15,23,42,.16)',
+            borderRadius:4,
+            padding:{top:2,right:5,bottom:2,left:5},
+            font:{weight:'700', size:10}
+          }
+        },
+        {
+          type:'line',
+          label:prodLabel,
+          data:prodData,
+          borderColor:'#f43f5e',
+          backgroundColor:'#f43f5e',
+          tension:.35,
+          borderWidth:3,
+          pointRadius:5,
+          pointBackgroundColor:'#fff',
+          pointBorderWidth:2,
+          yAxisID:'y1',
+          datalabels:{
+            display:(ctx)=>Number(ctx.dataset.data[ctx.dataIndex] || 0) > 0,
+            align:'top',
+            offset:10,
+            color:'#e11d48',
+            backgroundColor:'rgba(255,255,255,.96)',
+            borderColor:'rgba(244,63,94,.28)',
+            borderWidth:1,
+            borderRadius:4,
+            padding:{top:2,right:5,bottom:2,left:5},
+            formatter:fmt,
+            font:{weight:'700', size:10}
+          }
+        }
+      ]}, options:{maintainAspectRatio:false, layout:{padding:{top:36,right:12,bottom:18,left:4}}, plugins:{legend:{display:true, position:'top', labels:{usePointStyle:true, boxWidth:8}}, datalabels:{clip:false, clamp:true}}, scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, y1:{position:'right', grid:{drawOnChartArea:false}, ticks:{callback:fmt}}}}};
       const ex = Chart.getChart('trend'); if(ex) ex.destroy();
       new Chart(document.getElementById('trend'), cfg);
     }
-    drawTrend('day');
+    drawTrend(trendMode);
     document.querySelectorAll('#seg button').forEach(b => b.onclick = () => {
       document.querySelectorAll('#seg button').forEach(x => x.classList.remove('active'));
-      b.classList.add('active'); drawTrend(b.dataset.mode);
+      b.classList.add('active'); trendMode = b.dataset.mode; drawTrend(trendMode);
     });
+    document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('active', b.dataset.mode === trendMode));
     const cqPcs = sysPcs('PTT', dfrom, dto, shiftF), bqPcs = sysPcs('BPS', dfrom, dto, shiftF);
     const cqQty = sysQty('PTT', dfrom, dto, shiftF), bqQty = sysQty('BPS', dfrom, dto, shiftF);
     const catData = isPcs ? [cqPcs, bqPcs] : [cqQty, bqQty];
     const unitTxt = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
+    const donutUnitTxt = isPcs ? 'ชิ้น' : 'หยิบ';
+    const donutTotal = catData.reduce((a,b)=>a+b,0) || 1;
+    const donutPct = v => (Number(v) || 0) / donutTotal * 100;
+    const isSmallDonutSlice = ctx => donutPct(ctx.dataset.data[ctx.dataIndex]) < 8;
 
     new Chart(document.getElementById('cat'), {
       type:'doughnut',
       data:{labels:['Pick (PTT)','Pick to Sort (BPS)'], datasets:[{data:catData, backgroundColor:['#6366f1','#f59e0b'], borderWidth:4, borderColor:'#fff'}]},
       options:{
         maintainAspectRatio:false,
+        layout:{padding:{top:28,right:58,bottom:22,left:58}},
         cutout:'60%',
         plugins:{
           legend:{position:'bottom', labels:{usePointStyle:true, boxWidth:8}},
-          datalabels:{color:'#fff', font:{size:13, weight:'700'}, textAlign:'center', formatter:(v,c)=>{ const t = c.chart.data.datasets[0].data.reduce((a,b)=>a+b,0)||1; return fmt(v)+' '+unitTxt+'\n('+Math.round(v/t*100)+'%)'; }},
+          datalabels:{
+            display:(ctx)=>Number(ctx.dataset.data[ctx.dataIndex] || 0) > 0,
+            anchor:(ctx)=>isSmallDonutSlice(ctx) ? 'end' : 'center',
+            align:(ctx)=>isSmallDonutSlice(ctx) ? 'end' : 'center',
+            offset:(ctx)=>isSmallDonutSlice(ctx) ? 14 : 0,
+            clamp:true,
+            clip:false,
+            color:(ctx)=>isSmallDonutSlice(ctx) ? '#92400e' : '#fff',
+            backgroundColor:(ctx)=>isSmallDonutSlice(ctx) ? 'rgba(255,255,255,.96)' : 'rgba(15,23,42,.14)',
+            borderColor:(ctx)=>isSmallDonutSlice(ctx) ? 'rgba(245,158,11,.45)' : 'transparent',
+            borderWidth:(ctx)=>isSmallDonutSlice(ctx) ? 1 : 0,
+            borderRadius:5,
+            padding:{top:3,right:6,bottom:3,left:6},
+            font:{size:12, weight:'700'},
+            textAlign:'center',
+            formatter:(v)=>{
+              const pct = Math.round(donutPct(v));
+              if(pct < 8) return fmt(v)+' '+donutUnitTxt+'\n'+pct+'%';
+              return fmt(v)+' '+unitTxt+'\n('+pct+'%)';
+            }
+          },
           tooltip:{
             callbacks:{
               label:(ctx)=>{
@@ -798,6 +919,8 @@ function clearDashboardState(){
   hasLiveData = false;
   DATA = emptyData();
   ALL_DATES = []; DMIN = ''; DMAX = ''; dfrom = ''; dto = '';
+  datePresetMode = 'all';
+  trendMode = 'day';
   A = null; built = {}; lastFetchTime = null;
   excludedSkus.clear(); itemSearchTerm = '';
   destroyCharts();
@@ -897,7 +1020,7 @@ function loadData(force){
 
 async function loadDataOnce(force){
   document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
-  const previous = {sys, shiftF, dfrom, dto};
+  const previous = {sys, shiftF, dfrom, dto, datePresetMode, trendMode};
   const hadLiveData = hasLiveData;
   if(!DATA_URL){
     showDataState('error', 'ยังไม่ได้ตั้งค่า Apps Script Web App และระบบจะไม่แสดงข้อมูลสำรอง');
@@ -946,8 +1069,12 @@ async function loadDataOnce(force){
     lastFetchTime = j.meta ? j.meta.generated : new Date().toISOString();
     sys = previous.sys; shiftF = previous.shiftF;
     computeBounds();
-    dfrom = (previous.dfrom && previous.dfrom>=DMIN && previous.dfrom<=DMAX) ? previous.dfrom : DMIN;
-    dto   = (previous.dto && previous.dto>=DMIN && previous.dto<=DMAX) ? previous.dto : DMAX;
+    const keepFrom = previous.dfrom && previous.dfrom>=DMIN && previous.dfrom<=DMAX;
+    const keepTo = previous.dto && previous.dto>=DMIN && previous.dto<=DMAX;
+    dfrom = keepFrom ? previous.dfrom : DMIN;
+    dto   = keepTo ? previous.dto : DMAX;
+    datePresetMode = (keepFrom || keepTo) ? (previous.datePresetMode || 'custom') : 'all';
+    trendMode = previous.trendMode || trendMode;
     hideDataState();
     setSideBadge('BigQuery สด ' + fmt(totalRows) + ' แถว\nอัปเดต ' + new Date(lastFetchTime).toLocaleString('th-TH', {dateStyle:'short', timeStyle:'short'}));
     buildControls();
