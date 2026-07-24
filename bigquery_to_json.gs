@@ -28,8 +28,9 @@ const CACHE_TTL = 1800;   // เก็บผลลัพธ์ไว้กี่
 
 function doGet(e) {
   try {
-    // ดึงข้อมูลสดตรงจาก BigQuery 100% ทุกครั้ง (ไม่ใช้แคช เพื่อให้ตรงกับ BigQuery เป๊ะๆ)
-    const dataObj = buildDashboardData_();
+    // fresh=1 ใช้หลังอัปโหลด/กดลองอีกครั้ง เพื่อข้าม BigQuery query cache
+    const fresh = !!(e && e.parameter && e.parameter.fresh === '1');
+    const dataObj = buildDashboardData_(!fresh);
     return textJson_(JSON.stringify(dataObj));
   } catch (err) {
     return json_({ error: String(err && err.message || err) });
@@ -171,6 +172,7 @@ function uploadToBigQuery_(rows, fmt, meta) {
       );
     }
     mergeCounts = mergeStage_(stageTable);
+    clearCache_();
   } finally {
     if (lock && lock.hasLock()) {
       lock.releaseLock();
@@ -534,7 +536,8 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function buildDashboardData_() {
+function buildDashboardData_(useQueryCache) {
+  const currentDate = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
   const sql =
     "SELECT UPPER(category) AS category, " +
     "FORMAT_DATE('%Y-%m-%d', pick_date) AS d, " +
@@ -542,19 +545,17 @@ function buildDashboardData_() {
     "EXTRACT(HOUR FROM pick_ts_local)*60 + EXTRACT(MINUTE FROM pick_ts_local) AS tmin, " +
     "CAST(ROUND(SAFE_DIVIDE(qty, COALESCE(NULLIF(uom_qty, 0), 1))) AS INT64) AS qty " +
     "FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".v_pick_enriched` " +
-    "WHERE pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + " DAY)";
-
-  const rows = bqQueryAll_(sql);
+    "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY)";
 
   const mk = () => ({ _d:{}, _p:{}, _s:{}, dates:[], pickers:[], skus:[], rows:[] });
   const sysd = { PTT: mk(), BPS: mk() };
   const idx = (map, arr, key) => { if (!(key in map)) { map[key] = arr.length; arr.push(key); } return map[key]; };
 
   let total = 0;
-  for (const r of rows) {
+  bqQueryEach_(sql, function(r) {
     const cat = r[0];
     const S = sysd[cat];
-    if (!S) continue;                       // เอาเฉพาะ PTT / BPS
+    if (!S) return;                         // เอาเฉพาะ PTT / BPS
     const d = r[1];
     const zone = r[2] || '??';
     const picker = r[3] || '(none)';
@@ -562,16 +563,16 @@ function buildDashboardData_() {
     const tmin = Number(r[5]) || 0;
     const qty = Number(r[6]) || 0;
     const di = idx(S._d, S.dates, d), pi = idx(S._p, S.pickers, picker), si = idx(S._s, S.skus, sku);
-    S.rows.push([di, zone, pi, si, qty, tmin]);
+    S.rows.push(di, zone, pi, si, qty, tmin);
     total++;
-  }
+  }, JOB_DEADLINE_MS, useQueryCache !== false);
   ['PTT','BPS'].forEach(c => sortDates_(sysd[c]));
 
   return {
     meta: { generated: new Date().toISOString(), source: 'BigQuery v_pick_enriched',
             recent_days: RECENT_DAYS, rows: total },
-    PTT: { dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
-    BPS: { dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }
+    PTT: { row_width: 6, dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
+    BPS: { row_width: 6, dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }
   };
 }
 
@@ -579,49 +580,70 @@ function buildDashboardData_() {
 function sortDates_(S) {
   const order = S.dates.map((d, i) => [d, i]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
   const remap = {}; order.forEach((o, ni) => remap[o[1]] = ni);
-  S.rows.forEach(row => { row[0] = remap[row[0]]; });
+  for (let i = 0; i < S.rows.length; i += 6) S.rows[i] = remap[S.rows[i]];
   S.dates = order.map(o => o[0]);
 }
 
-// ดึงผลลัพธ์ BigQuery ทั้งหมด (รองรับหลายหน้า)
-function bqQueryAll_(sql, deadlineMs) {
+// อ่านผลลัพธ์ BigQuery ทีละหน้า เพื่อลด peak memory ของ Apps Script
+function bqQueryEach_(sql, onRow, deadlineMs, useQueryCache) {
   const deadline = Number(deadlineMs || JOB_DEADLINE_MS);
   const started = Date.now();
-  let qr = BigQuery.Jobs.query({
+  const pageSize = 10000;
+  let page = BigQuery.Jobs.query({
     query: sql,
     useLegacySql: false,
-    useQueryCache: false,
+    useQueryCache: useQueryCache !== false,
     timeoutMs: 60000,
-    maxResults: 100000,
+    maxResults: pageSize,
     location: BQ_LOCATION
   }, BQ_PROJECT);
-  const jobId = qr.jobReference.jobId;
-  const loc = qr.jobReference.location || BQ_LOCATION;
-  while (!qr.jobComplete) {
+  const jobId = page.jobReference.jobId;
+  const loc = page.jobReference.location || BQ_LOCATION;
+  while (!page.jobComplete) {
     if (Date.now() - started > deadline) {
       throw uploadError_('QUERY_TIMEOUT', 'BigQuery ใช้เวลาประมวลผลนานเกินกำหนด');
     }
     Utilities.sleep(800);
-    qr = BigQuery.Jobs.getQueryResults(BQ_PROJECT, jobId, {
+    page = BigQuery.Jobs.getQueryResults(BQ_PROJECT, jobId, {
       location: loc,
-      maxResults: 100000
+      maxResults: pageSize
     });
   }
-  if (qr.errors && qr.errors.length) {
+  if (page.errors && page.errors.length) {
     throw uploadError_(
       'QUERY_FAILED',
-      qr.errors.map(function(error) {
+      page.errors.map(function(error) {
         return error.message || JSON.stringify(error);
       }).join(' | ')
     );
   }
-  const out = [];
-  let page = qr;
+  let count = 0;
   while (true) {
-    if (page.rows) for (const row of page.rows) out.push(row.f.map(c => c.v));
-    if (!page.pageToken) break;
-    page = BigQuery.Jobs.getQueryResults(BQ_PROJECT, jobId, { pageToken: page.pageToken, location: loc, maxResults: 100000 });
+    if (page.rows) {
+      for (const row of page.rows) {
+        onRow(row.f.map(function(cell) { return cell.v; }));
+        count++;
+      }
+    }
+    const pageToken = page.pageToken;
+    page = null;
+    if (!pageToken) break;
+    if (Date.now() - started > deadline) {
+      throw uploadError_('QUERY_TIMEOUT', 'BigQuery ใช้เวลาประมวลผลนานเกินกำหนด');
+    }
+    page = BigQuery.Jobs.getQueryResults(BQ_PROJECT, jobId, {
+      pageToken: pageToken,
+      location: loc,
+      maxResults: pageSize
+    });
   }
+  return count;
+}
+
+// ใช้กับ query ผลลัพธ์ขนาดเล็ก เช่นการตรวจจำนวนหลัง MERGE
+function bqQueryAll_(sql, deadlineMs) {
+  const out = [];
+  bqQueryEach_(sql, function(row) { out.push(row); }, deadlineMs, false);
   return out;
 }
 

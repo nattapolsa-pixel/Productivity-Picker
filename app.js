@@ -30,6 +30,10 @@ let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all',
 let excludedSkus = new Set();
 let itemSearchTerm = '';
 let hasLiveData = false;
+let activeLoadPromise = null;
+let activeLoadIsFresh = false;
+let queuedFreshPromise = null;
+const DASHBOARD_TIMEOUT_MS = 180000;
 
 // ===== shift helpers =====
 // tmin = นาทีของวัน (เวลา local) · แปลงเป็น กะ + วันของกะ + นาทีนับจากต้นกะ
@@ -48,9 +52,27 @@ function shiftOf(ds, t){
 // OT = จำนวนบล็อก 30 นาทีที่ทำครบ นับจากนาทีที่ 570 (16:30/04:30) ต้นกะ, สูงสุด OT_MAX
 function otHours(maxSm){ if(maxSm <= 570) return 0; return Math.min(OT_MAX, Math.floor((maxSm - 570)/30) * 0.5); }
 
+// รองรับทั้ง payload เดิมแบบ array ต่อแถว และ payload ใหม่แบบ flat ที่ประหยัด memory
+function packedRowCount(S){
+  const width = Number(S && S.row_width) || 0;
+  return S && Array.isArray(S.rows) ? (width ? Math.floor(S.rows.length / width) : S.rows.length) : 0;
+}
+function packedRowValue(S, rowIndex, columnIndex){
+  const width = Number(S && S.row_width) || 0;
+  return width ? S.rows[rowIndex * width + columnIndex] : S.rows[rowIndex][columnIndex];
+}
+
 // precompute ข้อมูลกะต่อแถว "ครั้งเดียว" หลังโหลดข้อมูล -> re-render (เปลี่ยน filter) เร็วขึ้นมาก
 function prepShifts(){
-  ['PTT','BPS'].forEach(n => { const S = DATA[n]; if(S && S.rows) S._sh = S.rows.map(r => shiftOf(S.dates[r[0]], r[5])); });
+  ['PTT','BPS'].forEach(n => {
+    const S = DATA[n];
+    if(!S || !Array.isArray(S.rows)) return;
+    const count = packedRowCount(S);
+    S._sh = new Array(count);
+    for(let i=0;i<count;i++) {
+      S._sh[i] = shiftOf(S.dates[packedRowValue(S, i, 0)], packedRowValue(S, i, 5));
+    }
+  });
 }
 
 function computeBounds(){
@@ -70,11 +92,15 @@ function aggregate(system, from, to, sf){
   const zoneMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, pickerZoneCnt = {};
   const SH = S._sh;
 
-  for(let i=0;i<S.rows.length;i++){
-    const r = S.rows[i], si = SH[i];
+  const rowCount = packedRowCount(S);
+  for(let i=0;i<rowCount;i++){
+    const si = SH[i];
     if(si.sd < from || si.sd > to) continue;
     if(sf !== 'all' && si.sh !== sf) continue;
-    const zone = r[1], picker = S.pickers[r[2]], sku = S.skus[r[3]], q = r[4];
+    const zone = packedRowValue(S, i, 1);
+    const picker = S.pickers[packedRowValue(S, i, 2)];
+    const sku = S.skus[packedRowValue(S, i, 3)];
+    const q = packedRowValue(S, i, 4);
     
     // บันทึกสถิติสินค้าทั้งหมด (สำหรับหน้าค้นหา/ตั้งค่ายกเว้น)
     (itemMapAll[sku] = itemMapAll[sku] || {qty:0,lines:0}).qty += q; itemMapAll[sku].lines++;
@@ -85,7 +111,7 @@ function aggregate(system, from, to, sf){
     lines++; qty += q; pickers.add(picker); zones.add(zone);
     (zoneMap[zone] = zoneMap[zone] || {qty:0,lines:0,pk:new Set()}); zoneMap[zone].qty += q; zoneMap[zone].lines++; zoneMap[zone].pk.add(picker);
     (itemMap[sku] = itemMap[sku] || {qty:0,lines:0}); itemMap[sku].qty += q; itemMap[sku].lines++;
-    const hr = Math.floor(r[5]/60);
+    const hr = Math.floor(packedRowValue(S, i, 5)/60);
     (slotMap[hr] = slotMap[hr] || {qty:0,lines:0}); slotMap[hr].qty += q; slotMap[hr].lines++;
     (pickerZoneCnt[picker] = pickerZoneCnt[picker] || {}); pickerZoneCnt[picker][zone] = (pickerZoneCnt[picker][zone]||0)+1;
     (dayVol[si.sd] = dayVol[si.sd] || {lines:0,qty:0,pk:new Set()}); dayVol[si.sd].lines++; dayVol[si.sd].qty += q; dayVol[si.sd].pk.add(picker);
@@ -147,7 +173,8 @@ function aggregate(system, from, to, sf){
 // qty รวมของระบบตามช่วง+กะ (สำหรับกราฟเทียบ)
 function sysQty(system, from, to, sf){
   const S = DATA[system], SH = S._sh || []; let q = 0;
-  for(let i=0;i<S.rows.length;i++){ const si = SH[i]; if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)) q += S.rows[i][4]; }
+  const rowCount = packedRowCount(S);
+  for(let i=0;i<rowCount;i++){ const si = SH[i]; if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)) q += packedRowValue(S, i, 4); }
   return q;
 }
 
@@ -583,32 +610,67 @@ function setUpdating(on){
   if(on) el.textContent = '⏳ กำลังอัปเดตข้อมูลล่าสุด…'; else updateFresh();
 }
 
-// ===== โหลดข้อมูล: ดึงสด 100% ตรงจาก BigQuery =====
-async function loadData(force){
+// ===== โหลดข้อมูล: ดึงตรงจาก BigQuery และกันคำขอซ้อน =====
+function loadData(force){
+  if(activeLoadPromise){
+    if(!force || activeLoadIsFresh) return activeLoadPromise;
+    if(!queuedFreshPromise) {
+      queuedFreshPromise = activeLoadPromise
+        .then(() => loadData(true))
+        .finally(() => { queuedFreshPromise = null; });
+    }
+    return queuedFreshPromise;
+  }
+  activeLoadIsFresh = Boolean(force);
+  const task = loadDataOnce(Boolean(force));
+  let wrapped;
+  wrapped = task.finally(() => {
+    if(activeLoadPromise === wrapped) {
+      activeLoadPromise = null;
+      activeLoadIsFresh = false;
+    }
+  });
+  activeLoadPromise = wrapped;
+  return wrapped;
+}
+
+async function loadDataOnce(force){
   document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
   const previous = {sys, shiftF, dfrom, dto};
+  const hadLiveData = hasLiveData;
   if(!DATA_URL){
     showDataState('error', 'ยังไม่ได้ตั้งค่า Apps Script Web App และระบบจะไม่แสดงข้อมูลสำรอง');
     return {ok:false, rows:0};
   }
 
-  showDataState('loading', 'กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่');
+  if(!hadLiveData) showDataState('loading', 'กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่');
   showLoading(true, 'กำลังดึงข้อมูลสด 100% ตรงจาก BigQuery…');
   setUpdating(true);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
+  const timeout = setTimeout(() => controller.abort(), DASHBOARD_TIMEOUT_MS);
 
   try{
-    const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') + 'fresh=1&t=' + Date.now();
+    const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
+      'fresh=' + (force ? '1' : '0') + '&t=' + Date.now();
     const res = await fetch(url, {cache:'no-store', signal:controller.signal});
     if(!res.ok) throw new Error('HTTP ' + res.status);
-    const j = await res.json();
+    const body = await res.text();
+    let j;
+    try {
+      j = JSON.parse(body);
+    } catch(_) {
+      if(body.includes('ไม่มีหน่วยความจำ')) {
+        throw new Error('Apps Script มีหน่วยความจำไม่พอสำหรับข้อมูลชุดนี้');
+      }
+      throw new Error('Apps Script ตอบกลับมาไม่ใช่ข้อมูล JSON');
+    }
     if(j && j.error) throw new Error(j.error);
     const valid = j && j.PTT && j.BPS && Array.isArray(j.PTT.rows) && Array.isArray(j.BPS.rows);
     if(!valid) throw new Error('รูปแบบข้อมูลไม่ถูกต้อง');
 
-    const totalRows = j.PTT.rows.length + j.BPS.rows.length;
+    const packedRows = packedRowCount(j.PTT) + packedRowCount(j.BPS);
+    const totalRows = Number(j.meta && j.meta.rows) || packedRows;
     if(totalRows === 0){
       showDataState('empty', 'ไม่มีข้อมูลเก่าค้างอยู่แล้ว กรุณานำเข้าไฟล์ Pick Detail ชุดใหม่', j.meta);
       return {ok:true, rows:0};
@@ -628,9 +690,13 @@ async function loadData(force){
   }catch(err){
     console.warn('ดึงข้อมูลสดไม่สำเร็จ:', err);
     const message = err && err.name === 'AbortError'
-      ? 'BigQuery ใช้เวลาตอบกลับเกิน 60 วินาที ระบบจะไม่แสดงข้อมูลเก่าหรือข้อมูลสำรอง'
-      : 'ระบบเชื่อมต่อ BigQuery ไม่สำเร็จ และจะไม่แสดงข้อมูลเก่าหรือข้อมูลสำรอง';
-    showDataState('error', message);
+      ? 'BigQuery ใช้เวลาตอบกลับเกิน 3 นาที กรุณากดลองอีกครั้ง'
+      : (err && err.message ? err.message : 'ระบบเชื่อมต่อ BigQuery ไม่สำเร็จ');
+    if(hadLiveData){
+      setSideBadge('อัปเดต BigQuery ไม่สำเร็จ\nยังแสดงข้อมูลรอบก่อน');
+    } else {
+      showDataState('error', message);
+    }
     return {ok:false, rows:0, error:err};
   }finally{
     clearTimeout(timeout);
@@ -953,14 +1019,9 @@ loadData();
   }
 
   async function refreshDashboardAfterUpload() {
-    const waits = [0, 1500, 2500, 4000, 6000];
-    for (let i = 0; i < waits.length; i++) {
-      if(waits[i]) await sleep(waits[i]);
-      statusText.textContent = `🔄 กำลังตรวจข้อมูลบนหน้าเว็บ (${i + 1}/${waits.length})...`;
-      const result = await loadData(true);
-      if(result && result.ok && result.rows > 0) return true;
-    }
-    return false;
+    statusText.textContent = '🔄 BigQuery บันทึกสำเร็จแล้ว กำลังอัปเดตหน้าเว็บหนึ่งครั้ง...';
+    const result = await loadData(true);
+    return !!(result && result.ok && result.rows > 0);
   }
 
   function sleep(ms) {
