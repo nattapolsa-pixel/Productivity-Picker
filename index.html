@@ -20,10 +20,20 @@
   .nav:hover{background:#f1f5f9;color:var(--ink)}
   .nav.active{background:linear-gradient(90deg,var(--indigo),var(--violet));color:#fff;box-shadow:0 8px 18px -8px rgba(99,102,241,.75)}
   .nav svg{width:19px;height:19px;flex-shrink:0}
-  .sidebadge{margin-top:auto;background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;padding:8px 12px;border-radius:12px;font-size:11.5px;line-height:1.5}
+  .sidebadge{margin-top:auto;background:#f0fdfa;color:#0f766e;border:1px solid #99f6e4;padding:8px 12px;border-radius:12px;font-size:11.5px;line-height:1.5;white-space:pre-line}
   .content{flex:1;padding:26px 28px 60px;min-width:0}
   .pagehead{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:22px}
   .pagehead h1{font-size:26px;font-weight:700}
+  .content.data-unavailable .page{display:none}
+  .data-state{min-height:420px;background:#fff;border:1px solid #e2e8f0;border-radius:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:42px 24px;box-shadow:0 12px 30px -24px rgba(15,23,42,.35)}
+  .data-state[hidden]{display:none}
+  .data-state-icon{font-size:46px;line-height:1;margin-bottom:16px}
+  .data-state h2{font-size:22px;color:#1e293b;margin-bottom:8px}
+  .data-state p{max-width:560px;color:#64748b;line-height:1.7;margin-bottom:22px}
+  .data-state-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  .data-state-actions button{border:0;border-radius:10px;padding:10px 17px;font-family:inherit;font-weight:600;cursor:pointer}
+  #dataStateUpload{background:#10b981;color:#fff}
+  #dataStateRetry{background:#eef2ff;color:#4338ca}
   .daterange{color:var(--muted);font-size:13px}.daterange b{color:var(--ink)}
   .page{display:none}.page.active{display:block;animation:fade .45s}
   @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
@@ -68,11 +78,20 @@
     <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> ช่วงเวลา</button>
     <button class="nav" data-page="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8l-9-5-9 5v8l9 5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg> สินค้า (Items)</button>
     <button class="upload-btn" id="btnUploadModal" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#059669,#10b981);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:10px;width:100%;box-shadow:0 4px 12px rgba(16,185,129,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:19px;height:19px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> 📤 นำเข้าไฟล์ CSV / Excel</button>
-    <div class="sidebadge">ข้อมูลจริง 12,739 แถว<br>15–16 ก.ค. 2026 · กรองช่วงวันที่ได้</div>
+    <div class="sidebadge">กำลังเชื่อมต่อ BigQuery…</div>
   </nav>
 
   <main class="content">
     <div class="pagehead"><h1 id="ptitle">ภาพรวม</h1><div class="daterange" id="daterange"></div></div>
+    <div class="data-state" id="dataState" hidden>
+      <div class="data-state-icon" id="dataStateIcon">⏳</div>
+      <h2 id="dataStateTitle">กำลังโหลดข้อมูล</h2>
+      <p id="dataStateMessage">กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่</p>
+      <div class="data-state-actions">
+        <button id="dataStateUpload" type="button">📤 นำเข้าไฟล์ใหม่</button>
+        <button id="dataStateRetry" type="button">↻ ลองอีกครั้ง</button>
+      </div>
+    </div>
 
     <section class="page active" data-page="overview">
       <div class="kpis" id="kpis"></div>
@@ -191,7 +210,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="data.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

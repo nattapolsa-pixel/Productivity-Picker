@@ -5,7 +5,6 @@
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
-// เว้นว่าง = ใช้ข้อมูลสำรองใน data.js
 // ==========================================================================
 
 // ====== ตั้งค่ากะ/OT (ปรับได้) ======
@@ -14,7 +13,6 @@ const OT_MAX    = 2.5;   // OT สูงสุดต่อกะ (ชม.)
 // OT นับเป็นบล็อกละ 30 นาทีที่ทำครบ เริ่มนับจาก 16:30 (เช้า) / 04:30 (ดึก)
 // ====================================
 
-const CACHE_KEY = 'pick_dashboard_cache_v2';
 const fmt = n => Number(n).toLocaleString('en-US');
 const PALETTE = ['#6366f1','#14b8a6','#f59e0b','#f43f5e','#0ea5e9','#8b5cf6','#10b981','#ec4899','#f97316','#22c55e','#3b82f6','#eab308'];
 const TITLES = {overview:'ภาพรวม',prod:'Productivity',zones:'โซน & ผังคลัง',pickers:'พนักงาน (Picker)',time:'ช่วงเวลา',items:'สินค้า (Items)'};
@@ -25,11 +23,13 @@ Chart.defaults.font.family = "'Prompt',sans-serif";
 Chart.defaults.color = '#64748b';
 
 // ===== state =====
-let DATA = (typeof RAW !== 'undefined') ? RAW : {meta:{},PTT:{dates:[],pickers:[],skus:[],rows:[]},BPS:{dates:[],pickers:[],skus:[],rows:[]}};
+const emptyData = () => ({meta:{},PTT:{dates:[],pickers:[],skus:[],rows:[]},BPS:{dates:[],pickers:[],skus:[],rows:[]}});
+let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
 let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
 let excludedSkus = new Set();
 let itemSearchTerm = '';
+let hasLiveData = false;
 
 // ===== shift helpers =====
 // tmin = นาทีของวัน (เวลา local) · แปลงเป็น กะ + วันของกะ + นาทีนับจากต้นกะ
@@ -159,7 +159,7 @@ function ensureStyles(){
     + '.datebar{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:6px 10px;box-shadow:0 8px 20px -16px rgba(30,41,59,.4)}.datebar input[type=date]{font-family:inherit;font-size:13px;color:#1e293b;border:1px solid #e2e8f0;border-radius:8px;padding:6px 8px;background:#f8fafc}.datebar input[type=date]:focus{outline:0;border-color:#6366f1}.datebar .sep{color:#94a3b8;font-size:13px}'
     + '.datepreset{display:inline-flex;gap:6px;flex-wrap:wrap}.datepreset button{border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12.5px;font-weight:500;color:#475569;padding:7px 12px;border-radius:9px;cursor:pointer;transition:.18s}.datepreset button:hover{border-color:#6366f1;color:#4338ca}.datepreset button.active{background:linear-gradient(90deg,#6366f1,#8b5cf6);border-color:transparent;color:#fff}'
     + '.refreshbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12.5px;font-weight:600;color:#0e7490;padding:7px 12px;border-radius:9px;cursor:pointer;transition:.18s}.refreshbtn:hover{border-color:#14b8a6;background:#f0fdfa}.freshtxt{font-size:11.5px;color:#94a3b8}'
-    + '#loadov{position:fixed;inset:0;background:rgba(248,250,252,.75);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;z-index:999}#loadov .sp{width:38px;height:38px;border:4px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}#loadov .msg{margin-left:14px;font-size:14px;color:#475569;font-weight:500}';
+    + '#loadov{position:fixed;inset:0;background:#f8fafc;display:flex;align-items:center;justify-content:center;z-index:999}#loadov .sp{width:38px;height:38px;border:4px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}#loadov .msg{margin-left:14px;font-size:14px;color:#475569;font-weight:500}';
   document.head.appendChild(st);
 }
 
@@ -220,7 +220,7 @@ function updateFresh(){
     const rowTxt = rows ? (' (สด BigQuery ' + fmt(rows) + ' รายการ)') : '';
     el.textContent = 'ข้อมูล ณ ' + dt.toLocaleString('th-TH', {dateStyle:'medium', timeStyle:'short'}) + rowTxt;
   }
-  else el.textContent = DATA_URL ? '' : 'ข้อมูลสำรอง (data.js)';
+  else el.textContent = '';
 }
 
 function updateDateHeader(){
@@ -480,6 +480,7 @@ function renderExcludedBadges() {
 function destroyCharts(){ ['trend','cat','picker','zone','slot','item'].forEach(id => { const c = Chart.getChart(id); if(c) c.destroy(); }); }
 
 function show(page){
+  if(!hasLiveData) return;
   currentPage = page;
   document.querySelectorAll('.nav').forEach(n => n.classList.toggle('active', n.dataset.page === page));
   document.querySelectorAll('.page').forEach(s => s.classList.toggle('active', s.dataset.page === page));
@@ -500,12 +501,71 @@ function render(){
   show(currentPage);
 }
 
-function boot(){
-  computeBounds();
-  if(!ALL_DATES.length){ document.getElementById('kpis').innerHTML = '<div style="padding:20px;color:#94a3b8">ไม่มีข้อมูล</div>'; return; }
-  dfrom = DMIN; dto = DMAX;
-  buildControls();
-  render();
+function setSideBadge(message){
+  const badge = document.querySelector('.sidebadge');
+  if(badge) badge.textContent = message;
+}
+
+function clearDashboardState(){
+  hasLiveData = false;
+  DATA = emptyData();
+  ALL_DATES = []; DMIN = ''; DMAX = ''; dfrom = ''; dto = '';
+  A = null; built = {}; lastFetchTime = null;
+  excludedSkus.clear(); itemSearchTerm = '';
+  destroyCharts();
+  const sysbar = document.querySelector('.sysbar'); if(sysbar) sysbar.remove();
+  const daterange = document.getElementById('daterange'); if(daterange) daterange.textContent = '';
+  const kpis = document.getElementById('kpis'); if(kpis) kpis.innerHTML = '';
+  const ptable = document.getElementById('ptable'); if(ptable) ptable.innerHTML = '';
+  const itable = document.getElementById('itable'); if(itable) itable.innerHTML = '';
+}
+
+function showDataState(kind, message, meta){
+  clearDashboardState();
+  DATA.meta = meta || {};
+  lastFetchTime = DATA.meta.generated || null;
+
+  const content = document.querySelector('.content');
+  const state = document.getElementById('dataState');
+  const icon = document.getElementById('dataStateIcon');
+  const title = document.getElementById('dataStateTitle');
+  const text = document.getElementById('dataStateMessage');
+  const upload = document.getElementById('dataStateUpload');
+  const retry = document.getElementById('dataStateRetry');
+
+  if(content) content.classList.add('data-unavailable');
+  if(state) state.hidden = false;
+
+  const config = {
+    loading:{icon:'⏳', title:'กำลังโหลดข้อมูลจาก BigQuery'},
+    empty:{icon:'📭', title:'BigQuery ยังไม่มีข้อมูล'},
+    error:{icon:'⚠️', title:'ไม่สามารถโหลดข้อมูลจาก BigQuery'}
+  }[kind] || {icon:'ℹ️', title:'สถานะข้อมูล'};
+
+  if(icon) icon.textContent = config.icon;
+  if(title) title.textContent = config.title;
+  if(text) text.textContent = message;
+  if(upload) upload.hidden = kind === 'loading';
+  if(retry) retry.hidden = kind === 'loading';
+
+  if(kind === 'empty') setSideBadge('BigQuery 0 แถว\nพร้อมรับไฟล์ใหม่');
+  else if(kind === 'error') setSideBadge('BigQuery โหลดไม่สำเร็จ\nไม่ใช้ข้อมูลสำรอง');
+  else setSideBadge('กำลังเชื่อมต่อ BigQuery…');
+}
+
+function hideDataState(){
+  const content = document.querySelector('.content');
+  const state = document.getElementById('dataState');
+  if(content) content.classList.remove('data-unavailable');
+  if(state) state.hidden = true;
+  hasLiveData = true;
+}
+
+function bindDataStateActions(){
+  const upload = document.getElementById('dataStateUpload');
+  const retry = document.getElementById('dataStateRetry');
+  if(upload) upload.onclick = () => document.getElementById('btnUploadModal')?.click();
+  if(retry) retry.onclick = () => loadData(true);
 }
 
 // ===== loading overlay =====
@@ -526,34 +586,60 @@ function setUpdating(on){
 // ===== โหลดข้อมูล: ดึงสด 100% ตรงจาก BigQuery =====
 async function loadData(force){
   document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
-  if(!DATA_URL){ updateFresh(); boot(); return; }
+  const previous = {sys, shiftF, dfrom, dto};
+  if(!DATA_URL){
+    showDataState('error', 'ยังไม่ได้ตั้งค่า Apps Script Web App และระบบจะไม่แสดงข้อมูลสำรอง');
+    return;
+  }
 
+  showDataState('loading', 'กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่');
   showLoading(true, 'กำลังดึงข้อมูลสด 100% ตรงจาก BigQuery…');
+  setUpdating(true);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
 
   try{
     const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') + 'fresh=1&t=' + Date.now();
-    const res = await fetch(url, {cache:'no-store'});
+    const res = await fetch(url, {cache:'no-store', signal:controller.signal});
+    if(!res.ok) throw new Error('HTTP ' + res.status);
     const j = await res.json();
     if(j && j.error) throw new Error(j.error);
-    if(j && j.PTT && j.BPS){
-      lastFetchTime = j.meta ? j.meta.generated : new Date().toISOString();
-      DATA = j; try{ localStorage.setItem(CACHE_KEY, JSON.stringify(j)); }catch(_){}
-      const kSys=sys, kSh=shiftF, kF=dfrom, kT=dto;
-      computeBounds();
-      sys=kSys; shiftF=kSh;
-      dfrom = (kF && kF>=DMIN && kF<=DMAX) ? kF : DMIN;
-      dto   = (kT && kT>=DMIN && kT<=DMAX) ? kT : DMAX;
-      buildControls(); render();
-    } else throw new Error('รูปแบบข้อมูลไม่ถูกต้อง');
+    const valid = j && j.PTT && j.BPS && Array.isArray(j.PTT.rows) && Array.isArray(j.BPS.rows);
+    if(!valid) throw new Error('รูปแบบข้อมูลไม่ถูกต้อง');
+
+    const totalRows = j.PTT.rows.length + j.BPS.rows.length;
+    if(totalRows === 0){
+      showDataState('empty', 'ไม่มีข้อมูลเก่าค้างอยู่แล้ว กรุณานำเข้าไฟล์ Pick Detail ชุดใหม่', j.meta);
+      return;
+    }
+
+    DATA = j;
+    lastFetchTime = j.meta ? j.meta.generated : new Date().toISOString();
+    sys = previous.sys; shiftF = previous.shiftF;
+    computeBounds();
+    dfrom = (previous.dfrom && previous.dfrom>=DMIN && previous.dfrom<=DMAX) ? previous.dfrom : DMIN;
+    dto   = (previous.dto && previous.dto>=DMIN && previous.dto<=DMAX) ? previous.dto : DMAX;
+    hideDataState();
+    setSideBadge('BigQuery สด ' + fmt(totalRows) + ' แถว\nอัปเดต ' + new Date(lastFetchTime).toLocaleString('th-TH', {dateStyle:'short', timeStyle:'short'}));
+    buildControls();
+    render();
   }catch(err){
     console.warn('ดึงข้อมูลสดไม่สำเร็จ:', err);
-    try{ const c = localStorage.getItem(CACHE_KEY); if(c) DATA = JSON.parse(c); }catch(_){}
-    boot();
+    const message = err && err.name === 'AbortError'
+      ? 'BigQuery ใช้เวลาตอบกลับเกิน 30 วินาที ระบบจะไม่แสดงข้อมูลเก่าหรือข้อมูลสำรอง'
+      : 'ระบบเชื่อมต่อ BigQuery ไม่สำเร็จ และจะไม่แสดงข้อมูลเก่าหรือข้อมูลสำรอง';
+    showDataState('error', message);
+  }finally{
+    clearTimeout(timeout);
+    showLoading(false);
+    setUpdating(false);
   }
-  showLoading(false); setUpdating(false);
 }
 
 // init
+try{ localStorage.removeItem('pick_dashboard_cache_v2'); }catch(_){}
+bindDataStateActions();
 document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
 loadData();
 
