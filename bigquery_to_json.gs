@@ -24,26 +24,59 @@ const MAX_POST_BYTES = 12 * 1024 * 1024;
 const JOB_DEADLINE_MS = 240000;
 // ==========================================================
 
-const CACHE_TTL = 1800;   // เก็บผลลัพธ์ไว้กี่วินาที (1800 = 30 นาที) เพื่อไม่ต้องยิง BigQuery ทุกครั้ง
+const CACHE_TTL = 21600;  // สูงสุด 6 ชม.; รุ่น cache จะเปลี่ยนทันทีหลัง upload สำเร็จ
+const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 
 function doGet(e) {
   try {
     // fresh=1 ใช้หลังอัปโหลด/กดลองอีกครั้ง เพื่อข้าม BigQuery query cache
     const fresh = !!(e && e.parameter && e.parameter.fresh === '1');
+    const revision = getDataRevision_();
+    if (!fresh) {
+      try {
+        const cached = getCached_(revision);
+        if (cached) return textJson_(cached);
+      } catch (cacheReadErr) {
+        console.warn('Dashboard cache read failed: ' + cacheReadErr);
+      }
+    }
     const dataObj = buildDashboardData_(!fresh);
-    return textJson_(JSON.stringify(dataObj));
+    const json = JSON.stringify(dataObj);
+    try {
+      // กัน GET เก่าที่เริ่มก่อน upload เขียน cache ทับข้อมูลรุ่นใหม่
+      if (getDataRevision_() === revision) setCached_(json, revision);
+    } catch (cacheWriteErr) {
+      console.warn('Dashboard cache write failed: ' + cacheWriteErr);
+    }
+    return textJson_(json);
   } catch (err) {
     return json_({ error: String(err && err.message || err) });
   }
 }
 
-function clearCache_() {
+function getDataRevision_() {
+  return PropertiesService.getScriptProperties().getProperty(CACHE_REVISION_PROPERTY) || '0';
+}
+
+function bumpDataRevision_() {
+  PropertiesService.getScriptProperties().setProperty(
+    CACHE_REVISION_PROPERTY,
+    String(Date.now())
+  );
+}
+
+function cachePrefix_(revision) {
+  return 'dash_' + String(revision || '0') + '_';
+}
+
+function clearCache_(revision) {
   try {
     const c = CacheService.getScriptCache();
-    const n = c.get('dash_n');
+    const prefix = cachePrefix_(revision);
+    const n = c.get(prefix + 'n');
     if (n) {
-      const cnt = parseInt(n, 10), keys = ['dash_n'];
-      for (let i = 0; i < cnt; i++) keys.push('dash_' + i);
+      const cnt = parseInt(n, 10), keys = [prefix + 'n'];
+      for (let i = 0; i < cnt; i++) keys.push(prefix + i);
       c.removeAll(keys);
     }
   } catch (_) {}
@@ -172,7 +205,9 @@ function uploadToBigQuery_(rows, fmt, meta) {
       );
     }
     mergeCounts = mergeStage_(stageTable);
-    clearCache_();
+    const previousRevision = getDataRevision_();
+    bumpDataRevision_();
+    clearCache_(previousRevision);
   } finally {
     if (lock && lock.hasLock()) {
       lock.releaseLock();
@@ -514,21 +549,27 @@ function textJson_(str) {
 }
 
 // เก็บ/อ่าน JSON ก้อนใหญ่ใน Script Cache แบบแบ่งชิ้น (แต่ละ key จำกัด ~100KB)
-function getCached_() {
+function getCached_(revision) {
   const c = CacheService.getScriptCache();
-  const n = c.get('dash_n'); if (!n) return null;
+  const prefix = cachePrefix_(revision);
+  const n = c.get(prefix + 'n'); if (!n) return null;
   const cnt = parseInt(n, 10), keys = [];
-  for (let i = 0; i < cnt; i++) keys.push('dash_' + i);
-  const got = c.getAll(keys); let s = '';
-  for (let i = 0; i < cnt; i++) { const p = got['dash_' + i]; if (p == null) return null; s += p; }
-  return s;
+  for (let i = 0; i < cnt; i++) keys.push(prefix + i);
+  const got = c.getAll(keys), parts = [];
+  for (let i = 0; i < cnt; i++) {
+    const part = got[prefix + i];
+    if (part == null) return null;
+    parts.push(part);
+  }
+  return parts.join('');
 }
-function setCached_(str) {
+function setCached_(str, revision) {
   const c = CacheService.getScriptCache();
+  const prefix = cachePrefix_(revision);
   const CH = 95000, cnt = Math.ceil(str.length / CH), obj = {};
-  for (let i = 0; i < cnt; i++) obj['dash_' + i] = str.substring(i * CH, (i + 1) * CH);
+  for (let i = 0; i < cnt; i++) obj[prefix + i] = str.substring(i * CH, (i + 1) * CH);
   c.putAll(obj, CACHE_TTL);
-  c.put('dash_n', String(cnt), CACHE_TTL);
+  c.put(prefix + 'n', String(cnt), CACHE_TTL);
 }
 
 function json_(obj) {
