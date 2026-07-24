@@ -49,44 +49,26 @@ CLUSTER BY category, picker_id;
 
 
 -- =============================================================================
--- 2) โหลดข้อมูล + กันข้อมูลเบิ้ล (MERGE)
+-- 2) ACTIVE UPLOAD FLOW: Browser -> Apps Script -> BigQuery batch load
 -- =============================================================================
--- แนวคิด: โหลดไฟล์ใหม่เข้า "staging" ก่อน แล้ว MERGE เข้าตารางหลัก
---         ถ้า pickdetailkey มีอยู่แล้ว -> ไม่ทำอะไร (ไม่ insert ซ้ำ = ไม่เบิ้ล)
+-- ระบบเว็บไม่ใช้ streaming insert และไม่ใช้ตาราง staging ร่วมกันแล้ว
 --
--- วิธีเอาข้อมูลเข้า staging เลือกทางใดทางหนึ่ง:
---   (A) ผมจะแปลงไฟล์ export ของนายให้เป็น CSV สะอาด แล้วนาย `bq load` เข้าตารางนี้
---       (CSV จากหัวหน้ามี header 2 แถว: แถว1=ชื่อฟิลด์เทคนิค, แถว2=label, ข้อมูลเริ่มแถว3)
---       bq load --source_format=CSV --skip_leading_rows=2 \
---         productivity-pick:pick_analytics.pick_detail_staging  ./pick_clean.csv  schema.json
---   (B) ทำ External Table ชี้ไปที่ Google Sheet ตรงๆ (ข้อมูลสดทุกชม.)
---       แล้ว SELECT map คอลัมน์เข้ามาแทน (ดูหมายเหตุท้ายไฟล์)
-
-CREATE TABLE IF NOT EXISTS `productivity-pick.pick_analytics.pick_detail_staging`
-LIKE `productivity-pick.pick_analytics.pick_detail`;
-
--- ---- รัน MERGE นี้ทุกครั้งหลังโหลดข้อมูลใหม่เข้า staging ----
-MERGE `productivity-pick.pick_analytics.pick_detail` T
-USING (
-  -- กันกรณีในไฟล์เดียวกันมี key ซ้ำ: เก็บแถวเดียวต่อ 1 key
-  SELECT * EXCEPT(rn) FROM (
-    SELECT s.*, ROW_NUMBER() OVER (
-             PARTITION BY pickdetailkey ORDER BY pick_ts_source DESC
-           ) AS rn
-    FROM `productivity-pick.pick_analytics.pick_detail_staging` s
-  ) WHERE rn = 1
-) S
-ON T.pickdetailkey = S.pickdetailkey
-WHEN NOT MATCHED THEN
-  INSERT (pickdetailkey, lpn, qty, sku, owner, uom_qty, category,
-          picker_id, location, pick_ts_source, loaded_at)
-  VALUES (S.pickdetailkey, S.lpn, S.qty, S.sku, S.owner, S.uom_qty, S.category,
-          S.picker_id, S.location, S.pick_ts_source, CURRENT_TIMESTAMP());
--- (ทางเลือก) ถ้าต้องการให้ข้อมูลเก่าถูกอัปเดตเมื่อมีการแก้ไข ให้เพิ่ม:
--- WHEN MATCHED THEN UPDATE SET qty = S.qty, location = S.location, ...
-
--- ล้าง staging หลัง merge เสร็จ (พร้อมรับไฟล์รอบถัดไป)
-TRUNCATE TABLE `productivity-pick.pick_analytics.pick_detail_staging`;
+--   1. Browser ตรวจหัวตาราง WMS และข้อมูลทุกแถว
+--   2. Apps Script ตรวจซ้ำฝั่ง server และสร้าง upload hash
+--   3. BigQuery Jobs.insert โหลด NDJSON แบบ batch เข้า
+--      pick_stage_<request-id> ซึ่งแยกต่อการอัปโหลดหนึ่งครั้ง
+--   4. MERGE เข้า pick_detail แบบ atomic:
+--        - key ใหม่      -> INSERT
+--        - key เดิมเปลี่ยน -> UPDATE ทุก business field
+--        - key เดิมเหมือน  -> unchanged
+--   5. ตรวจ staged/inserted/updated/unchanged/visible ก่อนตอบ success
+--   6. ลบ temporary stage; หากลบไม่สำเร็จ ตารางมี expiration 24 ชั่วโมง
+--
+-- โค้ดที่ทำงานจริงอยู่ใน bigquery_to_json.gs
+-- ห้ามนำ TRUNCATE + tabledata.insertAll กลับมาใช้ร่วมกัน เพราะจะชน streaming buffer
+--
+-- pick_detail_staging เป็นตาราง legacy ที่เก็บ schema ไว้เท่านั้น
+-- Web upload รุ่นปัจจุบันไม่อ่านและไม่เขียนตารางนี้
 
 
 -- =============================================================================

@@ -589,7 +589,7 @@ async function loadData(force){
   const previous = {sys, shiftF, dfrom, dto};
   if(!DATA_URL){
     showDataState('error', 'ยังไม่ได้ตั้งค่า Apps Script Web App และระบบจะไม่แสดงข้อมูลสำรอง');
-    return;
+    return {ok:false, rows:0};
   }
 
   showDataState('loading', 'กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่');
@@ -597,7 +597,7 @@ async function loadData(force){
   setUpdating(true);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30000);
+  const timeout = setTimeout(() => controller.abort(), 60000);
 
   try{
     const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') + 'fresh=1&t=' + Date.now();
@@ -611,7 +611,7 @@ async function loadData(force){
     const totalRows = j.PTT.rows.length + j.BPS.rows.length;
     if(totalRows === 0){
       showDataState('empty', 'ไม่มีข้อมูลเก่าค้างอยู่แล้ว กรุณานำเข้าไฟล์ Pick Detail ชุดใหม่', j.meta);
-      return;
+      return {ok:true, rows:0};
     }
 
     DATA = j;
@@ -624,12 +624,14 @@ async function loadData(force){
     setSideBadge('BigQuery สด ' + fmt(totalRows) + ' แถว\nอัปเดต ' + new Date(lastFetchTime).toLocaleString('th-TH', {dateStyle:'short', timeStyle:'short'}));
     buildControls();
     render();
+    return {ok:true, rows:totalRows};
   }catch(err){
     console.warn('ดึงข้อมูลสดไม่สำเร็จ:', err);
     const message = err && err.name === 'AbortError'
-      ? 'BigQuery ใช้เวลาตอบกลับเกิน 30 วินาที ระบบจะไม่แสดงข้อมูลเก่าหรือข้อมูลสำรอง'
+      ? 'BigQuery ใช้เวลาตอบกลับเกิน 60 วินาที ระบบจะไม่แสดงข้อมูลเก่าหรือข้อมูลสำรอง'
       : 'ระบบเชื่อมต่อ BigQuery ไม่สำเร็จ และจะไม่แสดงข้อมูลเก่าหรือข้อมูลสำรอง';
     showDataState('error', message);
+    return {ok:false, rows:0, error:err};
   }finally{
     clearTimeout(timeout);
     showLoading(false);
@@ -659,6 +661,22 @@ loadData();
   if(!btnOpen || !modal) return;
 
   let selectedFile = null;
+  const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
+  const MAX_UPLOAD_ROWS = 50000;
+  const MAX_FILE_BYTES = 25 * 1024 * 1024;
+  const REQUIRED_HEADERS = [
+    {index:1, name:'PICKDETAILKEY'},
+    {index:12, name:'ID'},
+    {index:28, name:'QTY'},
+    {index:31, name:'SKU'},
+    {index:36, name:'STORERKEY'},
+    {index:40, name:'UOMQTY'},
+    {index:55, name:'EXT_UDF_STR7'},
+    {index:56, name:'EXT_UDF_STR8'},
+    {index:58, name:'EXT_UDF_STR10'},
+    {index:64, name:'EXT_UDF_STR16'},
+    {index:66, name:'EXT_UDF_DATE1'}
+  ];
 
   const openModal = () => { modal.style.display = 'flex'; resetUI(); };
   const closeModal = () => { modal.style.display = 'none'; resetUI(); };
@@ -687,22 +705,34 @@ loadData();
   function handleFile(file) {
     const ext = file.name.toLowerCase();
     if (!ext.endsWith('.csv') && !ext.endsWith('.xlsx') && !ext.endsWith('.xls')) {
-      alert('กรุณาเลือกไฟล์ประเภท .csv หรือ .xlsx เท่านั้นครับ');
+      alert('กรุณาเลือกไฟล์ประเภท .csv, .xlsx หรือ .xls เท่านั้นครับ');
+      return;
+    }
+    if (file.size > MAX_FILE_BYTES) {
+      alert('ไฟล์มีขนาดเกิน 25 MB กรุณาแบ่งไฟล์ก่อนนำเข้า');
       return;
     }
     selectedFile = file;
     dropZone.innerHTML = `
       <div style="font-size:36px;margin-bottom:10px;">✅</div>
-      <div style="font-size:15px;font-weight:700;color:#059669;">เลือกไฟล์: ${file.name}</div>
+      <div style="font-size:15px;font-weight:700;color:#059669;">เลือกไฟล์: ${escapeHtml(file.name)}</div>
       <div style="font-size:12px;color:#64748b;margin-top:6px;">ขนาด: ${(file.size/1048576).toFixed(2)} MB · คลิกหากต้องการเปลี่ยนไฟล์</div>
     `;
+    btnStart.textContent = 'ตรวจสอบและนำเข้า BigQuery';
+    btnStart.disabled = false;
     btnStart.style.display = 'inline-block';
   }
 
   function resetUI() {
     selectedFile = null;
     if(fileInput) fileInput.value = '';
-    if(btnStart) btnStart.style.display = 'none';
+    if(btnStart){
+      btnStart.style.display = 'none';
+      btnStart.disabled = false;
+      btnStart.textContent = 'ตรวจสอบและนำเข้า BigQuery';
+    }
+    if(btnClose) btnClose.disabled = false;
+    if(btnCancel) btnCancel.disabled = false;
     if(progressBox) progressBox.style.display = 'none';
     if(progressBar) progressBar.style.width = '0%';
     if(dropZone){
@@ -717,61 +747,186 @@ loadData();
   if(btnStart){
     btnStart.onclick = async () => {
       if (!selectedFile || !DATA_URL) return;
-      btnStart.style.display = 'none';
+      const fileForUpload = selectedFile;
+      setUploadBusy(true);
       progressBox.style.display = 'block';
       statusText.textContent = '⏳ กำลังอ่านข้อมูลไฟล์...';
       progressBar.style.width = '15%';
+      progressBar.style.background = 'linear-gradient(90deg,#2563eb,#3b82f6)';
 
       try {
-        const ext = selectedFile.name.toLowerCase();
-        let rows = [];
-
-        if ((ext.endsWith('.xlsx') || ext.endsWith('.xls')) && typeof XLSX !== 'undefined') {
-          statusText.textContent = '⚙️ กำลังประมวลผลไฟล์ Excel (.xlsx)...';
-          progressBar.style.width = '30%';
-          const buffer = await selectedFile.arrayBuffer();
-          // cellDates:true → ให้ XLSX อ่าน Date cell เป็น JS Date แทน serial number
-          const workbook = XLSX.read(buffer, { type: 'array', dense: true, cellDates: true });
-          const firstSheet = workbook.SheetNames[0];
-          const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { header: 1, raw: true, defval: '' });
-          rows = parseExcelToRows(sheetData);
-        } else {
-          statusText.textContent = '⚙️ กำลังประมวลผลไฟล์ CSV...';
-          progressBar.style.width = '30%';
-          const text = await selectedFile.text();
-          rows = parseCSVToRows(text);
+        if (typeof XLSX === 'undefined') throw new Error('ไม่สามารถเปิดตัวอ่านไฟล์ Excel ได้ กรุณารีเฟรชหน้าเว็บ');
+        statusText.textContent = '⚙️ กำลังตรวจโครงสร้างและข้อมูลทุกแถว...';
+        progressBar.style.width = '30%';
+        const parsed = await readPickDetailFile(fileForUpload);
+        const rows = parsed.rows;
+        if (rows.length === 0) throw new Error('ไม่พบข้อมูลในไฟล์ หรือรูปแบบไฟล์ไม่ถูกต้อง');
+        if (rows.length > MAX_UPLOAD_ROWS) {
+          throw new Error(`ไฟล์มี ${rows.length.toLocaleString()} แถว เกินขีดจำกัด ${MAX_UPLOAD_ROWS.toLocaleString()} แถวต่อครั้ง`);
+        }
+        const localErrors = validateRowsBeforeUpload(rows);
+        if (localErrors.length) {
+          throw new Error(
+            `พบข้อมูลไม่ถูกต้อง ${localErrors.length.toLocaleString()} จุด เช่น ` +
+            localErrors.slice(0, 5).join(', ')
+          );
         }
 
-        if (rows.length === 0) throw new Error('ไม่พบข้อมูลในไฟล์ หรือรูปแบบไฟล์ไม่ถูกต้อง');
-
-        // ส่งเป็น Array แทน Object → ลด payload ~55%
-        // format: [pickdetailkey, lpn, qty, sku, owner, uom_qty, category, picker_id, location, pick_ts_source]
-        const sizeKB = Math.round(JSON.stringify(rows).length / 1024);
-        statusText.textContent = `🚀 กำลังส่งข้อมูล ${rows.length.toLocaleString()} แถว (~${sizeKB} KB) เข้า BigQuery...`;
+        const payload = JSON.stringify({
+          action: 'upload_rows',
+          fmt: 'array',
+          rows: rows,
+          meta: parsed.meta
+        });
+        const sizeKB = Math.round(new Blob([payload]).size / 1024);
+        statusText.textContent = `🚀 ตรวจผ่าน ${rows.length.toLocaleString()} แถว กำลังส่งเข้า BigQuery (~${sizeKB.toLocaleString()} KB)...`;
         progressBar.style.width = '55%';
 
-        const res = await fetch(DATA_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action: 'upload_rows', fmt: 'array', rows: rows })
-        });
+        const json = await postUploadWithRetry(payload);
+        const counts = json.counts || {};
+        progressBar.style.width = '90%';
+        statusText.textContent =
+          `✅ BigQuery รับแล้ว ${Number(counts.staged || json.rowsProcessed || 0).toLocaleString()} แถว ` +
+          `(เพิ่ม ${Number(counts.inserted || 0).toLocaleString()}, แก้ไข ${Number(counts.updated || 0).toLocaleString()}, ` +
+          `มีอยู่แล้ว ${Number(counts.unchanged || 0).toLocaleString()}) กำลังตรวจหน้าเว็บ...`;
 
-        progressBar.style.width = '85%';
-        statusText.textContent = '⏳ BigQuery กำลัง Merge ข้อมูล...';
-
-        const json = await res.json();
-        if (json.status !== 'success') throw new Error(json.message || 'เกิดข้อผิดพลาดในการนำเข้า BigQuery');
-
+        const refreshed = await refreshDashboardAfterUpload();
         progressBar.style.width = '100%';
-        statusText.textContent = `🎉 นำเข้าสำเร็จ ${json.rowsProcessed.toLocaleString()} แถว! กำลังรีเฟรชแดชบอร์ด...`;
-
-        setTimeout(() => { closeModal(); loadData(true); }, 1200);
+        if (refreshed) {
+          statusText.textContent =
+            `🎉 นำเข้าสำเร็จและหน้าเว็บอัปเดตแล้ว ` +
+            `${Number(counts.visible || json.rowsProcessed || 0).toLocaleString()} แถว`;
+          await sleep(1200);
+          closeModal();
+        } else {
+          progressBar.style.background = '#f59e0b';
+          statusText.textContent =
+            '✅ ข้อมูลเข้า BigQuery สำเร็จแล้ว แต่หน้าเว็บยังตอบกลับไม่ทัน กรุณากด “ลองอีกครั้ง” บนหน้า Dashboard';
+          selectedFile = null;
+        }
 
       } catch (err) {
-        alert('การนำเข้าล้มเหลว: ' + err.message);
-        resetUI();
+        console.error('การนำเข้าล้มเหลว:', err);
+        progressBar.style.width = '100%';
+        progressBar.style.background = '#ef4444';
+        statusText.textContent = '❌ ' + (err && err.message ? err.message : 'การนำเข้าล้มเหลว');
+        alert(statusText.textContent);
+      } finally {
+        setUploadBusy(false);
       }
     };
+  }
+
+  function setUploadBusy(busy) {
+    if(btnStart) {
+      btnStart.disabled = busy;
+      btnStart.style.display = busy ? 'none' : (selectedFile ? 'inline-block' : 'none');
+      if(!busy && selectedFile) btnStart.textContent = 'ลองนำเข้าอีกครั้ง';
+    }
+    if(btnClose) btnClose.disabled = busy;
+    if(btnCancel) btnCancel.disabled = busy;
+    if(dropZone) dropZone.style.pointerEvents = busy ? 'none' : '';
+  }
+
+  async function readPickDetailFile(file) {
+    const ext = file.name.toLowerCase();
+    let workbook;
+    if (ext.endsWith('.xlsx') || ext.endsWith('.xls')) {
+      const buffer = await file.arrayBuffer();
+      workbook = XLSX.read(buffer, {type:'array', dense:true, cellDates:true});
+    } else {
+      const text = await file.text();
+      workbook = XLSX.read(text, {type:'string', dense:true, cellDates:true});
+    }
+    if (!workbook.SheetNames || !workbook.SheetNames.length) {
+      throw new Error('ไฟล์ไม่มี Worksheet');
+    }
+    const firstSheet = workbook.SheetNames[0];
+    const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], {
+      header:1,
+      raw:true,
+      defval:''
+    });
+    const headerRow = sheetData[0] || [];
+    const headers = REQUIRED_HEADERS.map(h => String(headerRow[h.index] || '').trim().toUpperCase());
+    REQUIRED_HEADERS.forEach((header, index) => {
+      if (headers[index] !== header.name) {
+        const column = XLSX.utils.encode_col(header.index);
+        throw new Error(
+          `หัวคอลัมน์ ${column} ต้องเป็น ${header.name} แต่พบ “${String(headerRow[header.index] || '').trim() || '(ว่าง)'}”`
+        );
+      }
+    });
+    return {
+      rows: parsePickRows(sheetData),
+      meta: {
+        schemaVersion: UPLOAD_SCHEMA_VERSION,
+        filename: file.name,
+        sheetName: firstSheet,
+        sourceRowCount: Math.max(sheetData.length - 2, 0),
+        headers: headers
+      }
+    };
+  }
+
+  async function postUploadWithRetry(payload) {
+    let lastError = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 270000);
+      try {
+        if(attempt > 0) {
+          statusText.textContent = '🔁 การตอบกลับขาดช่วง กำลังตรวจและส่งซ้ำอย่างปลอดภัย...';
+          await sleep(2000);
+        }
+        const res = await fetch(DATA_URL, {
+          method:'POST',
+          headers:{'Content-Type':'text/plain;charset=utf-8'},
+          body:payload,
+          cache:'no-store',
+          signal:controller.signal
+        });
+        if(!res.ok) throw new Error('HTTP ' + res.status);
+        progressBar.style.width = '82%';
+        statusText.textContent = '⏳ ได้รับผลตอบกลับจาก BigQuery กำลังตรวจจำนวนแถว...';
+        const json = await res.json();
+        if(json.status !== 'success') {
+          const examples = json.details && Array.isArray(json.details.errors)
+            ? json.details.errors.slice(0, 5).map(e => `แถว ${e.row}: ${e.message}`).join(', ')
+            : '';
+          throw new Error((json.message || 'เกิดข้อผิดพลาดในการนำเข้า BigQuery') + (examples ? ` — ${examples}` : ''));
+        }
+        return json;
+      } catch(err) {
+        lastError = err;
+        const retryable = err && (err.name === 'AbortError' || /^HTTP 5/.test(err.message || '') || /Failed to fetch/i.test(err.message || ''));
+        if(!retryable || attempt === 1) break;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+    throw lastError || new Error('ไม่สามารถส่งข้อมูลเข้า BigQuery ได้');
+  }
+
+  async function refreshDashboardAfterUpload() {
+    const waits = [0, 1500, 2500, 4000, 6000];
+    for (let i = 0; i < waits.length; i++) {
+      if(waits[i]) await sleep(waits[i]);
+      statusText.textContent = `🔄 กำลังตรวจข้อมูลบนหน้าเว็บ (${i + 1}/${waits.length})...`;
+      const result = await loadData(true);
+      if(result && result.ok && result.rows > 0) return true;
+    }
+    return false;
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, char => ({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    })[char]);
   }
 
   // แปลง Date cell จาก Excel เป็น "DD/MM/YYYY HH:mm"
@@ -845,73 +1000,72 @@ loadData();
     return s;
   }
 
-  function parseExcelToRows(sheetData) {
+  function parsePickRows(sheetData) {
     if (!sheetData || sheetData.length <= 2) return [];
     const parsedRows = [];
     for (let i = 2; i < sheetData.length; i++) {
-      const cols = sheetData[i];
+      const cols = sheetData[i] || [];
       if (!cols || cols.length === 0) continue;
-      const key = (cols[1] != null ? String(cols[1]) : '').trim();
-      if (!key) continue;
-      // ส่งเป็น Array แทน Object → ลด JSON payload ~55%
-      // index: [0]=key [1]=lpn [2]=qty [3]=sku [4]=owner [5]=uom_qty [6]=cat [7]=picker_id [8]=loc [9]=ts
+      const relevant = [1,12,28,31,36,40,55,56,58,64,66];
+      if(relevant.every(index => cols[index] == null || String(cols[index]).trim() === '')) continue;
       parsedRows.push([
-        key,
+        cols[1] != null ? String(cols[1]).trim() : '',
         cols[12] != null ? String(cols[12]).trim() : '',
-        cols[28] != null ? (parseFloat(String(cols[28])) || 0) : 0,
+        numericValue(cols[28]),
         cols[31] != null ? String(cols[31]).trim() : '',
         cols[36] != null ? String(cols[36]).trim() : '',
-        cols[40] != null ? (parseFloat(String(cols[40])) || 1.0) : 1.0,
-        cols[55] != null ? String(cols[55]).trim() : '',
+        numericValue(cols[40]),
+        cols[55] != null ? String(cols[55]).trim().toUpperCase() : '',
         String(cols[56] || cols[58] || '').trim(),
         cols[64] != null ? String(cols[64]).trim() : '',
-        fmtExcelDate(cols[66])   // Column BO: แปลง Date เป็น "DD/MM/YYYY HH:mm"
+        fmtExcelDate(cols[66]),
+        i + 1
       ]);
     }
     return parsedRows;
   }
 
-  function parseCSVToRows(csvText) {
-    const lines = csvText.split(/\r?\n/);
-    if (lines.length <= 2) return [];
-
-    const parsedRows = [];
-    for (let i = 2; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      const cols = parseCSVLine(line);
-      const key = (cols[1] || '').trim();
-      if (!key) continue;
-
-      // ส่งเป็น Array แทน Object → ลด JSON payload ~55%
-      parsedRows.push([
-        key,
-        (cols[12] || '').trim(),
-        cols[28] ? (parseFloat(cols[28]) || 0) : 0,
-        (cols[31] || '').trim(),
-        (cols[36] || '').trim(),
-        cols[40] ? (parseFloat(cols[40]) || 1.0) : 1.0,
-        (cols[55] || '').trim(),
-        (cols[56] || cols[58] || '').trim(),
-        (cols[64] || '').trim(),
-        fmtExcelDate(cols[66])   // Column BO: แปลง Date เป็น "DD/MM/YYYY HH:mm"
-      ]);
-    }
-    return parsedRows;
+  function numericValue(value) {
+    if(value == null || String(value).trim() === '') return '';
+    const parsed = Number(String(value).replace(/,/g, '').trim());
+    return Number.isFinite(parsed) ? parsed : String(value).trim();
   }
 
-  function parseCSVLine(str) {
-    const arr = [];
-    let quote = false;
-    let col = '';
-    for (let c = 0; c < str.length; c++) {
-      const cc = str[c];
-      if (cc === '"') { quote = !quote; }
-      else if (cc === ',' && !quote) { arr.push(col); col = ''; }
-      else { col += cc; }
+  function validateRowsBeforeUpload(rows) {
+    const errors = [];
+    const seen = new Map();
+    for(let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const sourceRow = Number(row[10]) || i + 3;
+      const key = String(row[0] || '').trim();
+      const qty = Number(row[2]);
+      const sku = String(row[3] || '').trim();
+      const uomQty = Number(row[5]);
+      const category = String(row[6] || '').trim().toUpperCase();
+      const picker = String(row[7] || '').trim();
+      const location = String(row[8] || '').trim();
+      const timestamp = String(row[9] || '').trim();
+      const issues = [];
+      if(!key) issues.push('ไม่มี Pick Detail #');
+      if(!Number.isFinite(qty) || qty <= 0 || !Number.isInteger(qty)) issues.push('QTY ไม่ถูกต้อง');
+      if(!sku) issues.push('ไม่มี SKU');
+      if(!Number.isFinite(uomQty) || uomQty <= 0) issues.push('UOMQTY ไม่ถูกต้อง');
+      if(category !== 'PTT' && category !== 'BPS') issues.push('Category ไม่ใช่ PTT/BPS');
+      if(!picker) issues.push('ไม่มี Picker');
+      if(!location) issues.push('ไม่มี Location');
+      if(!/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/.test(timestamp)) issues.push('วันที่/เวลาไม่ถูกต้อง');
+      if(issues.length) errors.push(`แถว ${sourceRow}: ${issues.join('/')}`);
+
+      if(key) {
+        const fingerprint = JSON.stringify(row.slice(1, 10));
+        if(seen.has(key) && seen.get(key) !== fingerprint) {
+          errors.push(`แถว ${sourceRow}: Pick Detail # ${key} ซ้ำแต่ข้อมูลไม่เหมือนกัน`);
+        } else if(!seen.has(key)) {
+          seen.set(key, fingerprint);
+        }
+      }
+      if(errors.length >= 100) break;
     }
-    arr.push(col);
-    return arr;
+    return errors;
   }
 })();

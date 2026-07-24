@@ -186,14 +186,14 @@
       <h2 style="font-size:20px;font-weight:700;margin:0;color:#1e293b;">📤 อัปโหลดไฟล์เข้า BigQuery โดยตรง</h2>
       <button id="btnCloseUpload" style="background:none;border:none;font-size:24px;cursor:pointer;color:#64748b;">&times;</button>
     </div>
-    <p style="font-size:13px;color:#64748b;margin-bottom:20px;">เลือกหรือลากวางไฟล์ <b>Pick Detail (.xlsx, .csv)</b> ระบบจะส่งตรงเข้า <b>BigQuery</b> พร้อมตัดข้อมูลซ้ำให้อัตโนมัติทันทีครับ!</p>
+    <p style="font-size:13px;color:#64748b;margin-bottom:20px;">เลือกหรือลากวางไฟล์ <b>Pick Detail (.xlsx, .csv)</b> ชื่อไฟล์เป็นอะไรก็ได้ ระบบจะตรวจโครงสร้างและทุกแถวก่อนโหลดแบบ Batch เข้า <b>BigQuery</b> พร้อมตรวจผลและรีเฟรชหน้าเว็บอัตโนมัติครับ</p>
     
     <div id="dropZone" style="border:2px dashed #3b82f6;background:#eff6ff;border-radius:14px;padding:35px 20px;text-align:center;cursor:pointer;transition:.2s;">
       <div style="font-size:36px;margin-bottom:10px;">📄</div>
       <div style="font-size:15px;font-weight:600;color:#1d4ed8;">คลิกเพื่อเลือกไฟล์ หรือ ลากวางไฟล์ Excel / CSV ที่นี่</div>
       <div style="font-size:12px;color:#64748b;margin-top:6px;">รองรับไฟล์ Pick Detail (.xlsx, .xls, .csv) สกัดโดยตรงจาก WMS</div>
-      <input type="file" id="csvFileInput" accept=".csv, .xlsx, .xls" style="display:none;" />
     </div>
+    <input type="file" id="csvFileInput" accept=".csv, .xlsx, .xls" style="display:none;" />
 
     <div id="uploadProgress" style="display:none;margin-top:20px;">
       <div style="font-size:13.5px;font-weight:600;color:#334155;margin-bottom:8px;" id="uploadStatusText">กำลังอ่านและประมวลผลไฟล์...</div>
@@ -210,6 +210,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=20260724-batch11"></script>
 </body>
 </html>

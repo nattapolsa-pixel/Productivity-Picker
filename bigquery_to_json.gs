@@ -18,6 +18,10 @@ const BQ_PROJECT  = 'productivity-pick';
 const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
+const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
+const MAX_UPLOAD_ROWS = 50000;
+const MAX_POST_BYTES = 12 * 1024 * 1024;
+const JOB_DEADLINE_MS = 240000;
 // ==========================================================
 
 const CACHE_TTL = 1800;   // เก็บผลลัพธ์ไว้กี่วินาที (1800 = 30 นาที) เพื่อไม่ต้องยิง BigQuery ทุกครั้ง
@@ -46,105 +50,460 @@ function clearCache_() {
 
 function doPost(e) {
   try {
+    if (!e || !e.postData || !e.postData.contents) {
+      return json_({ status: 'error', code: 'EMPTY_REQUEST', message: 'ไม่พบข้อมูลที่ส่งมา' });
+    }
+    if (Number(e.postData.length || e.postData.contents.length) > MAX_POST_BYTES) {
+      return json_({
+        status: 'error',
+        code: 'PAYLOAD_TOO_LARGE',
+        message: 'ไฟล์มีข้อมูลหลังแปลงเกินขนาดที่รองรับ กรุณาแบ่งไฟล์ให้เล็กกว่าเดิม'
+      });
+    }
     const postData = JSON.parse(e.postData.contents);
     if (postData.action === 'upload_rows' && Array.isArray(postData.rows)) {
-      const result = uploadToBigQuery_(postData.rows, postData.fmt);
-      CacheService.getScriptCache().remove('dash_n');
-      return json_({ status: 'success', message: result.message, rowsProcessed: result.rowsProcessed });
+      const result = uploadToBigQuery_(postData.rows, postData.fmt, postData.meta || {});
+      return json_(Object.assign({ status: 'success' }, result));
     }
-    return json_({ status: 'error', message: 'Invalid action or missing rows payload' });
+    return json_({ status: 'error', code: 'INVALID_ACTION', message: 'คำสั่งหรือข้อมูลแถวไม่ถูกต้อง' });
   } catch (err) {
-    return json_({ status: 'error', message: String(err && err.message || err) });
+    const details = err && err.uploadDetails ? err.uploadDetails : null;
+    return json_({
+      status: 'error',
+      code: err && err.code ? err.code : 'UPLOAD_FAILED',
+      message: String(err && err.message || err),
+      details: details
+    });
   }
 }
 
-function uploadToBigQuery_(rows, fmt) {
-  if (!rows || rows.length === 0) return { message: 'No rows provided', rowsProcessed: 0 };
-
-  // ตรวจสอบว่า BigQuery API Service ถูก Enable แล้ว
-  if (typeof BigQuery === 'undefined' || !BigQuery.Tabledata || !BigQuery.Tabledata.insertAll) {
-    throw new Error('BigQuery API ยังไม่ได้ถูก Enable — ไปที่ Apps Script > Services > เพิ่ม BigQuery API ก่อนครับ');
+function uploadToBigQuery_(rows, fmt, meta) {
+  if (!rows || rows.length === 0) {
+    throw uploadError_('NO_ROWS', 'ไม่พบแถวข้อมูลสำหรับนำเข้า');
   }
-
-  const TABLE_STAGING = 'pick_detail_staging';
-  const isArray = (fmt === 'array');   // frontend ส่งเป็น Array เพื่อลด payload
-
-  // filter แถวที่ไม่มี pickdetailkey
-  const validRows = rows.filter(r => {
-    const key = isArray ? r[0] : r.pickdetailkey;
-    return key && String(key).trim() !== '';
-  });
-  if (validRows.length === 0) return { message: 'No valid rows after filtering', rowsProcessed: 0 };
-
-  // เคลียร์ staging table (ทำครั้งเดียวตอนต้น ไม่ต้องทำซ้ำ  2 ครั้ง)
-  const truncSql = "TRUNCATE TABLE `" + BQ_PROJECT + "." + BQ_DATASET + "." + TABLE_STAGING + "`";
-  bqQueryAll_(truncSql);
-
-  // Streaming Insert เข้า staging — batch 2000 ลด API trips ~4x
-  const BATCH_SIZE = 2000;
-  for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
-    const chunk = validRows.slice(i, i + BATCH_SIZE);
-    const insertRows = chunk.map((r, idx) => {
-      const key        = isArray ? r[0] : r.pickdetailkey;
-      const lpn        = isArray ? r[1] : r.lpn;
-      const qty        = isArray ? r[2] : r.qty;
-      const sku        = isArray ? r[3] : r.sku;
-      const owner      = isArray ? r[4] : r.owner;
-      const uom_qty    = isArray ? r[5] : r.uom_qty;
-      const category   = isArray ? r[6] : r.category;
-      const picker_id  = isArray ? r[7] : r.picker_id;
-      const location   = isArray ? r[8] : r.location;
-      const pick_ts    = isArray ? r[9] : r.pick_ts_source;
-      return {
-        insertId: String(key).trim() + '_' + (i + idx),
-        json: {
-          pickdetailkey : String(key  || '').trim(),
-          lpn           : String(lpn  || '').trim(),
-          qty           : parseFloat(qty)  || 0,
-          sku           : String(sku  || '').trim(),
-          owner         : String(owner || '').trim(),
-          uom_qty       : parseFloat(uom_qty) || 1.0,
-          category      : String(category || '').toUpperCase().trim(),
-          picker_id     : String(picker_id || '').trim(),
-          location      : String(location  || '').trim(),
-          pick_ts_source: String(pick_ts   || '').trim()
-        }
-      };
-    });
-
-    const resp = BigQuery.Tabledata.insertAll(
-      { rows: insertRows, skipInvalidRows: true, ignoreUnknownValues: true },
-      BQ_PROJECT, BQ_DATASET, TABLE_STAGING
+  if (rows.length > MAX_UPLOAD_ROWS) {
+    throw uploadError_(
+      'TOO_MANY_ROWS',
+      'ไฟล์มี ' + rows.length.toLocaleString() + ' แถว เกินขีดจำกัด ' +
+        MAX_UPLOAD_ROWS.toLocaleString() + ' แถวต่อครั้ง'
     );
+  }
+  if (typeof BigQuery === 'undefined' || !BigQuery.Jobs || !BigQuery.Tables) {
+    throw uploadError_(
+      'BIGQUERY_SERVICE_DISABLED',
+      'BigQuery API ยังไม่ได้ถูก Enable ใน Apps Script'
+    );
+  }
+  validateUploadMeta_(meta);
 
-    if (resp && resp.insertErrors && resp.insertErrors.length > 0) {
-      const e0 = resp.insertErrors[0];
-      const msg = (e0.errors && e0.errors[0]) ? e0.errors[0].message : JSON.stringify(e0);
-      throw new Error('insertAll error (row ' + e0.index + '): ' + msg);
-    }
-    // ไม่ต้อง sleep — streaming insert ส่งไปแล้วเร็วมาก
+  const normalized = normalizeUploadRows_(rows, fmt);
+  if (normalized.errors.length > 0) {
+    const err = uploadError_(
+      'VALIDATION_FAILED',
+      'พบข้อมูลไม่ถูกต้อง ' + normalized.errors.length.toLocaleString() +
+        ' จุด ระบบจึงยังไม่นำเข้า BigQuery'
+    );
+    err.uploadDetails = {
+      counts: normalized.counts,
+      errors: normalized.errors.slice(0, 100)
+    };
+    throw err;
   }
 
-  // MERGE จาก staging -> pick_detail (dedup + upsert)
-  const mergeSql =
-    "MERGE `" + BQ_PROJECT + "." + BQ_DATASET + ".pick_detail` T " +
-    "USING (" +
-    "  SELECT * EXCEPT(rn) FROM (" +
-    "    SELECT s.*, ROW_NUMBER() OVER (PARTITION BY pickdetailkey ORDER BY pick_ts_source DESC) AS rn " +
-    "    FROM `" + BQ_PROJECT + "." + BQ_DATASET + "." + TABLE_STAGING + "` s " +
-    "  ) WHERE rn = 1" +
-    ") S " +
-    "ON T.pickdetailkey = S.pickdetailkey " +
-    "WHEN NOT MATCHED THEN " +
-    "  INSERT (pickdetailkey, lpn, qty, sku, owner, uom_qty, category, picker_id, location, pick_ts_source, loaded_at) " +
-    "  VALUES (S.pickdetailkey, S.lpn, S.qty, S.sku, S.owner, S.uom_qty, S.category, S.picker_id, S.location, S.pick_ts_source, CURRENT_TIMESTAMP()) " +
-    "WHEN MATCHED AND (T.pick_ts_source IS NULL AND S.pick_ts_source IS NOT NULL) THEN " +
-    "  UPDATE SET T.pick_ts_source = S.pick_ts_source, T.picker_id = S.picker_id, T.loaded_at = CURRENT_TIMESTAMP();";
+  const canonical = normalized.rows
+    .map(function(row) {
+      return JSON.stringify([
+        row.pickdetailkey,
+        row.lpn,
+        row.qty,
+        row.sku,
+        row.owner,
+        row.uom_qty,
+        row.category,
+        row.picker_id,
+        row.location,
+        row.pick_ts_source
+      ]);
+    })
+    .join('\n');
+  const uploadId = sha256Hex_(UPLOAD_SCHEMA_VERSION + '\n' + canonical);
+  const requestId = Utilities.getUuid().replace(/-/g, '');
+  const stageTable = 'pick_stage_' + requestId.substring(0, 24);
+  const loadJobId = 'pick_load_' + requestId;
+  const ndjson = normalized.rows.map(function(row) {
+    return JSON.stringify(Object.assign({}, row, { upload_id: uploadId }));
+  }).join('\n');
+  const blob = Utilities.newBlob(ndjson, 'application/octet-stream', stageTable + '.ndjson');
+  if (blob.getBytes().length > MAX_POST_BYTES) {
+    throw uploadError_(
+      'NORMALIZED_PAYLOAD_TOO_LARGE',
+      'ข้อมูลหลังตรวจสอบมีขนาดเกินขีดจำกัด กรุณาแบ่งไฟล์แล้วนำเข้าใหม่'
+    );
+  }
 
-  bqQueryAll_(mergeSql);
-  bqQueryAll_(truncSql);   // เคลียร์ staging หลังเสร็จ
+  let stageCreated = false;
+  let loadJob = null;
+  let mergeCounts = null;
+  let lock = null;
+  try {
+    loadJob = startLoadJob_(stageTable, loadJobId, blob);
+    stageCreated = true;
+    setStageExpiry_(stageTable);
+    const stagedRows = Number(
+      loadJob && loadJob.statistics && loadJob.statistics.load &&
+      loadJob.statistics.load.outputRows || 0
+    );
+    if (stagedRows !== normalized.rows.length) {
+      throw uploadError_(
+        'LOAD_ROW_COUNT_MISMATCH',
+        'จำนวนแถวที่ BigQuery โหลดไม่ตรงกับจำนวนที่ตรวจสอบ (' +
+          stagedRows + '/' + normalized.rows.length + ')'
+      );
+    }
 
-  return { message: 'Uploaded and merged successfully', rowsProcessed: validRows.length };
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(120000)) {
+      throw uploadError_(
+        'UPLOAD_BUSY',
+        'มีการนำเข้าอีกไฟล์กำลัง Merge อยู่ กรุณาลองใหม่อีกครั้ง'
+      );
+    }
+    mergeCounts = mergeStage_(stageTable);
+  } finally {
+    if (lock && lock.hasLock()) {
+      lock.releaseLock();
+    }
+    if (stageCreated) {
+      try {
+        BigQuery.Tables.remove(BQ_PROJECT, BQ_DATASET, stageTable);
+      } catch (cleanupErr) {
+        console.warn('Temporary stage cleanup failed: ' + cleanupErr);
+      }
+    }
+  }
+
+  return {
+    message: 'โหลดและ Merge เข้า BigQuery สำเร็จ',
+    uploadId: uploadId,
+    filename: String(meta.filename || ''),
+    rowsProcessed: normalized.rows.length,
+    counts: Object.assign({}, normalized.counts, mergeCounts),
+    loadJobId: loadJobId
+  };
+}
+
+function validateUploadMeta_(meta) {
+  const expectedHeaders = [
+    'PICKDETAILKEY', 'ID', 'QTY', 'SKU', 'STORERKEY', 'UOMQTY',
+    'EXT_UDF_STR7', 'EXT_UDF_STR8', 'EXT_UDF_STR10',
+    'EXT_UDF_STR16', 'EXT_UDF_DATE1'
+  ];
+  if (!meta || meta.schemaVersion !== UPLOAD_SCHEMA_VERSION) {
+    throw uploadError_(
+      'SCHEMA_VERSION_MISMATCH',
+      'เวอร์ชันโครงสร้างไฟล์ไม่ตรงกับระบบ กรุณารีเฟรชหน้าเว็บแล้วลองใหม่'
+    );
+  }
+  if (!Array.isArray(meta.headers) || meta.headers.length !== expectedHeaders.length) {
+    throw uploadError_('INVALID_HEADERS', 'ไม่พบหัวคอลัมน์ Pick Detail ที่ระบบต้องใช้');
+  }
+  for (let i = 0; i < expectedHeaders.length; i++) {
+    if (String(meta.headers[i] || '').trim().toUpperCase() !== expectedHeaders[i]) {
+      throw uploadError_(
+        'INVALID_HEADERS',
+        'หัวคอลัมน์ไม่ตรงกับไฟล์ Pick Detail มาตรฐานที่ตำแหน่ง ' + (i + 1)
+      );
+    }
+  }
+}
+
+function normalizeUploadRows_(rows, fmt) {
+  const isArray = fmt === 'array';
+  const seen = Object.create(null);
+  const output = [];
+  const errors = [];
+  let exactDuplicates = 0;
+  let conflicts = 0;
+
+  for (let i = 0; i < rows.length; i++) {
+    const raw = rows[i];
+    const sourceRow = Number(isArray ? raw[10] : raw.source_row_number) || (i + 3);
+    const value = function(index, name) {
+      return isArray ? raw[index] : raw[name];
+    };
+    const key = String(value(0, 'pickdetailkey') || '').trim();
+    const lpn = String(value(1, 'lpn') || '').trim();
+    const qty = Number(value(2, 'qty'));
+    const sku = String(value(3, 'sku') || '').trim();
+    const owner = String(value(4, 'owner') || '').trim();
+    const uomQty = Number(value(5, 'uom_qty'));
+    const category = String(value(6, 'category') || '').trim().toUpperCase();
+    const pickerId = String(value(7, 'picker_id') || '').trim();
+    const location = String(value(8, 'location') || '').trim();
+    const timestamp = normalizeTimestamp_(value(9, 'pick_ts_source'));
+    const rowErrors = [];
+
+    if (!key) rowErrors.push(['pickdetailkey', 'ต้องมี Pick Detail #']);
+    if (!Number.isFinite(qty) || qty <= 0 || Math.floor(qty) !== qty) {
+      rowErrors.push(['qty', 'QTY ต้องเป็นจำนวนเต็มมากกว่า 0']);
+    }
+    if (!sku) rowErrors.push(['sku', 'ต้องมี SKU']);
+    if (!Number.isFinite(uomQty) || uomQty <= 0) {
+      rowErrors.push(['uom_qty', 'UOMQTY ต้องเป็นตัวเลขมากกว่า 0']);
+    }
+    if (category !== 'PTT' && category !== 'BPS') {
+      rowErrors.push(['category', 'Category ต้องเป็น PTT หรือ BPS']);
+    }
+    if (!pickerId) rowErrors.push(['picker_id', 'ต้องมีรหัส Picker']);
+    if (!location) rowErrors.push(['location', 'ต้องมี Location']);
+    if (!timestamp) rowErrors.push(['pick_ts_source', 'รูปแบบวันที่/เวลาไม่ถูกต้อง']);
+
+    if (rowErrors.length > 0) {
+      for (let e = 0; e < rowErrors.length; e++) {
+        if (errors.length < 500) {
+          errors.push({
+            row: sourceRow,
+            field: rowErrors[e][0],
+            message: rowErrors[e][1]
+          });
+        }
+      }
+      continue;
+    }
+
+    const normalizedRow = {
+      pickdetailkey: key,
+      lpn: lpn,
+      qty: qty,
+      sku: sku,
+      owner: owner,
+      uom_qty: uomQty,
+      category: category,
+      picker_id: pickerId,
+      location: location,
+      pick_ts_source: timestamp,
+      source_row_number: sourceRow
+    };
+    const fingerprint = JSON.stringify([
+      lpn, qty, sku, owner, uomQty, category, pickerId, location, timestamp
+    ]);
+    if (Object.prototype.hasOwnProperty.call(seen, key)) {
+      if (seen[key] === fingerprint) {
+        exactDuplicates++;
+      } else {
+        conflicts++;
+        if (errors.length < 500) {
+          errors.push({
+            row: sourceRow,
+            field: 'pickdetailkey',
+            message: 'พบ Pick Detail # ซ้ำแต่ข้อมูลในแถวไม่เหมือนกัน'
+          });
+        }
+      }
+      continue;
+    }
+    seen[key] = fingerprint;
+    output.push(normalizedRow);
+  }
+
+  return {
+    rows: output,
+    errors: errors,
+    counts: {
+      received: rows.length,
+      validUnique: output.length,
+      exactDuplicates: exactDuplicates,
+      conflictingDuplicates: conflicts,
+      rejected: errors.length
+    }
+  };
+}
+
+function normalizeTimestamp_(raw) {
+  const value = String(raw == null ? '' : raw).trim();
+  if (!value) return null;
+  let match = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (match) {
+    return validDateParts_(Number(match[3]), Number(match[2]), Number(match[1]),
+      Number(match[4]), Number(match[5]));
+  }
+  match = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i);
+  if (match) {
+    let year = Number(match[3]);
+    if (year < 100) year += 2000;
+    let hour = Number(match[4]);
+    const ampm = String(match[6] || '').toUpperCase();
+    if (ampm === 'PM' && hour < 12) hour += 12;
+    if (ampm === 'AM' && hour === 12) hour = 0;
+    return validDateParts_(year, Number(match[1]), Number(match[2]), hour, Number(match[5]));
+  }
+  match = value.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::\d{2})?$/);
+  if (match) {
+    return validDateParts_(Number(match[1]), Number(match[2]), Number(match[3]),
+      Number(match[4]), Number(match[5]));
+  }
+  return null;
+}
+
+function validDateParts_(year, month, day, hour, minute) {
+  if (year < 2000 || year > 2100 || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return null;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 ||
+      date.getUTCDate() !== day || date.getUTCHours() !== hour ||
+      date.getUTCMinutes() !== minute) {
+    return null;
+  }
+  return pad2_(day) + '/' + pad2_(month) + '/' + year + ' ' +
+    pad2_(hour) + ':' + pad2_(minute);
+}
+
+function pad2_(value) {
+  return String(value).padStart(2, '0');
+}
+
+function sha256Hex_(value) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    value,
+    Utilities.Charset.UTF_8
+  );
+  return bytes.map(function(byte) {
+    const unsigned = byte < 0 ? byte + 256 : byte;
+    return ('0' + unsigned.toString(16)).slice(-2);
+  }).join('');
+}
+
+function startLoadJob_(stageTable, jobId, blob) {
+  const job = {
+    jobReference: {
+      projectId: BQ_PROJECT,
+      jobId: jobId,
+      location: BQ_LOCATION
+    },
+    configuration: {
+      load: {
+        destinationTable: {
+          projectId: BQ_PROJECT,
+          datasetId: BQ_DATASET,
+          tableId: stageTable
+        },
+        sourceFormat: 'NEWLINE_DELIMITED_JSON',
+        createDisposition: 'CREATE_IF_NEEDED',
+        writeDisposition: 'WRITE_EMPTY',
+        maxBadRecords: 0,
+        ignoreUnknownValues: false,
+        schema: {
+          fields: [
+            { name: 'pickdetailkey', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'lpn', type: 'STRING' },
+            { name: 'qty', type: 'INT64', mode: 'REQUIRED' },
+            { name: 'sku', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'owner', type: 'STRING' },
+            { name: 'uom_qty', type: 'NUMERIC', mode: 'REQUIRED' },
+            { name: 'category', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'picker_id', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'location', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'pick_ts_source', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'source_row_number', type: 'INT64', mode: 'REQUIRED' },
+            { name: 'upload_id', type: 'STRING', mode: 'REQUIRED' }
+          ]
+        }
+      }
+    }
+  };
+  let current = BigQuery.Jobs.insert(job, BQ_PROJECT, blob);
+  const started = Date.now();
+  let waitMs = 500;
+  while (!current.status || current.status.state !== 'DONE') {
+    if (Date.now() - started > JOB_DEADLINE_MS) {
+      throw uploadError_('LOAD_TIMEOUT', 'BigQuery ใช้เวลาโหลดนานเกินกำหนด กรุณาลองนำเข้าไฟล์เดิมอีกครั้ง');
+    }
+    Utilities.sleep(waitMs);
+    current = BigQuery.Jobs.get(BQ_PROJECT, jobId, { location: BQ_LOCATION });
+    waitMs = Math.min(waitMs * 2, 5000);
+  }
+  if (current.status.errorResult) {
+    throw uploadError_('LOAD_JOB_FAILED', formatJobErrors_(current));
+  }
+  return current;
+}
+
+function setStageExpiry_(stageTable) {
+  try {
+    BigQuery.Tables.patch(
+      { expirationTime: String(Date.now() + 24 * 60 * 60 * 1000) },
+      BQ_PROJECT,
+      BQ_DATASET,
+      stageTable
+    );
+  } catch (err) {
+    console.warn('Could not set stage expiry: ' + err);
+  }
+}
+
+function mergeStage_(stageTable) {
+  const stage = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + stageTable + '`';
+  const main = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.pick_detail`';
+  const visible = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.v_pick_enriched`';
+  const different =
+    '(T.lpn IS DISTINCT FROM S.lpn OR T.qty IS DISTINCT FROM S.qty OR ' +
+    'T.sku IS DISTINCT FROM S.sku OR T.owner IS DISTINCT FROM S.owner OR ' +
+    'T.uom_qty IS DISTINCT FROM S.uom_qty OR T.category IS DISTINCT FROM S.category OR ' +
+    'T.picker_id IS DISTINCT FROM S.picker_id OR T.location IS DISTINCT FROM S.location OR ' +
+    'T.pick_ts_source IS DISTINCT FROM S.pick_ts_source)';
+  const sql = [
+    'DECLARE source_rows INT64;',
+    'DECLARE inserted_rows INT64;',
+    'DECLARE updated_rows INT64;',
+    'DECLARE unchanged_rows INT64;',
+    'SET source_rows = (SELECT COUNT(*) FROM ' + stage + ');',
+    'SET inserted_rows = (SELECT COUNT(*) FROM ' + stage + ' S LEFT JOIN ' + main +
+      ' T USING (pickdetailkey) WHERE T.pickdetailkey IS NULL);',
+    'SET updated_rows = (SELECT COUNT(*) FROM ' + stage + ' S JOIN ' + main +
+      ' T USING (pickdetailkey) WHERE ' + different + ');',
+    'SET unchanged_rows = source_rows - inserted_rows - updated_rows;',
+    'MERGE ' + main + ' T USING ' + stage + ' S ON T.pickdetailkey = S.pickdetailkey',
+    'WHEN MATCHED AND ' + different + ' THEN UPDATE SET',
+    '  lpn=S.lpn, qty=S.qty, sku=S.sku, owner=S.owner, uom_qty=S.uom_qty,',
+    '  category=S.category, picker_id=S.picker_id, location=S.location,',
+    '  pick_ts_source=S.pick_ts_source, loaded_at=CURRENT_TIMESTAMP()',
+    'WHEN NOT MATCHED THEN INSERT',
+    '  (pickdetailkey,lpn,qty,sku,owner,uom_qty,category,picker_id,location,pick_ts_source,loaded_at)',
+    'VALUES',
+    '  (S.pickdetailkey,S.lpn,S.qty,S.sku,S.owner,S.uom_qty,S.category,S.picker_id,S.location,S.pick_ts_source,CURRENT_TIMESTAMP());',
+    'SELECT source_rows, inserted_rows, updated_rows, unchanged_rows,',
+    '  (SELECT COUNT(*) FROM ' + visible + ' V JOIN ' + stage +
+      ' S USING (pickdetailkey)) AS visible_rows;'
+  ].join('\n');
+  const result = bqQueryAll_(sql, JOB_DEADLINE_MS);
+  if (!result.length || result[0].length < 5) {
+    throw uploadError_('MERGE_RESULT_MISSING', 'BigQuery Merge สำเร็จแต่ไม่สามารถตรวจสอบจำนวนแถวได้');
+  }
+  return {
+    staged: Number(result[0][0] || 0),
+    inserted: Number(result[0][1] || 0),
+    updated: Number(result[0][2] || 0),
+    unchanged: Number(result[0][3] || 0),
+    visible: Number(result[0][4] || 0)
+  };
+}
+
+function formatJobErrors_(job) {
+  const errors = job && job.status && job.status.errors || [];
+  if (!errors.length && job && job.status && job.status.errorResult) {
+    errors.push(job.status.errorResult);
+  }
+  return errors.map(function(error) {
+    return error.message || JSON.stringify(error);
+  }).join(' | ') || 'BigQuery job failed';
+}
+
+function uploadError_(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
 }
 
 function textJson_(str) {
@@ -224,11 +583,37 @@ function sortDates_(S) {
 }
 
 // ดึงผลลัพธ์ BigQuery ทั้งหมด (รองรับหลายหน้า)
-function bqQueryAll_(sql) {
-  let qr = BigQuery.Jobs.query({ query: sql, useLegacySql: false, timeoutMs: 60000, maxResults: 100000, location: BQ_LOCATION }, BQ_PROJECT);
+function bqQueryAll_(sql, deadlineMs) {
+  const deadline = Number(deadlineMs || JOB_DEADLINE_MS);
+  const started = Date.now();
+  let qr = BigQuery.Jobs.query({
+    query: sql,
+    useLegacySql: false,
+    useQueryCache: false,
+    timeoutMs: 60000,
+    maxResults: 100000,
+    location: BQ_LOCATION
+  }, BQ_PROJECT);
   const jobId = qr.jobReference.jobId;
   const loc = qr.jobReference.location || BQ_LOCATION;
-  while (!qr.jobComplete) { Utilities.sleep(800); qr = BigQuery.Jobs.getQueryResults(BQ_PROJECT, jobId, { location: loc, maxResults: 100000 }); }
+  while (!qr.jobComplete) {
+    if (Date.now() - started > deadline) {
+      throw uploadError_('QUERY_TIMEOUT', 'BigQuery ใช้เวลาประมวลผลนานเกินกำหนด');
+    }
+    Utilities.sleep(800);
+    qr = BigQuery.Jobs.getQueryResults(BQ_PROJECT, jobId, {
+      location: loc,
+      maxResults: 100000
+    });
+  }
+  if (qr.errors && qr.errors.length) {
+    throw uploadError_(
+      'QUERY_FAILED',
+      qr.errors.map(function(error) {
+        return error.message || JSON.stringify(error);
+      }).join(' | ')
+    );
+  }
   const out = [];
   let page = qr;
   while (true) {

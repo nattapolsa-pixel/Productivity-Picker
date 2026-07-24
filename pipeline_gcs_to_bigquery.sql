@@ -1,3 +1,7 @@
+-- LEGACY ONLY — ไม่ใช้กับ Flow ปัจจุบัน
+-- ระบบปัจจุบันใช้หน้าเว็บ -> Apps Script batch load -> BigQuery MERGE
+-- ห้ามนำ Scheduled Query ของไฟล์นี้กลับมาเปิด เพราะจะอ่านข้อมูลเก่าจาก GCS ซ้ำ
+
 -- =============================================================================
 --  PIPELINE: Drive -> GCS -> BigQuery  (ต่อเนื่อง + กันข้อมูลเบิ้ล)
 --  ใช้คู่กับ pick_analytics_bigquery.sql (ตาราง pick_detail + views วิเคราะห์)
