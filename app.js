@@ -27,6 +27,7 @@ const emptyData = () => ({meta:{},PTT:{dates:[],pickers:[],skus:[],rows:[]},BPS:
 let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
 let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
+let unitMode = 'units'; // 'units' (หน่วยหยิบ) หรือ 'pcs' (จำนวนชิ้น)
 let excludedSkus = new Set();
 let itemSearchTerm = '';
 let hasLiveData = false;
@@ -162,19 +163,46 @@ function aggregate(system, from, to, sf){
   }
 
   const groups = Object.values(grp);
-  groups.forEach(g => { g.ot = otHours(g.mx); g.wh = REG_HOURS + g.ot; g.prod = g.q / g.wh; });
+  groups.forEach(g => {
+    g.ot = otHours(g.mx);
+    g.wh = REG_HOURS + g.ot;
+    g.prod = g.q / g.wh;
+    g.pcsProd = g.pcs / g.wh;
+  });
   const r1 = n => Math.round(n*10)/10;
   const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : 0;
 
-  const byDate = {}; groups.forEach(g => { (byDate[g.sd] = byDate[g.sd] || []).push(g.prod); });
-  const daily = Object.keys(dayVol).sort().map(d => ({date:d, lines:dayVol[d].lines, pcs:dayVol[d].pcs, qty:dayVol[d].qty, pickers:dayVol[d].pk.size, avg_prod:r1(mean(byDate[d]||[]))}));
+  const byDate = {}, byDatePcs = {};
+  groups.forEach(g => {
+    (byDate[g.sd] = byDate[g.sd] || []).push(g.prod);
+    (byDatePcs[g.sd] = byDatePcs[g.sd] || []).push(g.pcsProd);
+  });
+  const daily = Object.keys(dayVol).sort().map(d => ({
+    date: d,
+    lines: dayVol[d].lines,
+    pcs: dayVol[d].pcs,
+    qty: dayVol[d].qty,
+    pickers: dayVol[d].pk.size,
+    avg_prod: r1(mean(byDate[d]||[])),
+    avg_pcs_prod: r1(mean(byDatePcs[d]||[]))
+  }));
 
   const byPicker = {};
-  groups.forEach(g => { const o = byPicker[g.picker] || (byPicker[g.picker] = {pcs:0,q:0,n:0,ot:0,prods:[],sh:{}}); o.pcs += g.pcs; o.q += g.q; o.n += g.n; o.ot += g.ot; o.prods.push(g.prod); o.sh[g.sh] = (o.sh[g.sh]||0)+g.n; });
+  groups.forEach(g => {
+    const o = byPicker[g.picker] || (byPicker[g.picker] = {pcs:0,q:0,n:0,ot:0,prods:[],prodsPcs:[],sh:{}});
+    o.pcs += g.pcs; o.q += g.q; o.n += g.n; o.ot += g.ot;
+    o.prods.push(g.prod); o.prodsPcs.push(g.pcsProd);
+    o.sh[g.sh] = (o.sh[g.sh]||0)+g.n;
+  });
   const by_picker = Object.entries(byPicker).map(([picker,o]) => {
     const zc = pickerZoneCnt[picker] || {}; const zone = Object.keys(zc).sort((a,b)=>zc[b]-zc[a])[0] || '-';
     const shift = Object.keys(o.sh).sort((a,b)=>o.sh[b]-o.sh[a])[0] || '-';
-    return {picker, pcs:o.pcs, qty:o.q, lines:o.n, ot:r1(o.ot), shift, avg_prod:r1(mean(o.prods)), zone};
+    return {
+      picker, pcs:o.pcs, qty:o.q, lines:o.n, ot:r1(o.ot), shift,
+      avg_prod: r1(mean(o.prods)),
+      avg_pcs_prod: r1(mean(o.prodsPcs)),
+      zone
+    };
   }).sort((a,b)=>b.qty-a.qty);
 
   function getItemInfo(sku) {
@@ -207,7 +235,14 @@ function aggregate(system, from, to, sf){
   const by_timeslot = Object.keys(slotMap).map(Number).sort((a,b)=>a-b).map(h=>({label:String(h).padStart(2,'0')+':00', pcs:slotMap[h].pcs, qty:slotMap[h].qty, lines:slotMap[h].lines}));
 
   const totOt = groups.reduce((s,g)=>s+g.ot,0);
-  return {kpis:{lines, pcs, qty:pickQty, pickers:pickers.size, ot:r1(totOt), avg_prod:r1(mean(groups.map(g=>g.prod)))}, daily, by_zone, by_picker, by_timeslot, by_item, by_item_all};
+  return {
+    kpis: {
+      lines, pcs, qty: pickQty, pickers: pickers.size, ot: r1(totOt),
+      avg_prod: r1(mean(groups.map(g=>g.prod))),
+      avg_pcs_prod: r1(mean(groups.map(g=>g.pcsProd)))
+    },
+    daily, by_zone, by_picker, by_timeslot, by_item, by_item_all
+  };
 }
 
 // qty รวมของระบบตามช่วง+กะ (สำหรับกราฟเทียบ)
@@ -228,7 +263,7 @@ function sysPcs(system, from, to, sf){
 function ensureStyles(){
   if(document.getElementById('dash-style')) return;
   const st = document.createElement('style'); st.id = 'dash-style';
-  st.textContent = '.sysbar{display:flex;align-items:center;gap:12px 16px;margin:-6px 0 20px;flex-wrap:wrap}.sysbar .lab{font-size:13px;color:#64748b;font-weight:500}.systog{display:inline-flex;background:#eef2ff;border-radius:12px;padding:4px}.systog button{border:0;background:transparent;font-family:inherit;font-size:13px;font-weight:600;color:#64748b;padding:9px 16px;border-radius:9px;cursor:pointer;transition:.2s}.systog button.active{color:#fff;box-shadow:0 6px 14px -6px rgba(14,165,233,.6)}.systog button.active[data-sys="PTT"]{background:linear-gradient(90deg,#0ea5e9,#6366f1)}.systog button.active[data-sys="BPS"]{background:linear-gradient(90deg,#f59e0b,#f97316)}.shiftog button.active{background:linear-gradient(90deg,#8b5cf6,#6366f1)}'
+  st.textContent = '.sysbar{display:flex;align-items:center;gap:12px 16px;margin:-6px 0 20px;flex-wrap:wrap}.sysbar .lab{font-size:13px;color:#64748b;font-weight:500}.systog{display:inline-flex;background:#eef2ff;border-radius:12px;padding:4px}.systog button{border:0;background:transparent;font-family:inherit;font-size:13px;font-weight:600;color:#64748b;padding:9px 16px;border-radius:9px;cursor:pointer;transition:.2s}.systog button.active{color:#fff;box-shadow:0 6px 14px -6px rgba(14,165,233,.6)}.systog button.active[data-sys="PTT"]{background:linear-gradient(90deg,#0ea5e9,#6366f1)}.systog button.active[data-sys="BPS"]{background:linear-gradient(90deg,#f59e0b,#f97316)}.shiftog button.active{background:linear-gradient(90deg,#8b5cf6,#6366f1)}.unittog button.active{background:linear-gradient(90deg,#14b8a6,#0ea5e9);color:#fff;box-shadow:0 6px 14px -6px rgba(20,184,166,.6)}'
     + '.datebar{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:6px 10px;box-shadow:0 8px 20px -16px rgba(30,41,59,.4)}.datebar input[type=date]{font-family:inherit;font-size:13px;color:#1e293b;border:1px solid #e2e8f0;border-radius:8px;padding:6px 8px;background:#f8fafc}.datebar input[type=date]:focus{outline:0;border-color:#6366f1}.datebar .sep{color:#94a3b8;font-size:13px}'
     + '.datepreset{display:inline-flex;gap:6px;flex-wrap:wrap}.datepreset button{border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12.5px;font-weight:500;color:#475569;padding:7px 12px;border-radius:9px;cursor:pointer;transition:.18s}.datepreset button:hover{border-color:#6366f1;color:#4338ca}.datepreset button.active{background:linear-gradient(90deg,#6366f1,#8b5cf6);border-color:transparent;color:#fff}'
     + '.refreshbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12.5px;font-weight:600;color:#0e7490;padding:7px 12px;border-radius:9px;cursor:pointer;transition:.18s}.refreshbtn:hover{border-color:#14b8a6;background:#f0fdfa}.freshtxt{font-size:11.5px;color:#94a3b8}'
@@ -244,6 +279,8 @@ function buildControls(){
   bar.innerHTML =
     '<span class="lab">ระบบ:</span>'
     + '<div class="systog"><button data-sys="PTT">Pick (PTT)</button><button data-sys="BPS">Pick to Sort (BPS)</button></div>'
+    + '<span class="lab">หน่วยที่แสดง:</span>'
+    + '<div class="systog unittog"><button data-unit="units">📦 หน่วยหยิบ (Units)</button><button data-unit="pcs">🧩 จำนวนชิ้น (Pcs)</button></div>'
     + '<span class="lab">กะ:</span>'
     + '<div class="systog shiftog"><button data-sh="all">ทุกกะ</button><button data-sh="morning">🌅 เช้า</button><button data-sh="night">🌙 ดึก</button></div>'
     + '<span class="lab">วันที่:</span>'
@@ -253,9 +290,14 @@ function buildControls(){
     + '<span class="freshtxt" id="freshTxt"></span>';
   document.querySelector('.pagehead').insertAdjacentElement('afterend', bar);
 
-  bar.querySelectorAll('.systog:not(.shiftog) button').forEach(b => { b.classList.toggle('active', b.dataset.sys===sys); b.onclick = () => {
+  bar.querySelectorAll('.systog:not(.shiftog):not(.unittog) button').forEach(b => { b.classList.toggle('active', b.dataset.sys===sys); b.onclick = () => {
     if(b.dataset.sys === sys) return; sys = b.dataset.sys;
-    bar.querySelectorAll('.systog:not(.shiftog) button').forEach(x => x.classList.toggle('active', x.dataset.sys === sys));
+    bar.querySelectorAll('.systog:not(.shiftog):not(.unittog) button').forEach(x => x.classList.toggle('active', x.dataset.sys === sys));
+    render();
+  };});
+  bar.querySelectorAll('.unittog button').forEach(b => { b.classList.toggle('active', b.dataset.unit===unitMode); b.onclick = () => {
+    if(b.dataset.unit === unitMode) return; unitMode = b.dataset.unit;
+    bar.querySelectorAll('.unittog button').forEach(x => x.classList.toggle('active', x.dataset.unit === unitMode));
     render();
   };});
   bar.querySelectorAll('.shiftog button').forEach(b => { b.classList.toggle('active', b.dataset.sh===shiftF); b.onclick = () => {
@@ -305,12 +347,28 @@ function updateDateHeader(){
 // ===== KPI cards =====
 function renderKPIs(){
   const k = A.kpis;
+  const isPcs = unitMode === 'pcs';
   const defs = [
     {lbl:'บรรทัดที่หยิบ', val:k.lines, unit:'บรรทัด', grad:'linear-gradient(90deg,#6366f1,#8b5cf6)'},
-    {lbl:'จำนวนชิ้นรวม', val:k.pcs, unit:'ชิ้น', grad:'linear-gradient(90deg,#14b8a6,#0ea5e9)'},
-    {lbl:'หน่วยหยิบรวม', val:k.qty, unit:'หน่วยหยิบ', grad:'linear-gradient(90deg,#3b82f6,#6366f1)'},
+    {
+      lbl: isPcs ? 'ปริมาณชิ้นรวม ★' : 'จำนวนชิ้นรวม',
+      val: k.pcs,
+      unit: 'ชิ้น',
+      grad: isPcs ? 'linear-gradient(90deg,#14b8a6,#0ea5e9)' : 'linear-gradient(90deg,#94a3b8,#cbd5e1)'
+    },
+    {
+      lbl: !isPcs ? 'หน่วยหยิบรวม ★' : 'หน่วยหยิบรวม',
+      val: k.qty,
+      unit: 'หน่วยหยิบ',
+      grad: !isPcs ? 'linear-gradient(90deg,#3b82f6,#6366f1)' : 'linear-gradient(90deg,#94a3b8,#cbd5e1)'
+    },
     {lbl:'พนักงานหยิบ', val:k.pickers, unit:'คน', grad:'linear-gradient(90deg,#f59e0b,#f97316)'},
-    {lbl:'Productivity เฉลี่ย', val:k.avg_prod, unit:'หยิบ/ชม.', grad:'linear-gradient(90deg,#f43f5e,#ec4899)'},
+    {
+      lbl: isPcs ? 'Productivity (ชิ้น/ชม.)' : 'Productivity (หยิบ/ชม.)',
+      val: isPcs ? k.avg_pcs_prod : k.avg_prod,
+      unit: isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.',
+      grad: 'linear-gradient(90deg,#f43f5e,#ec4899)'
+    },
     {lbl:'OT รวม', val:k.ot, unit:'ชม.', grad:'linear-gradient(90deg,#10b981,#22c55e)'}
   ];
   const kw = document.getElementById('kpis'); kw.innerHTML = '';
@@ -333,31 +391,42 @@ function countUp(){
 const builders = {
   overview(){
     const daily = A.daily;
+    const isPcs = unitMode === 'pcs';
+
     function bucket(mode){
       const map = {};
       daily.forEach(d => {
         let k = d.date; const dt = new Date(d.date);
         if(mode === 'week'){ const day = (dt.getDay()+6)%7; const mo = new Date(dt); mo.setDate(dt.getDate()-day); k = 'wk '+mo.toISOString().slice(5,10); }
         if(mode === 'month') k = d.date.slice(0,7);
-        if(!map[k]) map[k] = {pcs:0, qty:0, ps:[]};
+        if(!map[k]) map[k] = {pcs:0, qty:0, ps:[], psPcs:[]};
         map[k].pcs += (d.pcs || d.qty);
         map[k].qty += d.qty;
         if(d.avg_prod>0) map[k].ps.push(d.avg_prod);
+        if(d.avg_pcs_prod>0) map[k].psPcs.push(d.avg_pcs_prod);
       });
       const ks = Object.keys(map).sort();
       return {
         labels:ks,
         pcs:ks.map(k=>map[k].pcs),
         qty:ks.map(k=>map[k].qty),
-        prod:ks.map(k=>map[k].ps.length?Math.round(map[k].ps.reduce((a,b)=>a+b,0)/map[k].ps.length*10)/10:0)
+        prod:ks.map(k=>map[k].ps.length?Math.round(map[k].ps.reduce((a,b)=>a+b,0)/map[k].ps.length*10)/10:0),
+        pcsProd:ks.map(k=>map[k].psPcs.length?Math.round(map[k].psPcs.reduce((a,b)=>a+b,0)/map[k].psPcs.length*10)/10:0)
       };
     }
     function drawTrend(mode){
       const b = bucket(mode);
+      const mainQty = isPcs ? b.pcs : b.qty;
+      const secQty = isPcs ? b.qty : b.pcs;
+      const mainLabel = isPcs ? 'จำนวนชิ้น (หลัก)' : 'หน่วยหยิบ (หลัก)';
+      const secLabel = isPcs ? 'หน่วยหยิบ' : 'จำนวนชิ้น';
+      const prodData = isPcs ? b.pcsProd : b.prod;
+      const prodLabel = isPcs ? 'Productivity (ชิ้น/ชม.)' : 'Productivity (หยิบ/ชม.)';
+
       const cfg = {data:{labels:b.labels, datasets:[
-        {type:'bar', label:'จำนวนชิ้น', data:b.pcs, backgroundColor:'rgba(99,102,241,.85)', borderRadius:6, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#4338ca', font:{weight:'600', size:10}}},
-        {type:'bar', label:'หน่วยหยิบ', data:b.qty, backgroundColor:'rgba(20,184,166,.85)', borderRadius:6, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#0f766e', font:{weight:'600', size:10}}},
-        {type:'line', label:'Productivity (หยิบ/ชม.)', data:b.prod, borderColor:'#f43f5e', backgroundColor:'#f43f5e', tension:.35, borderWidth:3, pointRadius:5, pointBackgroundColor:'#fff', pointBorderWidth:2, yAxisID:'y1', datalabels:{align:'top', color:'#e11d48', formatter:fmt, font:{weight:'600'}}}
+        {type:'bar', label:mainLabel, data:mainQty, backgroundColor:isPcs?'rgba(20,184,166,.85)':'rgba(99,102,241,.85)', borderRadius:6, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:isPcs?'#0f766e':'#4338ca', font:{weight:'600', size:10}}},
+        {type:'bar', label:secLabel, data:secQty, backgroundColor:isPcs?'rgba(99,102,241,.35)':'rgba(20,184,166,.35)', borderRadius:6, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#64748b', font:{weight:'500', size:9}}},
+        {type:'line', label:prodLabel, data:prodData, borderColor:'#f43f5e', backgroundColor:'#f43f5e', tension:.35, borderWidth:3, pointRadius:5, pointBackgroundColor:'#fff', pointBorderWidth:2, yAxisID:'y1', datalabels:{align:'top', color:'#e11d48', formatter:fmt, font:{weight:'600'}}}
       ]}, options:{maintainAspectRatio:false, layout:{padding:{top:24}}, plugins:{legend:{display:true, position:'top', labels:{usePointStyle:true, boxWidth:8}}}, scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, y1:{position:'right', grid:{drawOnChartArea:false}}}}};
       const ex = Chart.getChart('trend'); if(ex) ex.destroy();
       new Chart(document.getElementById('trend'), cfg);
@@ -369,16 +438,18 @@ const builders = {
     });
     const cqPcs = sysPcs('PTT', dfrom, dto, shiftF), bqPcs = sysPcs('BPS', dfrom, dto, shiftF);
     const cqQty = sysQty('PTT', dfrom, dto, shiftF), bqQty = sysQty('BPS', dfrom, dto, shiftF);
+    const catData = isPcs ? [cqPcs, bqPcs] : [cqQty, bqQty];
+    const unitTxt = isPcs ? 'ชิ้น' : 'หน่วย';
 
     new Chart(document.getElementById('cat'), {
       type:'doughnut',
-      data:{labels:['Pick (PTT)','Pick to Sort (BPS)'], datasets:[{data:[cqQty, bqQty], backgroundColor:['#6366f1','#f59e0b'], borderWidth:4, borderColor:'#fff'}]},
+      data:{labels:['Pick (PTT)','Pick to Sort (BPS)'], datasets:[{data:catData, backgroundColor:['#6366f1','#f59e0b'], borderWidth:4, borderColor:'#fff'}]},
       options:{
         maintainAspectRatio:false,
         cutout:'60%',
         plugins:{
           legend:{position:'bottom', labels:{usePointStyle:true, boxWidth:8}},
-          datalabels:{color:'#fff', font:{size:13, weight:'700'}, textAlign:'center', formatter:(v,c)=>{ const t = c.chart.data.datasets[0].data.reduce((a,b)=>a+b,0)||1; return fmt(v)+' หน่วย\n('+Math.round(v/t*100)+'%)'; }},
+          datalabels:{color:'#fff', font:{size:13, weight:'700'}, textAlign:'center', formatter:(v,c)=>{ const t = c.chart.data.datasets[0].data.reduce((a,b)=>a+b,0)||1; return fmt(v)+' '+unitTxt+'\n('+Math.round(v/t*100)+'%)'; }},
           tooltip:{
             callbacks:{
               label:(ctx)=>{
@@ -399,21 +470,29 @@ const builders = {
     });
   },
   prod(){
-    const p = A.by_picker.slice(0, 12);
+    const isPcs = unitMode === 'pcs';
+    let p = [...A.by_picker];
+    p.sort((a, b) => isPcs ? (b.avg_pcs_prod - a.avg_pcs_prod) : (b.avg_prod - a.avg_prod));
+    p = p.slice(0, 12);
+
+    const mainProd = isPcs ? p.map(x => x.avg_pcs_prod) : p.map(x => x.avg_prod);
+    const unitLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+
     new Chart(document.getElementById('picker'), {
       type:'bar',
-      data:{labels:p.map(x=>x.picker+' ('+x.zone+')'), datasets:[{data:p.map(x=>x.avg_prod), backgroundColor:p.map((x,i)=>PALETTE[i%PALETTE.length]), borderRadius:6}]},
+      data:{labels:p.map(x=>x.picker+' ('+x.zone+')'), datasets:[{data:mainProd, backgroundColor:p.map((x,i)=>PALETTE[i%PALETTE.length]), borderRadius:6}]},
       options:{
-        indexAxis:'y', maintainAspectRatio:false, layout:{padding:{right:48}},
+        indexAxis:'y', maintainAspectRatio:false, layout:{padding:{right:55}},
         plugins:{
           legend:{display:false},
-          datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#334155', font:{size:10, weight:'600'}},
+          datalabels:{anchor:'end', align:'end', formatter:(v)=>fmt(v)+' '+unitLabel, color:'#334155', font:{size:10, weight:'600'}},
           tooltip:{
             callbacks:{
               label:(ctx)=>{
                 const picker = p[ctx.dataIndex];
                 return [
-                  ` Productivity: ${fmt(picker.avg_prod)} หยิบ/ชม.`,
+                  ` Productivity (หยิบ): ${fmt(picker.avg_prod)} หยิบ/ชม.`,
+                  ` Productivity (ชิ้น): ${fmt(picker.avg_pcs_prod)} ชิ้น/ชม.`,
                   ` ปริมาณ: ${fmt(picker.pcs)} ชิ้น (${fmt(picker.qty)} หน่วยหยิบ)`,
                   ` บรรทัด: ${fmt(picker.lines)} บรรทัด (OT: ${picker.ot > 0 ? picker.ot+' ชม.' : '-'})`
                 ];
@@ -426,12 +505,15 @@ const builders = {
     });
   },
   zones(){
-    const z = A.by_zone;
+    const z = [...A.by_zone];
+    const isPcs = unitMode === 'pcs';
+    z.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
+
     new Chart(document.getElementById('zone'), {
       type:'bar',
       data:{labels:z.map(x=>x.zone), datasets:[
-        {label:'จำนวนชิ้น', data:z.map(x=>x.pcs), backgroundColor:'rgba(99,102,241,.85)', borderRadius:6},
-        {label:'หน่วยหยิบ', data:z.map(x=>x.qty), backgroundColor:'rgba(20,184,166,.85)', borderRadius:6}
+        {label:'จำนวนชิ้น', data:z.map(x=>x.pcs), backgroundColor:isPcs?'rgba(20,184,166,.9)':'rgba(99,102,241,.4)', borderRadius:6},
+        {label:'หน่วยหยิบ', data:z.map(x=>x.qty), backgroundColor:isPcs?'rgba(99,102,241,.4)':'rgba(20,184,166,.9)', borderRadius:6}
       ]},
       options:{
         maintainAspectRatio:false, layout:{padding:{top:22}},
@@ -443,32 +525,57 @@ const builders = {
       }
     });
 
-    const maxQ = Math.max(1, ...z.map(x=>x.pcs));
+    const maxV = Math.max(1, ...z.map(x => isPcs ? x.pcs : x.qty));
     const heat = document.getElementById('heat'); heat.innerHTML = '';
     z.forEach(x => {
-      const t = Math.pow(x.pcs/maxQ, .55), c1 = [224,231,255], c2 = [67,56,202];
+      const val = isPcs ? x.pcs : x.qty;
+      const t = Math.pow(val/maxV, .55), c1 = [224,231,255], c2 = [67,56,202];
       const mx = c1.map((v,i)=>Math.round(v+(c2[i]-v)*t));
       const e = document.createElement('div'); e.className = 'tile'; e.style.background = 'rgb('+mx.join(',')+')';
       if(t < .35) e.style.color = '#334155';
-      e.innerHTML = '<div class="z">'+x.zone+'</div><div class="q">'+fmt(x.pcs)+' ชิ้น <span style="font-size:11px;opacity:0.85;">('+fmt(x.qty)+' หน่วย)</span></div><div class="p">'+x.pickers+' คน · '+fmt(x.lines)+' บรรทัด</div>';
+      const mainTxt = isPcs ? `${fmt(x.pcs)} ชิ้น (${fmt(x.qty)} หน่วย)` : `${fmt(x.qty)} หน่วย (${fmt(x.pcs)} ชิ้น)`;
+      e.innerHTML = '<div class="z">'+x.zone+'</div><div class="q">'+mainTxt+'</div><div class="p">'+x.pickers+' คน · '+fmt(x.lines)+' บรรทัด</div>';
       heat.appendChild(e);
     });
   },
   pickers(){
-    let h = '<thead><tr><th>#</th><th>รหัส Picker</th><th>กะ</th><th>โซนหลัก</th><th class="num">บรรทัด</th><th class="num">ชิ้น (Pcs)</th><th class="num">หน่วยหยิบ (Units)</th><th class="num">OT (ชม.)</th><th class="num">หยิบ/ชม.</th></tr></thead><tbody>';
-    if(!A.by_picker.length) h += '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
-    A.by_picker.forEach((p,i) => {
-      h += '<tr><td><span class="rank">'+(i+1)+'</span></td><td><b>'+p.picker+'</b></td><td>'+(SHIFT_LABEL[p.shift]||p.shift)+'</td><td><span class="pill">'+p.zone+'</span></td><td class="num">'+fmt(p.lines)+'</td><td class="num" style="color:#0f766e;font-weight:600;">'+fmt(p.pcs)+'</td><td class="num" style="color:#4338ca;font-weight:600;">'+fmt(p.qty)+'</td><td class="num">'+(p.ot>0?fmt(p.ot):'-')+'</td><td class="num" style="font-weight:700;color:#e11d48;">'+fmt(p.avg_prod)+'</td></tr>';
+    const isPcs = unitMode === 'pcs';
+    const list = [...A.by_picker];
+    list.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
+
+    const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
+    const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
+    const prodHeaderLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+
+    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>กะ</th><th>โซนหลัก</th><th class="num">บรรทัด</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (Pcs) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Units) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th></tr></thead><tbody>`;
+    if(!list.length) h += '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
+    list.forEach((p,i) => {
+      const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
+      const qtyCellStyle = !isPcs ? 'background:#eef2ff;font-weight:700;color:#4338ca;' : 'color:#4338ca;font-weight:600;';
+      const prodValue = isPcs ? p.avg_pcs_prod : p.avg_prod;
+
+      h += `<tr>
+        <td><span class="rank">${i + 1}</span></td>
+        <td><b>${p.picker}</b></td>
+        <td>${SHIFT_LABEL[p.shift] || p.shift}</td>
+        <td><span class="pill">${p.zone}</span></td>
+        <td class="num">${fmt(p.lines)}</td>
+        <td class="num" style="${pcsCellStyle}">${fmt(p.pcs)}</td>
+        <td class="num" style="${qtyCellStyle}">${fmt(p.qty)}</td>
+        <td class="num">${p.ot > 0 ? fmt(p.ot) : '-'}</td>
+        <td class="num" style="font-weight:700;color:#e11d48;">${fmt(prodValue)}</td>
+      </tr>`;
     });
     h += '</tbody>'; document.getElementById('ptable').innerHTML = h;
   },
   time(){
     const t = A.by_timeslot;
+    const isPcs = unitMode === 'pcs';
     new Chart(document.getElementById('slot'), {
       type:'bar',
       data:{labels:t.map(x=>x.label), datasets:[
-        {label:'จำนวนชิ้น', data:t.map(x=>x.pcs), backgroundColor:'rgba(99,102,241,.85)', borderRadius:6},
-        {label:'หน่วยหยิบ', data:t.map(x=>x.qty), backgroundColor:'rgba(20,184,166,.85)', borderRadius:6}
+        {label:'จำนวนชิ้น', data:t.map(x=>x.pcs), backgroundColor:isPcs?'rgba(20,184,166,.9)':'rgba(99,102,241,.4)', borderRadius:6},
+        {label:'หน่วยหยิบ', data:t.map(x=>x.qty), backgroundColor:isPcs?'rgba(99,102,241,.4)':'rgba(20,184,166,.9)', borderRadius:6}
       ]},
       options:{
         maintainAspectRatio:false, layout:{padding:{top:22}},
@@ -481,7 +588,11 @@ const builders = {
     });
   },
   items(){
-    const it = A.by_item.slice(0, 10);
+    const isPcs = unitMode === 'pcs';
+    let it = [...A.by_item];
+    it.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
+    it = it.slice(0, 10);
+
     const labels = it.map(x => {
       const nm = x.name || x.sku;
       return nm.length > 32 ? nm.slice(0, 30) + '…' : nm;
@@ -491,17 +602,20 @@ const builders = {
       type: 'bar',
       data: {
         labels: labels,
-        datasets: [{
-          label: 'จำนวนชิ้น',
-          data: it.map(x => x.pcs),
-          backgroundColor: 'rgba(245,158,11,.9)',
-          borderRadius: 6
-        }, {
-          label: 'หน่วยหยิบ',
-          data: it.map(x => x.qty),
-          backgroundColor: 'rgba(99,102,241,.85)',
-          borderRadius: 6
-        }]
+        datasets: [
+          {
+            label: 'จำนวนชิ้น',
+            data: it.map(x => x.pcs),
+            backgroundColor: isPcs ? 'rgba(245,158,11,.9)' : 'rgba(245,158,11,.4)',
+            borderRadius: 6
+          },
+          {
+            label: 'หน่วยหยิบ',
+            data: it.map(x => x.qty),
+            backgroundColor: isPcs ? 'rgba(99,102,241,.4)' : 'rgba(99,102,241,.9)',
+            borderRadius: 6
+          }
+        ]
       },
       options: {
         indexAxis: 'y',
@@ -553,7 +667,9 @@ const builders = {
       const elTable = document.getElementById('itable');
       if (!elTable) return;
 
-      let allItems = A.by_item_all || [];
+      let allItems = [...(A.by_item_all || [])];
+      allItems.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
+
       if (itemSearchTerm) {
         allItems = allItems.filter(x => 
           (x.sku && x.sku.toLowerCase().includes(itemSearchTerm)) ||
@@ -565,7 +681,10 @@ const builders = {
       // แสดง 35 รายการแรกที่ตรงกับคำค้นหา
       const displayItems = allItems.slice(0, 35);
 
-      let h = '<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num">บรรทัด</th><th class="num">จำนวนชิ้น</th><th class="num">หน่วยหยิบ</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>';
+      const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
+      const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
+
+      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num">บรรทัด</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
       if (!displayItems.length) {
         h += '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
       } else {
