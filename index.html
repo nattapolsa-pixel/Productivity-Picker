@@ -99,12 +99,12 @@
       <div class="grid">
         <div class="card wide">
           <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
-          <div class="sub">แท่ง = จำนวนชิ้น (ซ้าย) · เส้น = Productivity เฉลี่ย หยิบ/ชม. (ขวา)</div>
+          <div class="sub">แท่ง = ปริมาณตามหน่วยที่เลือก (ซ้าย) · เส้น = Productivity เฉลี่ยตามหน่วยที่เลือก (ขวา)</div>
           <div class="controls"><div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button data-mode="week">รายสัปดาห์</button><button data-mode="month">รายเดือน</button></div></div>
           <div class="chartbox"><canvas id="trend"></canvas></div>
         </div>
         <div class="card wide">
-          <h3>สัดส่วนตามประเภท (BPS vs PTT)</h3><div class="sub">จำนวนชิ้น</div>
+          <h3>สัดส่วนตามประเภท (BPS vs PTT)</h3><div class="sub">คำนวณตามหน่วยที่เลือก</div>
           <div class="chartbox"><canvas id="cat"></canvas></div>
         </div>
       </div>
@@ -112,8 +112,8 @@
 
     <section class="page" data-page="prod">
       <div class="card wide">
-        <h3>Productivity รายคน — Top 12 (หยิบ/ชม.)</h3>
-        <div class="sub">Productivity = จำนวนชิ้น ÷ (ชั่วโมงกะ + OT) · แยกกะเช้า/ดึก</div>
+        <h3>Productivity รายคน — Top 12</h3>
+        <div class="sub">Productivity = ปริมาณตามหน่วยที่เลือก ÷ (ชั่วโมงกะ + OT) · แยกกะเช้า/ดึก</div>
         <div class="chartbox tall"><canvas id="picker"></canvas></div>
         <div class="note">คิดจากชั่วโมงกะจริง: กะเช้า 07:00–16:00 (OT 16:30–19:00) · กะดึก 19:00–04:00 (OT 04:30–07:00) — ตัวหาร = 9 ชม. + OT (นับบล็อกละ 30 นาที) ปรับค่า REG_HOURS ได้ในไฟล์ app.js ถ้าหักพักเที่ยงเป็น 8 ชม.</div>
       </div>
@@ -121,7 +121,7 @@
 
     <section class="page" data-page="zones">
       <div class="card wide" style="margin-bottom:18px">
-        <h3>ปริมาณหยิบตามโซน</h3><div class="sub">จำนวนชิ้นแยกตาม Zone (2 ตัวหน้าของ Location)</div>
+        <h3>ปริมาณหยิบตามโซน</h3><div class="sub">ปริมาณตามหน่วยที่เลือก แยกตาม Zone (2 ตัวหน้าของ Location)</div>
         <div class="chartbox"><canvas id="zone"></canvas></div>
       </div>
       <div class="card">
@@ -142,7 +142,7 @@
 
     <section class="page" data-page="time">
       <div class="card wide">
-        <h3>ช่วงเวลาที่หยิบ (Time Slot)</h3><div class="sub">จำนวนชิ้นตามชั่วโมง — ดูช่วงงานหนัก</div>
+        <h3>ช่วงเวลาที่หยิบ (Time Slot)</h3><div class="sub">ปริมาณตามหน่วยที่เลือก แยกตามชั่วโมง — ดูช่วงงานหนัก</div>
         <div class="chartbox tall"><canvas id="slot"></canvas></div>
       </div>
     </section>
@@ -161,7 +161,7 @@
       </div>
 
       <div class="card wide" style="margin-bottom:20px;">
-        <h3>สินค้าหยิบเยอะสุด — Top 10</h3><div class="sub">ชื่อสินค้า (Owner) · จำนวนชิ้น (คำนวณเฉพาะรายการที่ไม่ถูกยกเว้น)</div>
+        <h3>สินค้าหยิบเยอะสุด — Top 10</h3><div class="sub">ชื่อสินค้า (Owner) · ปริมาณตามหน่วยที่เลือก (เฉพาะรายการที่ไม่ถูกยกเว้น)</div>
         <div class="chartbox tall"><canvas id="item"></canvas></div>
       </div>
 
@@ -212,6 +212,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260724-stream-dashboard1"></script>
+<script src="app.js?v=20260724-pick-units-v2"></script>
 </body>
 </html>

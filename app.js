@@ -5,6 +5,7 @@
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v2';
 // ==========================================================================
 
 // ====== ตั้งค่ากะ/OT (ปรับได้) ======
@@ -23,7 +24,11 @@ Chart.defaults.font.family = "'Prompt',sans-serif";
 Chart.defaults.color = '#64748b';
 
 // ===== state =====
-const emptyData = () => ({meta:{},PTT:{dates:[],pickers:[],skus:[],rows:[]},BPS:{dates:[],pickers:[],skus:[],rows:[]}});
+const emptyData = () => ({
+  meta:{schema_version:DASHBOARD_SCHEMA_VERSION},
+  PTT:{row_width:7,dates:[],pickers:[],skus:[],rows:[]},
+  BPS:{row_width:7,dates:[],pickers:[],skus:[],rows:[]}
+});
 let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
 let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
@@ -53,39 +58,24 @@ function shiftOf(ds, t){
 // OT = จำนวนบล็อก 30 นาทีที่ทำครบ นับจากนาทีที่ 570 (16:30/04:30) ต้นกะ, สูงสุด OT_MAX
 function otHours(maxSm){ if(maxSm <= 570) return 0; return Math.min(OT_MAX, Math.floor((maxSm - 570)/30) * 0.5); }
 
-// รองรับทั้ง payload เดิมแบบ array ต่อแถว และ payload ใหม่แบบ flat ที่ประหยัด memory
+// payload รุ่นปัจจุบันเป็น flat array 7 ช่องต่อแถว
 function packedRowCount(S){
   const width = Number(S && S.row_width) || 0;
   return S && Array.isArray(S.rows) ? (width ? Math.floor(S.rows.length / width) : S.rows.length) : 0;
 }
-function packedRowValue(S, rowIndex, columnIndex){
-  const width = Number(S && S.row_width) || 0;
-  return width ? S.rows[rowIndex * width + columnIndex] : S.rows[rowIndex][columnIndex];
-}
 function packedRowData(S, i){
-  const w = Number(S && S.row_width) || 6;
-  if (w === 7) {
-    return {
-      dateIdx: S.rows[i*7],
-      zone: S.rows[i*7+1],
-      pickerIdx: S.rows[i*7+2],
-      skuIdx: S.rows[i*7+3],
-      pcs: S.rows[i*7+4],
-      pickQty: S.rows[i*7+5],
-      tmin: S.rows[i*7+6]
-    };
-  } else {
-    const q = S.rows[i*w+4];
-    return {
-      dateIdx: S.rows[i*w],
-      zone: S.rows[i*w+1],
-      pickerIdx: S.rows[i*w+2],
-      skuIdx: S.rows[i*w+3],
-      pcs: q,
-      pickQty: q,
-      tmin: S.rows[i*w+5]
-    };
+  if (Number(S && S.row_width) !== 7) {
+    throw new Error('Dashboard payload schema ไม่ตรงกับหน้าเว็บ');
   }
+  return {
+    dateIdx: S.rows[i*7],
+    zone: S.rows[i*7+1],
+    pickerIdx: S.rows[i*7+2],
+    skuIdx: S.rows[i*7+3],
+    pcs: S.rows[i*7+4],
+    pickQty: S.rows[i*7+5],
+    tmin: S.rows[i*7+6]
+  };
 }
 
 // precompute ข้อมูลกะต่อแถว "ครั้งเดียว" หลังโหลดข้อมูล -> re-render (เปลี่ยน filter) เร็วขึ้นมาก
@@ -159,7 +149,7 @@ function aggregate(system, from, to, sf){
     // group ต่อ (คน, วันของกะ, กะ) เพื่อคิด work-hours + OT
     const k = picker+'|'+si.sd+'|'+si.sh;
     const b = grp[k] || (grp[k] = {picker, sd:si.sd, sh:si.sh, pcs:0, q:0, n:0, mx:-1});
-    b.pcs += pVal; b.q += qVal; b.n++; if(r.tmin > b.mx) b.mx = r.tmin;
+    b.pcs += pVal; b.q += qVal; b.n++; if(si.sm > b.mx) b.mx = si.sm;
   }
 
   const groups = Object.values(grp);
@@ -249,13 +239,25 @@ function aggregate(system, from, to, sf){
 function sysQty(system, from, to, sf){
   const S = DATA[system], SH = S._sh || []; let q = 0;
   const rowCount = packedRowCount(S);
-  for(let i=0;i<rowCount;i++){ const si = SH[i]; if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)) { const r = packedRowData(S, i); q += r.pickQty; } }
+  for(let i=0;i<rowCount;i++){
+    const si = SH[i];
+    if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)){
+      const r = packedRowData(S, i), sku = S.skus[r.skuIdx];
+      if(excludedSkus.size === 0 || !excludedSkus.has(sku)) q += r.pickQty;
+    }
+  }
   return q;
 }
 function sysPcs(system, from, to, sf){
   const S = DATA[system], SH = S._sh || []; let q = 0;
   const rowCount = packedRowCount(S);
-  for(let i=0;i<rowCount;i++){ const si = SH[i]; if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)) { const r = packedRowData(S, i); q += r.pcs; } }
+  for(let i=0;i<rowCount;i++){
+    const si = SH[i];
+    if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)){
+      const r = packedRowData(S, i), sku = S.skus[r.skuIdx];
+      if(excludedSkus.size === 0 || !excludedSkus.has(sku)) q += r.pcs;
+    }
+  }
   return q;
 }
 
@@ -416,15 +418,12 @@ const builders = {
     function drawTrend(mode){
       const b = bucket(mode);
       const mainQty = isPcs ? b.pcs : b.qty;
-      const secQty = isPcs ? b.qty : b.pcs;
-      const mainLabel = isPcs ? 'จำนวนชิ้น (หลัก)' : 'หน่วยหยิบ (หลัก)';
-      const secLabel = isPcs ? 'หน่วยหยิบ' : 'จำนวนชิ้น';
+      const mainLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
       const prodData = isPcs ? b.pcsProd : b.prod;
       const prodLabel = isPcs ? 'Productivity (ชิ้น/ชม.)' : 'Productivity (หยิบ/ชม.)';
 
       const cfg = {data:{labels:b.labels, datasets:[
         {type:'bar', label:mainLabel, data:mainQty, backgroundColor:isPcs?'rgba(20,184,166,.85)':'rgba(99,102,241,.85)', borderRadius:6, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:isPcs?'#0f766e':'#4338ca', font:{weight:'600', size:10}}},
-        {type:'bar', label:secLabel, data:secQty, backgroundColor:isPcs?'rgba(99,102,241,.35)':'rgba(20,184,166,.35)', borderRadius:6, yAxisID:'y', datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#64748b', font:{weight:'500', size:9}}},
         {type:'line', label:prodLabel, data:prodData, borderColor:'#f43f5e', backgroundColor:'#f43f5e', tension:.35, borderWidth:3, pointRadius:5, pointBackgroundColor:'#fff', pointBorderWidth:2, yAxisID:'y1', datalabels:{align:'top', color:'#e11d48', formatter:fmt, font:{weight:'600'}}}
       ]}, options:{maintainAspectRatio:false, layout:{padding:{top:24}}, plugins:{legend:{display:true, position:'top', labels:{usePointStyle:true, boxWidth:8}}}, scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, y1:{position:'right', grid:{drawOnChartArea:false}}}}};
       const ex = Chart.getChart('trend'); if(ex) ex.destroy();
@@ -438,7 +437,7 @@ const builders = {
     const cqPcs = sysPcs('PTT', dfrom, dto, shiftF), bqPcs = sysPcs('BPS', dfrom, dto, shiftF);
     const cqQty = sysQty('PTT', dfrom, dto, shiftF), bqQty = sysQty('BPS', dfrom, dto, shiftF);
     const catData = isPcs ? [cqPcs, bqPcs] : [cqQty, bqQty];
-    const unitTxt = isPcs ? 'ชิ้น' : 'หน่วย';
+    const unitTxt = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
 
     new Chart(document.getElementById('cat'), {
       type:'doughnut',
@@ -506,13 +505,16 @@ const builders = {
     const z = [...A.by_zone];
     const isPcs = unitMode === 'pcs';
     z.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
+    const chartValues = isPcs ? z.map(x=>x.pcs) : z.map(x=>x.qty);
+    const chartLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
 
     new Chart(document.getElementById('zone'), {
       type:'bar',
-      data:{labels:z.map(x=>x.zone), datasets:[
-        {label:'จำนวนชิ้น', data:z.map(x=>x.pcs), backgroundColor:isPcs?'rgba(20,184,166,.9)':'rgba(99,102,241,.4)', borderRadius:6},
-        {label:'หน่วยหยิบ', data:z.map(x=>x.qty), backgroundColor:isPcs?'rgba(99,102,241,.4)':'rgba(20,184,166,.9)', borderRadius:6}
-      ]},
+      data:{labels:z.map(x=>x.zone), datasets:[{
+        label:chartLabel, data:chartValues,
+        backgroundColor:isPcs?'rgba(20,184,166,.9)':'rgba(99,102,241,.9)',
+        borderRadius:6
+      }]},
       options:{
         maintainAspectRatio:false, layout:{padding:{top:22}},
         plugins:{
@@ -568,12 +570,15 @@ const builders = {
   time(){
     const t = A.by_timeslot;
     const isPcs = unitMode === 'pcs';
+    const chartValues = isPcs ? t.map(x=>x.pcs) : t.map(x=>x.qty);
+    const chartLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
     new Chart(document.getElementById('slot'), {
       type:'bar',
-      data:{labels:t.map(x=>x.label), datasets:[
-        {label:'จำนวนชิ้น', data:t.map(x=>x.pcs), backgroundColor:isPcs?'rgba(20,184,166,.9)':'rgba(99,102,241,.4)', borderRadius:6},
-        {label:'หน่วยหยิบ', data:t.map(x=>x.qty), backgroundColor:isPcs?'rgba(99,102,241,.4)':'rgba(20,184,166,.9)', borderRadius:6}
-      ]},
+      data:{labels:t.map(x=>x.label), datasets:[{
+        label:chartLabel, data:chartValues,
+        backgroundColor:isPcs?'rgba(20,184,166,.9)':'rgba(99,102,241,.9)',
+        borderRadius:6
+      }]},
       options:{
         maintainAspectRatio:false, layout:{padding:{top:22}},
         plugins:{
@@ -594,25 +599,19 @@ const builders = {
       const nm = x.name || x.sku;
       return nm.length > 32 ? nm.slice(0, 30) + '…' : nm;
     });
+    const chartValues = isPcs ? it.map(x=>x.pcs) : it.map(x=>x.qty);
+    const chartLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
 
     new Chart(document.getElementById('item'), {
       type: 'bar',
       data: {
         labels: labels,
-        datasets: [
-          {
-            label: 'จำนวนชิ้น',
-            data: it.map(x => x.pcs),
-            backgroundColor: isPcs ? 'rgba(245,158,11,.9)' : 'rgba(245,158,11,.4)',
-            borderRadius: 6
-          },
-          {
-            label: 'หน่วยหยิบ',
-            data: it.map(x => x.qty),
-            backgroundColor: isPcs ? 'rgba(99,102,241,.4)' : 'rgba(99,102,241,.9)',
-            borderRadius: 6
-          }
-        ]
+        datasets: [{
+          label: chartLabel,
+          data: chartValues,
+          backgroundColor: isPcs ? 'rgba(245,158,11,.9)' : 'rgba(99,102,241,.9)',
+          borderRadius: 6
+        }]
       },
       options: {
         indexAxis: 'y',
@@ -928,8 +927,13 @@ async function loadDataOnce(force){
       throw new Error('Apps Script ตอบกลับมาไม่ใช่ข้อมูล JSON');
     }
     if(j && j.error) throw new Error(j.error);
-    const valid = j && j.PTT && j.BPS && Array.isArray(j.PTT.rows) && Array.isArray(j.BPS.rows);
-    if(!valid) throw new Error('รูปแบบข้อมูลไม่ถูกต้อง');
+    const validSource = s =>
+      s && Number(s.row_width) === 7 &&
+      Array.isArray(s.dates) && Array.isArray(s.pickers) && Array.isArray(s.skus) &&
+      Array.isArray(s.rows) && s.rows.length % 7 === 0;
+    const valid = j && j.meta && j.meta.schema_version === DASHBOARD_SCHEMA_VERSION &&
+      validSource(j.PTT) && validSource(j.BPS);
+    if(!valid) throw new Error('รูปแบบข้อมูล BigQuery เป็นคนละรุ่นกับหน้าเว็บ กรุณากดรีเฟรชอีกครั้ง');
 
     const packedRows = packedRowCount(j.PTT) + packedRowCount(j.BPS);
     const totalRows = Number(j.meta && j.meta.rows) || packedRows;

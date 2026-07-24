@@ -82,10 +82,9 @@ SELECT
   sku,
   owner,
   uom_qty,
-  -- คำนวณจำนวนหน่วยหยิบจริง (Pick Units / ลัง):
-  -- H-I คือหน่วยหยิบลัง (Case Qty) เป็นหลัก หาก UOMQTY >= 999 หรือเป็น CARWMS/NULL ให้คิดเป็น 1 (หน่วยชิ้น)
-  -- ผลลัพธ์ต้องเป็นจำนวนเต็ม (INT64) ไม่มีจุดทศนิยม
-  CAST(ROUND(SAFE_DIVIDE(qty, CASE WHEN uom_qty >= 999 OR uom_qty IS NULL OR uom_qty <= 0 THEN 1 ELSE uom_qty END)) AS INT64) AS pick_qty,
+  -- Infor WMS: QTY = จำนวนชิ้นฐาน, UOMQTY = จำนวนหน่วย UOM ที่หยิบจริง
+  -- QTY / UOMQTY คือ pack factor (ชิ้นต่อหน่วย) จึงห้ามนำมา SUM เป็นยอดหน่วยหยิบ
+  uom_qty AS pick_qty,
   UPPER(category) AS category,
   picker_id,
   location,

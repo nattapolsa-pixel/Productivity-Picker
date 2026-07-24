@@ -19,6 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v2';
 const MAX_UPLOAD_ROWS = 50000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const JOB_DEADLINE_MS = 240000;
@@ -66,7 +67,8 @@ function bumpDataRevision_() {
 }
 
 function cachePrefix_(revision) {
-  return 'dash_' + String(revision || '0') + '_';
+  // ผูก cache กับ schema เพื่อไม่ให้ deployment ใหม่อ่าน payload รุ่นเก่า
+  return 'dash_' + DASHBOARD_SCHEMA_VERSION + '_' + String(revision || '0') + '_';
 }
 
 function clearCache_(revision) {
@@ -585,7 +587,7 @@ function buildDashboardData_(useQueryCache) {
     "zone, picker_id AS picker, sku, " +
     "EXTRACT(HOUR FROM pick_ts_local)*60 + EXTRACT(MINUTE FROM pick_ts_local) AS tmin, " +
     "qty AS pcs, " +
-    "CAST(ROUND(SAFE_DIVIDE(qty, CASE WHEN uom_qty >= 999 OR uom_qty IS NULL OR uom_qty <= 0 THEN 1 ELSE uom_qty END)) AS INT64) AS pick_qty " +
+    "uom_qty AS pick_qty " +
     "FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".v_pick_enriched` " +
     "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY)";
 
@@ -613,6 +615,8 @@ function buildDashboardData_(useQueryCache) {
 
   return {
     meta: { generated: new Date().toISOString(), source: 'BigQuery v_pick_enriched',
+            schema_version: DASHBOARD_SCHEMA_VERSION,
+            unit_definition: { pieces: 'qty', pick_units: 'uom_qty' },
             recent_days: RECENT_DAYS, rows: total },
     PTT: { row_width: 7, dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
     BPS: { row_width: 7, dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }
