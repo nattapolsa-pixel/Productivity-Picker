@@ -349,7 +349,6 @@ function renderKPIs(){
   const k = A.kpis;
   const isPcs = unitMode === 'pcs';
   const defs = [
-    {lbl:'บรรทัดที่หยิบ', val:k.lines, unit:'บรรทัด', grad:'linear-gradient(90deg,#6366f1,#8b5cf6)'},
     {
       lbl: isPcs ? 'ปริมาณชิ้นรวม ★' : 'จำนวนชิ้นรวม',
       val: k.pcs,
@@ -493,8 +492,7 @@ const builders = {
                 return [
                   ` Productivity (หยิบ): ${fmt(picker.avg_prod)} หยิบ/ชม.`,
                   ` Productivity (ชิ้น): ${fmt(picker.avg_pcs_prod)} ชิ้น/ชม.`,
-                  ` ปริมาณ: ${fmt(picker.pcs)} ชิ้น (${fmt(picker.qty)} หน่วยหยิบ)`,
-                  ` บรรทัด: ${fmt(picker.lines)} บรรทัด (OT: ${picker.ot > 0 ? picker.ot+' ชม.' : '-'})`
+                  ` ปริมาณ: ${fmt(picker.pcs)} ชิ้น (${fmt(picker.qty)} หน่วยหยิบ) (OT: ${picker.ot > 0 ? picker.ot+' ชม.' : '-'})`
                 ];
               }
             }
@@ -534,7 +532,7 @@ const builders = {
       const e = document.createElement('div'); e.className = 'tile'; e.style.background = 'rgb('+mx.join(',')+')';
       if(t < .35) e.style.color = '#334155';
       const mainTxt = isPcs ? `${fmt(x.pcs)} ชิ้น (${fmt(x.qty)} หน่วย)` : `${fmt(x.qty)} หน่วย (${fmt(x.pcs)} ชิ้น)`;
-      e.innerHTML = '<div class="z">'+x.zone+'</div><div class="q">'+mainTxt+'</div><div class="p">'+x.pickers+' คน · '+fmt(x.lines)+' บรรทัด</div>';
+      e.innerHTML = '<div class="z">'+x.zone+'</div><div class="q">'+mainTxt+'</div><div class="p">'+x.pickers+' คน</div>';
       heat.appendChild(e);
     });
   },
@@ -547,8 +545,8 @@ const builders = {
     const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
     const prodHeaderLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
 
-    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>กะ</th><th>โซนหลัก</th><th class="num">บรรทัด</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (Pcs) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Units) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th></tr></thead><tbody>`;
-    if(!list.length) h += '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
+    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (Pcs) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Units) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th></tr></thead><tbody>`;
+    if(!list.length) h += '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
     list.forEach((p,i) => {
       const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
       const qtyCellStyle = !isPcs ? 'background:#eef2ff;font-weight:700;color:#4338ca;' : 'color:#4338ca;font-weight:600;';
@@ -559,7 +557,6 @@ const builders = {
         <td><b>${p.picker}</b></td>
         <td>${SHIFT_LABEL[p.shift] || p.shift}</td>
         <td><span class="pill">${p.zone}</span></td>
-        <td class="num">${fmt(p.lines)}</td>
         <td class="num" style="${pcsCellStyle}">${fmt(p.pcs)}</td>
         <td class="num" style="${qtyCellStyle}">${fmt(p.qty)}</td>
         <td class="num">${p.ot > 0 ? fmt(p.ot) : '-'}</td>
@@ -636,8 +633,7 @@ const builders = {
                 return [
                   ` SKU: ${item.sku}`,
                   ` Owner: ${item.owner || '-'}`,
-                  ` จำนวน: ${fmt(item.pcs)} ชิ้น (${fmt(item.qty)} หน่วยหยิบ)`,
-                  ` จำนวนบรรทัด: ${fmt(item.lines)} บรรทัด`
+                  ` จำนวน: ${fmt(item.pcs)} ชิ้น (${fmt(item.qty)} หน่วยหยิบ)`
                 ];
               }
             }
@@ -684,9 +680,9 @@ const builders = {
       const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
       const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
 
-      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num">บรรทัด</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
+      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
       if (!displayItems.length) {
-        h += '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
+        h += '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
       } else {
         displayItems.forEach((x, i) => {
           const isEx = excludedSkus.has(x.sku);
@@ -700,14 +696,16 @@ const builders = {
             ? `<button onclick="toggleExcludeSku('${x.sku}')" style="border:0;background:#dcfce7;color:#15803d;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">✅ นำกลับมาคำนวณ</button>`
             : `<button onclick="toggleExcludeSku('${x.sku}')" style="border:0;background:#fee2e2;color:#b91c1c;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">🚫 ยกเว้นคำนวณ</button>`;
 
+          const pcsCellStyle = isPcs ? 'font-weight:700;color:#0284c7;background:#f0f9ff;' : 'font-weight:600;color:#0f766e;';
+          const qtyCellStyle = !isPcs ? 'font-weight:700;color:#4338ca;background:#eef2ff;' : 'font-weight:600;color:#4338ca;';
+
           h += `<tr ${rowBg}>
             <td><span class="rank">${i + 1}</span></td>
             <td><b>${x.sku}</b></td>
             <td ${nameStyle}>${x.name || '-'}</td>
             <td><span class="pill">${x.owner || '-'}</span></td>
-            <td class="num">${fmt(x.lines)}</td>
-            <td class="num" style="font-weight:600;color:${isEx ? '#94a3b8' : '#0f766e'}">${fmt(x.pcs)}</td>
-            <td class="num" style="font-weight:600;color:${isEx ? '#94a3b8' : '#4338ca'}">${fmt(x.qty)}</td>
+            <td class="num" style="${isEx ? 'color:#94a3b8;' : pcsCellStyle}">${fmt(x.pcs)}</td>
+            <td class="num" style="${isEx ? 'color:#94a3b8;' : qtyCellStyle}">${fmt(x.qty)}</td>
             <td style="text-align:center;display:flex;align-items:center;justify-content:center;gap:10px;">${statusBadge} ${btnAction}</td>
           </tr>`;
         });

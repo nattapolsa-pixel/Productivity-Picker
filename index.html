@@ -37,7 +37,7 @@
   .daterange{color:var(--muted);font-size:13px}.daterange b{color:var(--ink)}
   .page{display:none}.page.active{display:block;animation:fade .45s}
   @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-  .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:15px;margin-bottom:20px}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:15px;margin-bottom:20px}
   .kpi{background:var(--card);border-radius:18px;padding:17px;position:relative;overflow:hidden;box-shadow:0 10px 30px -14px rgba(30,41,59,.2);transition:transform .25s}
   .kpi:hover{transform:translateY(-4px)}
   .kpi .bar{position:absolute;top:0;left:0;right:0;height:4px}
@@ -134,7 +134,7 @@
     <section class="page" data-page="pickers">
       <div class="card wide">
         <h3>ตารางพนักงานหยิบ (เรียงตามปริมาณ)</h3>
-        <div class="sub">รหัส Picker · โซนหลัก · จำนวนบรรทัด · จำนวนชิ้น · Productivity</div>
+        <div class="sub">รหัส Picker · โซนหลัก · จำนวนชิ้น · หน่วยหยิบ · Productivity</div>
         <div style="overflow-x:auto"><table id="ptable"></table></div>
         <div class="note">รหัสตัวเลขคือ Picker ID — เมื่อได้ตาราง map รหัส→ชื่อ จะแสดงเป็นชื่อจริงให้</div>
       </div>
