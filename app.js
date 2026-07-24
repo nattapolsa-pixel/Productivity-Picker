@@ -450,7 +450,8 @@ loadData();
           statusText.textContent = '⚙️ กำลังประมวลผลไฟล์ Excel (.xlsx)...';
           progressBar.style.width = '30%';
           const buffer = await selectedFile.arrayBuffer();
-          const workbook = XLSX.read(buffer, { type: 'array', dense: true });
+          // cellDates:true → ให้ XLSX อ่าน Date cell เป็น JS Date แทน serial number
+          const workbook = XLSX.read(buffer, { type: 'array', dense: true, cellDates: true });
           const firstSheet = workbook.SheetNames[0];
           const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { header: 1, raw: true, defval: '' });
           rows = parseExcelToRows(sheetData);
@@ -493,6 +494,33 @@ loadData();
     };
   }
 
+  // แปลง Date cell จาก Excel เป็น "DD/MM/YYYY HH:mm"
+  // รองรับ: JS Date object, Excel serial number (ตัวเลข), หรือ string เดิม
+  function fmtExcelDate(v) {
+    if (v == null || v === '') return '';
+    if (v instanceof Date) {
+      // JS Date object (เมื่อใช้ cellDates:true)
+      const dd = String(v.getDate()).padStart(2, '0');
+      const mm = String(v.getMonth() + 1).padStart(2, '0');
+      const hh = String(v.getHours()).padStart(2, '0');
+      const mi = String(v.getMinutes()).padStart(2, '0');
+      return `${dd}/${mm}/${v.getFullYear()} ${hh}:${mi}`;
+    }
+    if (typeof v === 'number' && v > 1000) {
+      // Excel serial date → แปลงมือ ใช้ XLSX.SSF ถ้ามี หรือคำนวณเอง
+      const epoch = Math.round((v - 25569) * 86400 * 1000);
+      const d = new Date(epoch);
+      if (!isNaN(d.getTime())) {
+        const dd = String(d.getUTCDate()).padStart(2, '0');
+        const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const hh = String(d.getUTCHours()).padStart(2, '0');
+        const mi = String(d.getUTCMinutes()).padStart(2, '0');
+        return `${dd}/${mm}/${d.getUTCFullYear()} ${hh}:${mi}`;
+      }
+    }
+    return String(v).trim();   // string เดิม (เช่น "20/07/2026 19:43") ส่งตรง
+  }
+
   function parseExcelToRows(sheetData) {
     if (!sheetData || sheetData.length <= 2) return [];
     const parsedRows = [];
@@ -513,7 +541,7 @@ loadData();
         cols[55] != null ? String(cols[55]).trim() : '',
         String(cols[56] || cols[58] || '').trim(),
         cols[64] != null ? String(cols[64]).trim() : '',
-        cols[66] != null ? String(cols[66]).trim() : ''
+        fmtExcelDate(cols[66])   // Column BO: แปลง Date เป็น "DD/MM/YYYY HH:mm"
       ]);
     }
     return parsedRows;
