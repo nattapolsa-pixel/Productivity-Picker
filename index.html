@@ -128,14 +128,33 @@
     </section>
 
     <section class="page" data-page="items">
+      <!-- แถบแสดงรายการสินค้าที่ถูกยกเว้นจากการคำนวณ -->
+      <div id="excludedBar" style="display:none;margin-bottom:18px;background:#fff7ed;border:1px solid #ffedd5;border-radius:16px;padding:14px 18px;box-shadow:0 4px 12px rgba(249,115,22,0.08);">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px;">
+          <div style="font-weight:600;color:#c2410c;font-size:14px;display:flex;align-items:center;gap:6px;">
+            <span>🚫 สินค้าที่ถูกยกเว้นจากการคำนวณ</span>
+            <span id="excludedCountBadge" style="background:#ea580c;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700;">0</span>
+          </div>
+          <button id="btnClearExcluded" style="border:0;background:#ffedd5;color:#c2410c;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">🧹 ยกเลิกการยกเว้นทั้งหมด</button>
+        </div>
+        <div id="excludedBadges" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+      </div>
+
       <div class="card wide" style="margin-bottom:20px;">
-        <h3>สินค้าหยิบเยอะสุด — Top 10</h3><div class="sub">ชื่อสินค้า (Owner) · จำนวนชิ้น</div>
+        <h3>สินค้าหยิบเยอะสุด — Top 10</h3><div class="sub">ชื่อสินค้า (Owner) · จำนวนชิ้น (คำนวณเฉพาะรายการที่ไม่ถูกยกเว้น)</div>
         <div class="chartbox tall"><canvas id="item"></canvas></div>
       </div>
 
       <div class="card wide">
-        <h3>ตารางรายละเอียดสินค้า (Top 20 Items)</h3>
-        <div class="sub">รหัส SKU · ชื่อสินค้า · Owner · ปริมาณหยิบ (ชิ้น) · บรรทัด (Lines)</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+          <div>
+            <h3 style="margin:0;">รายการสินค้า &amp; ตั้งค่ายกเว้นคำนวณ</h3>
+            <div class="sub" style="margin:2px 0 0;">ค้นหา คัดเลือก หรือกด <b>🚫 ยกเว้น</b> สินค้าที่ต้องการให้ตัดออกจากระบบ</div>
+          </div>
+          <div style="position:relative;width:100%;max-width:320px;">
+            <input type="text" id="itemSearch" placeholder="🔍 ค้นหารหัส SKU / ชื่อสินค้า / Owner..." style="width:100%;padding:9px 14px;border:1px solid #cbd5e1;border-radius:12px;font-size:13px;outline:none;font-family:inherit;transition:.2s;" />
+          </div>
+        </div>
         <div style="overflow-x:auto"><table id="itable"></table></div>
       </div>
     </section>

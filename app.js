@@ -28,6 +28,8 @@ Chart.defaults.color = '#64748b';
 let DATA = (typeof RAW !== 'undefined') ? RAW : {meta:{},PTT:{dates:[],pickers:[],skus:[],rows:[]},BPS:{dates:[],pickers:[],skus:[],rows:[]}};
 let ALL_DATES = [], DMIN = '', DMAX = '';
 let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
+let excludedSkus = new Set();
+let itemSearchTerm = '';
 
 // ===== shift helpers =====
 // tmin = นาทีของวัน (เวลา local) · แปลงเป็น กะ + วันของกะ + นาทีนับจากต้นกะ
@@ -65,7 +67,7 @@ function aggregate(system, from, to, sf){
   const S = DATA[system];
   let lines = 0, qty = 0;
   const pickers = new Set(), zones = new Set();
-  const zoneMap = {}, itemMap = {}, slotMap = {}, dayVol = {}, grp = {}, pickerZoneCnt = {};
+  const zoneMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, pickerZoneCnt = {};
   const SH = S._sh;
 
   for(let i=0;i<S.rows.length;i++){
@@ -73,6 +75,13 @@ function aggregate(system, from, to, sf){
     if(si.sd < from || si.sd > to) continue;
     if(sf !== 'all' && si.sh !== sf) continue;
     const zone = r[1], picker = S.pickers[r[2]], sku = S.skus[r[3]], q = r[4];
+    
+    // บันทึกสถิติสินค้าทั้งหมด (สำหรับหน้าค้นหา/ตั้งค่ายกเว้น)
+    (itemMapAll[sku] = itemMapAll[sku] || {qty:0,lines:0}).qty += q; itemMapAll[sku].lines++;
+
+    // หาก SKU นี้ถูกเลือกยกเว้น -> ข้ามไม่นำมาคิดสถิติรวมของระบบ
+    if (excludedSkus.size > 0 && excludedSkus.has(sku)) continue;
+
     lines++; qty += q; pickers.add(picker); zones.add(zone);
     (zoneMap[zone] = zoneMap[zone] || {qty:0,lines:0,pk:new Set()}); zoneMap[zone].qty += q; zoneMap[zone].lines++; zoneMap[zone].pk.add(picker);
     (itemMap[sku] = itemMap[sku] || {qty:0,lines:0}); itemMap[sku].qty += q; itemMap[sku].lines++;
@@ -116,10 +125,15 @@ function aggregate(system, from, to, sf){
     const info = getItemInfo(sku);
     return { sku, name: info.name, owner: info.owner, qty: v.qty, lines: v.lines };
   }).sort((a,b)=>b.qty-a.qty);
+  const by_item_all = Object.entries(itemMapAll).map(([sku,v])=>{
+    const info = getItemInfo(sku);
+    return { sku, name: info.name, owner: info.owner, qty: v.qty, lines: v.lines, excluded: excludedSkus.has(sku) };
+  }).sort((a,b)=>b.qty-a.qty);
+
   const by_timeslot = Object.keys(slotMap).map(Number).sort((a,b)=>a-b).map(h=>({label:String(h).padStart(2,'0')+':00', qty:slotMap[h].qty, lines:slotMap[h].lines}));
 
   const totOt = groups.reduce((s,g)=>s+g.ot,0);
-  return {kpis:{lines, qty, pickers:pickers.size, ot:r1(totOt), avg_prod:r1(mean(groups.map(g=>g.prod)))}, daily, by_zone, by_picker, by_timeslot, by_item};
+  return {kpis:{lines, qty, pickers:pickers.size, ot:r1(totOt), avg_prod:r1(mean(groups.map(g=>g.prod)))}, daily, by_zone, by_picker, by_timeslot, by_item, by_item_all};
 }
 
 // qty รวมของระบบตามช่วง+กะ (สำหรับกราฟเทียบ)
@@ -336,28 +350,117 @@ const builders = {
       }
     });
 
-    // ตาราง Top 20 Items
-    const topItems = A.by_item.slice(0, 20);
-    let h = '<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num">บรรทัด (Lines)</th><th class="num">ปริมาณหยิบ (ชิ้น)</th></tr></thead><tbody>';
-    if (!topItems.length) {
-      h += '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
-    } else {
-      topItems.forEach((x, i) => {
-        h += `<tr>
-          <td><span class="rank">${i + 1}</span></td>
-          <td><b>${x.sku}</b></td>
-          <td>${x.name || '-'}</td>
-          <td><span class="pill">${x.owner || '-'}</span></td>
-          <td class="num">${fmt(x.lines)}</td>
-          <td class="num" style="font-weight:600;color:#0f766e">${fmt(x.qty)}</td>
-        </tr>`;
-      });
+    // ตารางค้นหาและตั้งค่ายกเว้นสินค้า
+    const searchInput = document.getElementById('itemSearch');
+    if (searchInput) {
+      searchInput.value = itemSearchTerm;
+      if (!searchInput._bound) {
+        searchInput._bound = true;
+        searchInput.addEventListener('input', (e) => {
+          itemSearchTerm = e.target.value.toLowerCase().trim();
+          renderItemTable();
+        });
+      }
     }
-    h += '</tbody>';
-    const elTable = document.getElementById('itable');
-    if (elTable) elTable.innerHTML = h;
+
+    function renderItemTable() {
+      const elTable = document.getElementById('itable');
+      if (!elTable) return;
+
+      let allItems = A.by_item_all || [];
+      if (itemSearchTerm) {
+        allItems = allItems.filter(x => 
+          (x.sku && x.sku.toLowerCase().includes(itemSearchTerm)) ||
+          (x.name && x.name.toLowerCase().includes(itemSearchTerm)) ||
+          (x.owner && x.owner.toLowerCase().includes(itemSearchTerm))
+        );
+      }
+
+      // แสดง 30 รายการแรกที่ตรงกับคำค้นหา
+      const displayItems = allItems.slice(0, 35);
+
+      let h = '<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num">บรรทัด</th><th class="num">ชิ้น</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>';
+      if (!displayItems.length) {
+        h += '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
+      } else {
+        displayItems.forEach((x, i) => {
+          const isEx = excludedSkus.has(x.sku);
+          const rowBg = isEx ? 'style="background:#fff7ed;"' : '';
+          const nameStyle = isEx ? 'style="text-decoration:line-through;color:#94a3b8;"' : '';
+          const statusBadge = isEx 
+            ? '<span style="background:#fee2e2;color:#991b1b;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">🚫 ยกเว้นอยู่</span>'
+            : '<span style="background:#dcfce7;color:#166534;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">✅ คำนวณปกติ</span>';
+
+          const btnAction = isEx
+            ? `<button onclick="toggleExcludeSku('${x.sku}')" style="border:0;background:#dcfce7;color:#15803d;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">✅ นำกลับมาคำนวณ</button>`
+            : `<button onclick="toggleExcludeSku('${x.sku}')" style="border:0;background:#fee2e2;color:#b91c1c;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">🚫 ยกเว้นคำนวณ</button>`;
+
+          h += `<tr ${rowBg}>
+            <td><span class="rank">${i + 1}</span></td>
+            <td><b>${x.sku}</b></td>
+            <td ${nameStyle}>${x.name || '-'}</td>
+            <td><span class="pill">${x.owner || '-'}</span></td>
+            <td class="num">${fmt(x.lines)}</td>
+            <td class="num" style="font-weight:600;color:${isEx ? '#94a3b8' : '#0f766e'}">${fmt(x.qty)}</td>
+            <td style="text-align:center;display:flex;align-items:center;justify-content:center;gap:10px;">${statusBadge} ${btnAction}</td>
+          </tr>`;
+        });
+      }
+      h += '</tbody>';
+      elTable.innerHTML = h;
+    }
+
+    renderItemTable();
   }
 };
+
+window.toggleExcludeSku = function(sku) {
+  if (excludedSkus.has(sku)) {
+    excludedSkus.delete(sku);
+  } else {
+    excludedSkus.add(sku);
+  }
+  render();
+};
+
+window.clearExcludedSkus = function() {
+  excludedSkus.clear();
+  render();
+};
+
+function renderExcludedBadges() {
+  const bar = document.getElementById('excludedBar');
+  const badgeContainer = document.getElementById('excludedBadges');
+  const countBadge = document.getElementById('excludedCountBadge');
+  const btnClear = document.getElementById('btnClearExcluded');
+
+  if (btnClear && !btnClear._bound) {
+    btnClear._bound = true;
+    btnClear.addEventListener('click', clearExcludedSkus);
+  }
+
+  if (!bar || !badgeContainer || !countBadge) return;
+
+  if (excludedSkus.size === 0) {
+    bar.style.display = 'none';
+    return;
+  }
+
+  bar.style.display = 'block';
+  countBadge.textContent = excludedSkus.size.toLocaleString();
+
+  let h = '';
+  excludedSkus.forEach(sku => {
+    const info = (typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) ? ITEM_MASTER[sku] : null;
+    const name = info ? (info.name || sku) : sku;
+    const displayLabel = name.length > 28 ? name.slice(0, 26) + '…' : name;
+    h += `<div style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #fdba74;color:#c2410c;padding:5px 12px;border-radius:20px;font-size:12.5px;font-weight:500;box-shadow:0 2px 6px rgba(249,115,22,0.12);">
+      <span><b>${sku}</b> · ${displayLabel}</span>
+      <button onclick="toggleExcludeSku('${sku}')" style="border:0;background:#ffedd5;color:#c2410c;width:18px;height:18px;border-radius:50%;cursor:pointer;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;line-height:1;" title="นำกลับมาคำนวณ">✕</button>
+    </div>`;
+  });
+  badgeContainer.innerHTML = h;
+}
 
 function destroyCharts(){ ['trend','cat','picker','zone','slot','item'].forEach(id => { const c = Chart.getChart(id); if(c) c.destroy(); }); }
 
@@ -372,6 +475,7 @@ function show(page){
 function render(){
   A = aggregate(sys, dfrom, dto, shiftF);
   destroyCharts();
+  renderExcludedBadges();
   document.getElementById('ptable').innerHTML = '';
   const elItable = document.getElementById('itable'); if (elItable) elItable.innerHTML = '';
   document.querySelectorAll('.num').forEach(el => el.removeAttribute('data-done'));
