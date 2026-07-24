@@ -130,8 +130,10 @@ function uploadToBigQuery_(rows, fmt, meta) {
   const requestId = Utilities.getUuid().replace(/-/g, '');
   const stageTable = 'pick_stage_' + requestId.substring(0, 24);
   const loadJobId = 'pick_load_' + requestId;
+  // uploadId ใช้ตอบกลับเพื่อตรวจสอบคำขอ แต่ไม่ต้องเขียนซ้ำในทุกแถวของ
+  // temporary stage เพราะ MERGE อ้างอิงด้วย pickdetailkey เท่านั้น
   const ndjson = normalized.rows.map(function(row) {
-    return JSON.stringify(Object.assign({}, row, { upload_id: uploadId }));
+    return JSON.stringify(row);
   }).join('\n');
   const blob = Utilities.newBlob(ndjson, 'application/octet-stream', stageTable + '.ndjson');
   if (blob.getBytes().length > MAX_POST_BYTES) {
@@ -406,8 +408,7 @@ function startLoadJob_(stageTable, jobId, blob) {
             { name: 'picker_id', type: 'STRING', mode: 'REQUIRED' },
             { name: 'location', type: 'STRING', mode: 'REQUIRED' },
             { name: 'pick_ts_source', type: 'STRING', mode: 'REQUIRED' },
-            { name: 'source_row_number', type: 'INT64', mode: 'REQUIRED' },
-            { name: 'upload_id', type: 'STRING', mode: 'REQUIRED' }
+            { name: 'source_row_number', type: 'INT64', mode: 'REQUIRED' }
           ]
         }
       }
