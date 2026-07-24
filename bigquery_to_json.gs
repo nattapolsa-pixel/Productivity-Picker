@@ -25,13 +25,30 @@ const CACHE_TTL = 1800;   // เก็บผลลัพธ์ไว้กี่
 function doGet(e) {
   try {
     const fresh = e && e.parameter && e.parameter.fresh === '1';   // ?fresh=1 = บังคับดึงใหม่ (ปุ่มรีเฟรช)
-    if (!fresh) { const cached = getCached_(); if (cached) return textJson_(cached); }
+    if (fresh) {
+      clearCache_();
+    } else {
+      const cached = getCached_();
+      if (cached) return textJson_(cached);
+    }
     const str = JSON.stringify(buildDashboardData_());
     try { setCached_(str); } catch (_) {}
     return textJson_(str);
   } catch (err) {
     return json_({ error: String(err && err.message || err) });
   }
+}
+
+function clearCache_() {
+  try {
+    const c = CacheService.getScriptCache();
+    const n = c.get('dash_n');
+    if (n) {
+      const cnt = parseInt(n, 10), keys = ['dash_n'];
+      for (let i = 0; i < cnt; i++) keys.push('dash_' + i);
+      c.removeAll(keys);
+    }
+  } catch (_) {}
 }
 
 function doPost(e) {
