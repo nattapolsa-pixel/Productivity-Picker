@@ -209,9 +209,11 @@ function buildControls(){
   updateFresh();
 }
 
+let lastFetchTime = null;
+
 function updateFresh(){
   const el = document.getElementById('freshTxt'); if(!el) return;
-  const g = DATA.meta && DATA.meta.generated;
+  const g = lastFetchTime || (DATA.meta && DATA.meta.generated);
   if(g){ const dt = new Date(g); el.textContent = 'ข้อมูล ณ ' + dt.toLocaleString('th-TH', {dateStyle:'medium', timeStyle:'short'}); }
   else el.textContent = DATA_URL ? '' : 'ข้อมูลสำรอง (data.js)';
 }
@@ -535,6 +537,7 @@ async function loadData(force){
     const j = await res.json();
     if(j && j.error) throw new Error(j.error);
     if(j && j.PTT && j.BPS){
+      lastFetchTime = new Date().toISOString();
       DATA = j; try{ localStorage.setItem(CACHE_KEY, JSON.stringify(j)); }catch(_){}
       const kSys=sys, kSh=shiftF, kF=dfrom, kT=dto;
       computeBounds();
