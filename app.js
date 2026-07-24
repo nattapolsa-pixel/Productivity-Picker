@@ -496,15 +496,16 @@ loadData();
 
   // แปลง Date cell จาก Excel เป็น "DD/MM/YYYY HH:mm"
   // รองรับ: JS Date object, Excel serial number (ตัวเลข), หรือ string เดิม
+  // *** ใช้ getUTC* เสมอ เพราะ XLSX.js สร้าง Date จาก UTC ที่ตรงกับเวลาในไฟล์ Excel ***
   function fmtExcelDate(v) {
     if (v == null || v === '') return '';
     if (v instanceof Date) {
-      // JS Date object (เมื่อใช้ cellDates:true)
-      const dd = String(v.getDate()).padStart(2, '0');
-      const mm = String(v.getMonth() + 1).padStart(2, '0');
-      const hh = String(v.getHours()).padStart(2, '0');
-      const mi = String(v.getMinutes()).padStart(2, '0');
-      return `${dd}/${mm}/${v.getFullYear()} ${hh}:${mi}`;
+      // XLSX (cellDates:true) สร้าง Date.UTC จากค่าใน Excel → ต้องใช้ getUTC* เพื่อได้เวลาที่ถูกต้อง
+      const dd = String(v.getUTCDate()).padStart(2, '0');
+      const mm = String(v.getUTCMonth() + 1).padStart(2, '0');
+      const hh = String(v.getUTCHours()).padStart(2, '0');
+      const mi = String(v.getUTCMinutes()).padStart(2, '0');
+      return `${dd}/${mm}/${v.getUTCFullYear()} ${hh}:${mi}`;
     }
     if (typeof v === 'number' && v > 1000) {
       // Excel serial date → แปลงมือ ใช้ XLSX.SSF ถ้ามี หรือคำนวณเอง
