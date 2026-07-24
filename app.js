@@ -112,10 +112,18 @@ function aggregate(system, from, to, sf){
   }).sort((a,b)=>b.qty-a.qty);
 
   function getItemInfo(sku) {
-    const m = (typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) ? ITEM_MASTER[sku] : null;
+    if (!sku) return { sku: '', name: '-', owner: '-' };
+    const s = String(sku).trim();
+    let m = (typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) ? ITEM_MASTER[s] : null;
+
+    if (!m && typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) {
+      const sNoZero = s.replace(/^0+/, '');
+      m = ITEM_MASTER[sNoZero];
+    }
+
     return {
-      sku: sku,
-      name: m ? (m.name || sku) : sku,
+      sku: s,
+      name: m ? (m.name || s) : s,
       owner: m ? (m.owner || '-') : '-'
     };
   }
