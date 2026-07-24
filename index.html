@@ -128,10 +128,15 @@
     </section>
 
     <section class="page" data-page="items">
-      <div class="card wide">
-        <h3>สินค้าหยิบเยอะสุด — Top 10</h3><div class="sub">รหัส Item · จำนวนชิ้น</div>
+      <div class="card wide" style="margin-bottom:20px;">
+        <h3>สินค้าหยิบเยอะสุด — Top 10</h3><div class="sub">ชื่อสินค้า (Owner) · จำนวนชิ้น</div>
         <div class="chartbox tall"><canvas id="item"></canvas></div>
-        <div class="note">แสดงเป็นรหัสสินค้า — เมื่อต่อ master (master_product_native) จะแสดงชื่อสินค้าจริง</div>
+      </div>
+
+      <div class="card wide">
+        <h3>ตารางรายละเอียดสินค้า (Top 20 Items)</h3>
+        <div class="sub">รหัส SKU · ชื่อสินค้า · Owner · ปริมาณหยิบ (ชิ้น) · บรรทัด (Lines)</div>
+        <div style="overflow-x:auto"><table id="itable"></table></div>
       </div>
     </section>
   </main>

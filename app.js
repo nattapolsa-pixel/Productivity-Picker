@@ -102,8 +102,20 @@ function aggregate(system, from, to, sf){
     return {picker, qty:o.q, lines:o.n, ot:r1(o.ot), shift, avg_prod:r1(mean(o.prods)), zone};
   }).sort((a,b)=>b.qty-a.qty);
 
+  function getItemInfo(sku) {
+    const m = (typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) ? ITEM_MASTER[sku] : null;
+    return {
+      sku: sku,
+      name: m ? (m.name || sku) : sku,
+      owner: m ? (m.owner || '-') : '-'
+    };
+  }
+
   const by_zone = Object.entries(zoneMap).map(([zone,v])=>({zone,qty:v.qty,lines:v.lines,pickers:v.pk.size})).sort((a,b)=>b.qty-a.qty);
-  const by_item = Object.entries(itemMap).map(([sku,v])=>({sku,qty:v.qty,lines:v.lines})).sort((a,b)=>b.qty-a.qty);
+  const by_item = Object.entries(itemMap).map(([sku,v])=>{
+    const info = getItemInfo(sku);
+    return { sku, name: info.name, owner: info.owner, qty: v.qty, lines: v.lines };
+  }).sort((a,b)=>b.qty-a.qty);
   const by_timeslot = Object.keys(slotMap).map(Number).sort((a,b)=>a-b).map(h=>({label:String(h).padStart(2,'0')+':00', qty:slotMap[h].qty, lines:slotMap[h].lines}));
 
   const totOt = groups.reduce((s,g)=>s+g.ot,0);
@@ -277,7 +289,73 @@ const builders = {
   },
   items(){
     const it = A.by_item.slice(0, 10);
-    new Chart(document.getElementById('item'), {type:'bar', data:{labels:it.map(x=>x.sku), datasets:[{data:it.map(x=>x.qty), backgroundColor:'rgba(245,158,11,.9)', borderRadius:6}]}, options:{indexAxis:'y', maintainAspectRatio:false, layout:{padding:{right:48}}, plugins:{legend:{display:false}, datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#b45309', font:{size:10, weight:'600'}}}, scales:{x:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, y:{grid:{display:false}}}}});
+    const labels = it.map(x => {
+      const nm = x.name || x.sku;
+      return nm.length > 32 ? nm.slice(0, 30) + '…' : nm;
+    });
+
+    new Chart(document.getElementById('item'), {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{
+          data: it.map(x => x.qty),
+          backgroundColor: 'rgba(245,158,11,.9)',
+          borderRadius: 6
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        maintainAspectRatio: false,
+        layout: { padding: { right: 55 } },
+        plugins: {
+          legend: { display: false },
+          datalabels: { anchor: 'end', align: 'end', formatter: fmt, color: '#b45309', font: { size: 10, weight: '600' } },
+          tooltip: {
+            callbacks: {
+              title: (ctx) => {
+                const item = it[ctx[0].dataIndex];
+                return item ? (item.name || item.sku) : '';
+              },
+              label: (ctx) => {
+                const item = it[ctx.dataIndex];
+                if (!item) return '';
+                return [
+                  ` SKU: ${item.sku}`,
+                  ` Owner: ${item.owner || '-'}`,
+                  ` จำนวน: ${fmt(item.qty)} ชิ้น (${fmt(item.lines)} บรรทัด)`
+                ];
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { color: '#eef2f7' }, ticks: { callback: fmt } },
+          y: { grid: { display: false } }
+        }
+      }
+    });
+
+    // ตาราง Top 20 Items
+    const topItems = A.by_item.slice(0, 20);
+    let h = '<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num">บรรทัด (Lines)</th><th class="num">ปริมาณหยิบ (ชิ้น)</th></tr></thead><tbody>';
+    if (!topItems.length) {
+      h += '<tr><td colspan="6" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
+    } else {
+      topItems.forEach((x, i) => {
+        h += `<tr>
+          <td><span class="rank">${i + 1}</span></td>
+          <td><b>${x.sku}</b></td>
+          <td>${x.name || '-'}</td>
+          <td><span class="pill">${x.owner || '-'}</span></td>
+          <td class="num">${fmt(x.lines)}</td>
+          <td class="num" style="font-weight:600;color:#0f766e">${fmt(x.qty)}</td>
+        </tr>`;
+      });
+    }
+    h += '</tbody>';
+    const elTable = document.getElementById('itable');
+    if (elTable) elTable.innerHTML = h;
   }
 };
 
@@ -295,6 +373,7 @@ function render(){
   A = aggregate(sys, dfrom, dto, shiftF);
   destroyCharts();
   document.getElementById('ptable').innerHTML = '';
+  const elItable = document.getElementById('itable'); if (elItable) elItable.innerHTML = '';
   document.querySelectorAll('.num').forEach(el => el.removeAttribute('data-done'));
   built = {};
   updateDateHeader();
