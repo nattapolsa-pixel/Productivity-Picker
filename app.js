@@ -214,7 +214,12 @@ let lastFetchTime = null;
 function updateFresh(){
   const el = document.getElementById('freshTxt'); if(!el) return;
   const g = lastFetchTime || (DATA.meta && DATA.meta.generated);
-  if(g){ const dt = new Date(g); el.textContent = 'ข้อมูล ณ ' + dt.toLocaleString('th-TH', {dateStyle:'medium', timeStyle:'short'}); }
+  const rows = DATA.meta && DATA.meta.rows;
+  if(g){
+    const dt = new Date(g);
+    const rowTxt = rows ? (' (สด BigQuery ' + fmt(rows) + ' รายการ)') : '';
+    el.textContent = 'ข้อมูล ณ ' + dt.toLocaleString('th-TH', {dateStyle:'medium', timeStyle:'short'}) + rowTxt;
+  }
   else el.textContent = DATA_URL ? '' : 'ข้อมูลสำรอง (data.js)';
 }
 
@@ -518,26 +523,20 @@ function setUpdating(on){
   if(on) el.textContent = '⏳ กำลังอัปเดตข้อมูลล่าสุด…'; else updateFresh();
 }
 
-// ===== โหลดข้อมูล: แสดง cache ทันที -> อัปเดตสดเบื้องหลัง =====
+// ===== โหลดข้อมูล: ดึงสด 100% ตรงจาก BigQuery =====
 async function loadData(force){
   document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
   if(!DATA_URL){ updateFresh(); boot(); return; }
 
-  // 1) มี cache ในเครื่อง -> แสดงทันที ไม่ต้องรอ BigQuery
-  let shown = false;
-  if(!force){
-    try{ const c = localStorage.getItem(CACHE_KEY); if(c){ DATA = JSON.parse(c); boot(); shown = true; setUpdating(true); } }catch(_){}
-  }
-  if(!shown) showLoading(true);
+  showLoading(true, 'กำลังดึงข้อมูลสด 100% ตรงจาก BigQuery…');
 
-  // 2) โหลดสดเบื้องหลัง แล้วค่อยสลับข้อมูล (คงระบบ/กะ/ช่วงวันที่ที่เลือกไว้)
   try{
-    const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') + (force?'fresh=1&':'') + 't=' + Date.now();
+    const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') + 'fresh=1&t=' + Date.now();
     const res = await fetch(url, {cache:'no-store'});
     const j = await res.json();
     if(j && j.error) throw new Error(j.error);
     if(j && j.PTT && j.BPS){
-      lastFetchTime = new Date().toISOString();
+      lastFetchTime = j.meta ? j.meta.generated : new Date().toISOString();
       DATA = j; try{ localStorage.setItem(CACHE_KEY, JSON.stringify(j)); }catch(_){}
       const kSys=sys, kSh=shiftF, kF=dfrom, kT=dto;
       computeBounds();
@@ -545,10 +544,11 @@ async function loadData(force){
       dfrom = (kF && kF>=DMIN && kF<=DMAX) ? kF : DMIN;
       dto   = (kT && kT>=DMIN && kT<=DMAX) ? kT : DMAX;
       buildControls(); render();
-    } else if(!shown) throw new Error('รูปแบบข้อมูลไม่ถูกต้อง');
+    } else throw new Error('รูปแบบข้อมูลไม่ถูกต้อง');
   }catch(err){
-    if(!shown){ try{ const c = localStorage.getItem(CACHE_KEY); if(c) DATA = JSON.parse(c); }catch(_){} boot(); }
-    console.warn('โหลดสดไม่สำเร็จ:', err);
+    console.warn('ดึงข้อมูลสดไม่สำเร็จ:', err);
+    try{ const c = localStorage.getItem(CACHE_KEY); if(c) DATA = JSON.parse(c); }catch(_){}
+    boot();
   }
   showLoading(false); setUpdating(false);
 }

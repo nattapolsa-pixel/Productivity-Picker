@@ -24,16 +24,9 @@ const CACHE_TTL = 1800;   // เก็บผลลัพธ์ไว้กี่
 
 function doGet(e) {
   try {
-    const fresh = e && e.parameter && e.parameter.fresh === '1';   // ?fresh=1 = บังคับดึงใหม่ (ปุ่มรีเฟรช)
-    if (fresh) {
-      clearCache_();
-    } else {
-      const cached = getCached_();
-      if (cached) return textJson_(cached);
-    }
-    const str = JSON.stringify(buildDashboardData_());
-    try { setCached_(str); } catch (_) {}
-    return textJson_(str);
+    // ดึงข้อมูลสดตรงจาก BigQuery 100% ทุกครั้ง (ไม่ใช้แคช เพื่อให้ตรงกับ BigQuery เป๊ะๆ)
+    const dataObj = buildDashboardData_();
+    return textJson_(JSON.stringify(dataObj));
   } catch (err) {
     return json_({ error: String(err && err.message || err) });
   }
