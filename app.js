@@ -11,6 +11,7 @@ const DASHBOARD_SCHEMA_VERSION = 'pick-units-v2';
 // ====== ตั้งค่ากะ/OT (ปรับได้) ======
 const REG_HOURS = 9;     // ชั่วโมงทำงานปกติต่อกะ (07:00–16:00 / 19:00–04:00). ถ้าหักพักเที่ยงให้ใช้ 8
 const OT_MAX    = 2.5;   // OT สูงสุดต่อกะ (ชม.)
+const MIN_PRODUCTIVE_HOURS = 3; // งานต่ำกว่านี้ไม่นับใน Productivity
 // OT นับเป็นบล็อกละ 30 นาทีที่ทำครบ เริ่มนับจาก 16:30 (เช้า) / 04:30 (ดึก)
 // ====================================
 
@@ -186,14 +187,16 @@ function aggregate(system, from, to, sf){
   groups.forEach(g => {
     g.ot = otHours(g.mx);
     g.wh = REG_HOURS + g.ot;
-    g.prod = g.q / g.wh;
-    g.pcsProd = g.pcs / g.wh;
+    g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
+    g.prod = g.countable ? (g.q / g.wh) : 0;
+    g.pcsProd = g.countable ? (g.pcs / g.wh) : 0;
   });
   const r1 = n => Math.round(n*10)/10;
   const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : 0;
+  const productiveGroups = groups.filter(g => g.countable);
 
   const byDate = {}, byDatePcs = {};
-  groups.forEach(g => {
+  productiveGroups.forEach(g => {
     (byDate[g.sd] = byDate[g.sd] || []).push(g.prod);
     (byDatePcs[g.sd] = byDatePcs[g.sd] || []).push(g.pcsProd);
   });
@@ -211,7 +214,10 @@ function aggregate(system, from, to, sf){
   groups.forEach(g => {
     const o = byPicker[g.picker] || (byPicker[g.picker] = {pcs:0,q:0,n:0,ot:0,prods:[],prodsPcs:[],sh:{}});
     o.pcs += g.pcs; o.q += g.q; o.n += g.n; o.ot += g.ot;
-    o.prods.push(g.prod); o.prodsPcs.push(g.pcsProd);
+    if(g.countable){
+      o.prods.push(g.prod);
+      o.prodsPcs.push(g.pcsProd);
+    }
     o.sh[g.sh] = (o.sh[g.sh]||0)+g.n;
   });
   const by_picker = Object.entries(byPicker).map(([picker,o]) => {
@@ -258,8 +264,8 @@ function aggregate(system, from, to, sf){
   return {
     kpis: {
       lines, pcs, qty: pickQty, pickers: pickers.size, ot: r1(totOt),
-      avg_prod: r1(mean(groups.map(g=>g.prod))),
-      avg_pcs_prod: r1(mean(groups.map(g=>g.pcsProd)))
+      avg_prod: r1(mean(productiveGroups.map(g=>g.prod))),
+      avg_pcs_prod: r1(mean(productiveGroups.map(g=>g.pcsProd)))
     },
     daily, by_zone, by_picker, by_timeslot, by_item, by_item_all
   };
