@@ -70,7 +70,28 @@ const DASHBOARD_TIMEOUT_MS = 180000;
 const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
 
 function normalizeSkuKey(sku){
-  return String(sku || '').trim();
+  const value = String(sku ?? '').replace(/\u00a0/g, ' ').trim();
+  // BigQuery/CSV บางชุดส่งรหัส SKU เป็นตัวเลขแบบ 123.0 แต่ในรายการยกเว้นเก็บเป็น 123
+  return /^\d+\.0+$/.test(value) ? value.slice(0, value.indexOf('.')) : value;
+}
+
+function skuKeyVariants(sku){
+  const key = normalizeSkuKey(sku);
+  if(!key) return [];
+  const keys = new Set([key]);
+  // รองรับรหัสเดียวกันที่ฝั่งหนึ่งมีเลข 0 นำหน้า และอีกฝั่งไม่มี
+  if(/^\d+$/.test(key)) keys.add(key.replace(/^0+(?=\d)/, ''));
+  // รองรับกรณีที่ตัวเลขจาก BigQuery ถูกส่งมาในรูป scientific notation
+  if(/^\d+(?:\.\d+)?e[+-]?\d+$/i.test(key)){
+    const numeric = Number(key);
+    if(Number.isSafeInteger(numeric)) keys.add(String(numeric));
+  }
+  return [...keys];
+}
+
+function isSkuExcluded(sku){
+  if(excludedSkus.size === 0) return false;
+  return skuKeyVariants(sku).some(key => excludedSkus.has(key));
 }
 
 function formatThaiDateTime(value){
@@ -612,7 +633,8 @@ function aggregate(system, from, to, sf){
     itemMapAll[sku].lines++;
 
     // หาก SKU นี้ถูกเลือกยกเว้น -> ข้ามไม่นำมาคิดสถิติรวมของระบบ
-    if (excludedSkus.size > 0 && excludedSkus.has(sku)) continue;
+    // กรองก่อนสร้าง Zone/Location/Picker/OT ทุกชุด เพื่อไม่ให้ SKU ที่ยกเว้นหลุดไปคำนวณต่อ
+    if (isSkuExcluded(sku)) continue;
 
     lines++; pcs += pVal; pickQty += qVal; pickers.add(picker); zones.add(zone);
     (zoneMap[zone] = zoneMap[zone] || {
@@ -848,7 +870,7 @@ function aggregate(system, from, to, sf){
   }).sort((a,b)=>b.qty-a.qty);
   const by_item_all = Object.entries(itemMapAll).map(([sku,v])=>{
     const info = getItemInfo(sku);
-    return { sku, name: info.name, owner: info.owner, pcs: v.pcs, qty: v.qty, lines: v.lines, excluded: excludedSkus.has(sku) };
+    return { sku, name: info.name, owner: info.owner, pcs: v.pcs, qty: v.qty, lines: v.lines, excluded: isSkuExcluded(sku) };
   }).sort((a,b)=>b.qty-a.qty);
 
   const by_timeslot = Object.keys(slotMap).map(Number).sort((a,b)=>a-b).map(h=>({label:String(h).padStart(2,'0')+':00', pcs:slotMap[h].pcs, qty:slotMap[h].qty, lines:slotMap[h].lines}));
@@ -872,7 +894,7 @@ function sysQty(system, from, to, sf){
     const si = SH[i];
     if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)){
       const r = packedRowData(S, i), sku = S.skus[r.skuIdx];
-      if(excludedSkus.size === 0 || !excludedSkus.has(sku)) q += r.pickQty;
+      if(!isSkuExcluded(sku)) q += r.pickQty;
     }
   }
   return q;
@@ -884,7 +906,7 @@ function sysPcs(system, from, to, sf){
     const si = SH[i];
     if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)){
       const r = packedRowData(S, i), sku = S.skus[r.skuIdx];
-      if(excludedSkus.size === 0 || !excludedSkus.has(sku)) q += r.pcs;
+      if(!isSkuExcluded(sku)) q += r.pcs;
     }
   }
   return q;
@@ -1501,7 +1523,7 @@ const builders = {
         h += '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
       } else {
         displayItems.forEach((x, i) => {
-          const isEx = excludedSkus.has(x.sku);
+          const isEx = isSkuExcluded(x.sku);
           const rowBg = isEx ? 'style="background:#fff7ed;"' : '';
           const nameStyle = isEx ? 'style="text-decoration:line-through;color:#94a3b8;"' : '';
           const statusBadge = isEx 
@@ -1535,11 +1557,12 @@ const builders = {
 };
 
 window.toggleExcludeSku = function(sku) {
-  sku = normalizeSkuKey(sku);
-  if (excludedSkus.has(sku)) {
-    excludedSkus.delete(sku);
-  } else {
-    excludedSkus.add(sku);
+  const key = normalizeSkuKey(sku);
+  const variants = skuKeyVariants(key);
+  if (variants.some(k => excludedSkus.has(k))) {
+    variants.forEach(k => excludedSkus.delete(k));
+  } else if (key) {
+    excludedSkus.add(key);
   }
   saveExcludedSkusToStorage();
   render();
