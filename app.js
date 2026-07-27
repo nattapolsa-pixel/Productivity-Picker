@@ -9,6 +9,7 @@ const DASHBOARD_SCHEMA_VERSION = 'pick-units-v3';
 const DASHBOARD_SCHEMA_VERSION_PREV = 'pick-units-v2';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
+const ZONE_LAYOUT_CONFIG = (typeof window !== 'undefined' && window.ZONE_LAYOUT) ? window.ZONE_LAYOUT : {};
 // ==========================================================================
 
 // ====== ตั้งค่ากะ/OT (ปรับได้) ======
@@ -310,6 +311,127 @@ function escapeZoneHtml(value){
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function formatMapValue(value){
+  const n = Number(value) || 0;
+  if(n < 1000) return fmt(n);
+  return new Intl.NumberFormat('en-US', {
+    notation:'compact',
+    maximumFractionDigits:n >= 100000 ? 0 : 1
+  }).format(n);
+}
+
+function zoneMapColor(value, maxValue, isPcs){
+  const val = Number(value) || 0;
+  if(val <= 0) return {background:'#ffffff', border:'#cbd5e1', color:'#334155', intensity:0};
+  const ratio = Math.min(1, val / Math.max(1, maxValue));
+  const intensity = .15 + .85 * Math.pow(ratio, .48);
+  const base = [248,250,252];
+  const target = isPcs ? [13,148,136] : [79,70,229];
+  const mixed = base.map((v,i)=>Math.round(v + (target[i]-v)*intensity));
+  return {
+    background:`rgb(${mixed.join(',')})`,
+    border:`rgba(${target.join(',')},.72)`,
+    color:intensity > .58 ? '#ffffff' : '#1e293b',
+    intensity
+  };
+}
+
+function renderWarehouseMap(activeLocations, isPcs){
+  const root = document.getElementById('warehouseMap');
+  if(!root) return;
+  const layout = ZONE_LAYOUT_CONFIG;
+  const required = ['onFloor','selectiveTop','selectiveBottom','microRack'];
+  if(required.some(key => !Array.isArray(layout[key]))){
+    root.innerHTML = '<div class="floor-map-empty">โหลดโครงสร้างแผนผัง Zone ไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ</div>';
+    return;
+  }
+
+  const mappedCodes = [
+    ...layout.onFloor,
+    ...layout.selectiveTop,
+    ...layout.selectiveBottom,
+    ...layout.microRack
+  ];
+  const mappedSet = new Set(mappedCodes);
+  const activeRows = [...activeLocations.values()];
+  const mainValue = row => isPcs ? Number(row && row.pcs || 0) : Number(row && row.qty || 0);
+  const maxValue = Math.max(1, ...mappedCodes.map(code => mainValue(activeLocations.get(code))));
+  const mainUnit = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
+  const secondaryUnit = isPcs ? 'หยิบ' : 'ชิ้น';
+
+  function metadata(code){
+    const info = getZoneInfo(code);
+    if(!info.known && code === 'PF'){
+      return {...info, zone:'PF', typePick:'On Floor', owner:'Max Mart'};
+    }
+    return info;
+  }
+
+  function card(code, extraClass){
+    const row = activeLocations.get(code) || {location:code, pcs:0, qty:0, lines:0, pickers:0};
+    const info = metadata(code);
+    const primary = mainValue(row);
+    const secondary = isPcs ? Number(row.qty || 0) : Number(row.pcs || 0);
+    const color = zoneMapColor(primary, maxValue, isPcs);
+    const active = Number(row.lines || 0) > 0;
+    const title = [
+      `Location: ${code}`,
+      `Zone: ${info.zone}`,
+      `Type Pick: ${info.typePick}`,
+      `Owner: ${info.owner}`,
+      `จำนวนชิ้น: ${fmt(row.pcs || 0)} ชิ้น`,
+      `หน่วยหยิบ: ${fmt(row.qty || 0)} หน่วย`,
+      `Picker: ${fmt(row.pickers || 0)} คน`
+    ].join('\n');
+    return `<div class="floor-loc ${extraClass || ''} ${active ? 'active' : 'inactive'}" data-location="${escapeZoneHtml(code)}"` +
+      ` style="--floor-bg:${color.background};--floor-border:${color.border};--floor-fg:${color.color}" title="${escapeZoneHtml(title)}">` +
+      `<div class="floor-loc-code">${escapeZoneHtml(code)}</div>` +
+      `<div class="floor-loc-metric"><strong>${formatMapValue(primary)}</strong><span>${escapeZoneHtml(mainUnit)}</span></div>` +
+      `<div class="floor-loc-secondary">${formatMapValue(secondary)} ${escapeZoneHtml(secondaryUnit)}</div>` +
+      `</div>`;
+  }
+
+  function bands(list){
+    return (list || []).map(band =>
+      `<div class="floor-owner-band ${escapeZoneHtml(band.tone || '')}" style="grid-column:${Number(band.start)} / span ${Number(band.span)}">${escapeZoneHtml(band.label)}</div>`
+    ).join('');
+  }
+
+  const outsideCodes = new Set();
+  getZoneMasterEntries().forEach(row => { if(!mappedSet.has(row.location)) outsideCodes.add(row.location); });
+  activeRows.forEach(row => { if(!mappedSet.has(row.location)) outsideCodes.add(row.location); });
+  const outside = [...outsideCodes].sort((a,b)=>{
+    const diff = mainValue(activeLocations.get(b)) - mainValue(activeLocations.get(a));
+    return diff || a.localeCompare(b);
+  });
+
+  root.innerHTML =
+    `<div class="floor-map-legend"><div><span class="floor-legend-dot low"></span>น้อย</div><div><span class="floor-legend-bar ${isPcs ? 'pcs' : 'units'}"></span>มาก</div>` +
+    `<div class="floor-legend-unit">ตัวเลขหลัก = ${escapeZoneHtml(mainUnit)} · วางเมาส์เพื่อดูรายละเอียดครบ</div></div>` +
+    `<div class="warehouse-map-scroll"><div class="warehouse-floor">` +
+      `<section class="floor-onfloor">` +
+        `<div class="floor-section-title">On Floor</div><div class="floor-owner-strip maxmart">MAX MART</div>` +
+        `<div class="floor-onfloor-grid">${layout.onFloor.map(code=>card(code,'onfloor')).join('')}</div>` +
+      `</section>` +
+      `<div class="floor-divider" aria-hidden="true"></div>` +
+      `<section class="floor-selective">` +
+        `<div class="floor-section-title selective-title">Selective Rack</div>` +
+        `<div class="floor-selective-body"><div class="floor-rack-main">` +
+          `<div class="floor-owner-grid">${bands(layout.topBands)}</div>` +
+          `<div class="floor-rack-grid top">${layout.selectiveTop.map(code=>card(code,'rack')).join('')}</div>` +
+          `<div class="floor-rack-grid bottom">${layout.selectiveBottom.map(code=>card(code,'rack')).join('')}</div>` +
+          `<div class="floor-owner-grid bottom">${bands(layout.bottomBands)}</div>` +
+        `</div><div class="floor-micro">` +
+          `<div class="floor-micro-owner">MAX MART</div>` +
+          `<div class="floor-micro-stack">${layout.microRack.map(code=>card(code,'micro')).join('')}</div>` +
+        `</div></div>` +
+      `</section>` +
+    `</div></div>` +
+    `<div class="floor-outside-wrap"><div class="floor-outside-title">Location นอกแผนผัง (${outside.length})</div>` +
+      `<div class="floor-outside">${outside.length ? outside.map(code=>card(code,'outside')).join('') : '<span class="floor-all-mapped">Location ทั้งหมดอยู่ในแผนผังแล้ว</span>'}</div>` +
+    `</div>`;
 }
 
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
@@ -878,6 +1000,8 @@ const builders = {
         `<div class="zone-stat-value">${fmt(card.value)}</div><div class="zone-stat-detail">${escapeZoneHtml(card.detail)}</div></div>`
       ).join('');
     }
+
+    renderWarehouseMap(activeLocations, isPcs);
 
     new Chart(document.getElementById('zone'), {
       type:'bar',

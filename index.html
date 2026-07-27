@@ -70,6 +70,14 @@
   .zone-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.zone-tags span{font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;background:rgba(255,255,255,.24);border:1px solid rgba(255,255,255,.3)}
   .zone-status{display:inline-flex;padding:3px 8px;border-radius:999px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;white-space:nowrap}.zone-status.active{background:#dcfce7;color:#15803d}
   .zone-inactive td{color:#94a3b8}.zone-inactive td .pill{opacity:.65}
+  .floor-map-card{overflow:hidden}.floor-map-legend{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:4px 0 12px;font-size:11px;color:#64748b}.floor-map-legend>div{display:flex;align-items:center;gap:5px}.floor-legend-dot{width:14px;height:14px;border:1px solid #cbd5e1;border-radius:4px;background:#fff}.floor-legend-bar{width:72px;height:12px;border-radius:999px;background:linear-gradient(90deg,#f8fafc,#4f46e5)}.floor-legend-bar.pcs{background:linear-gradient(90deg,#f8fafc,#0d9488)}.floor-legend-unit{margin-left:auto;font-weight:500}
+  .warehouse-map-scroll{overflow-x:auto;padding:4px 2px 12px;scrollbar-color:#94a3b8 #f1f5f9}.warehouse-floor{display:grid;grid-template-columns:390px 6px minmax(900px,1fr);gap:18px;min-width:1330px;align-items:start;background:#fff}
+  .floor-section-title{text-align:center;font-size:14px;font-weight:700;color:#0f172a;border-top:7px solid #d1d5db;padding-top:3px}.floor-owner-strip,.floor-owner-band{text-align:center;font-size:10px;font-weight:700;line-height:18px;height:18px;color:#0f172a}.floor-owner-strip.maxmart,.floor-owner-band.maxmart{background:#dcefd9}.floor-owner-band.punthai{background:#dbeafe}.floor-owner-band.gfa{background:#ffedd5}.floor-owner-band.lube{background:#fecaca;color:#991b1b}
+  .floor-onfloor-grid{display:grid;grid-template-columns:repeat(7,minmax(42px,1fr));gap:10px;margin-top:8px}.floor-divider{width:6px;height:410px;background:#0874c9;border-radius:999px}
+  .floor-selective-title{text-align:right;padding-right:14px}.floor-selective-body{display:flex;gap:12px;align-items:start}.floor-rack-main{min-width:800px;flex:1}.floor-owner-grid,.floor-rack-grid{display:grid;grid-template-columns:repeat(14,minmax(46px,1fr));gap:7px}.floor-owner-grid{margin-bottom:7px}.floor-owner-grid.bottom{margin:7px 0 0}.floor-rack-grid.bottom{margin-top:22px}
+  .floor-loc{height:132px;min-width:0;border:1px solid var(--floor-border);border-radius:5px;background:var(--floor-bg);color:var(--floor-fg);display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:9px 3px 7px;box-shadow:0 4px 12px -10px rgba(15,23,42,.65);transition:transform .18s,box-shadow .18s;cursor:default}.floor-loc:hover{transform:translateY(-4px) scale(1.04);box-shadow:0 10px 20px -12px rgba(15,23,42,.8);z-index:3}.floor-loc.inactive{border-style:dashed;opacity:.58}.floor-loc.onfloor{height:300px;padding-top:86px}.floor-loc-code{font-size:15px;font-weight:800;letter-spacing:.02em}.floor-loc-metric{text-align:center;line-height:1.05;margin-top:auto}.floor-loc-metric strong{display:block;font-size:11px;font-variant-numeric:tabular-nums}.floor-loc-metric span{display:block;font-size:8px;margin-top:3px;opacity:.88}.floor-loc-secondary{font-size:8px;margin-top:5px;opacity:.85;white-space:nowrap}
+  .floor-micro{width:88px;display:grid;grid-template-columns:25px 1fr;gap:7px;margin-top:25px}.floor-micro-owner{background:#dcefd9;color:#14532d;font-size:9px;font-weight:700;writing-mode:vertical-rl;transform:rotate(180deg);display:flex;align-items:center;justify-content:center;border-radius:4px}.floor-micro-stack{display:grid;gap:14px}.floor-loc.micro{height:178px}.floor-loc.micro .floor-loc-code{font-size:22px}
+  .floor-outside-wrap{border-top:1px dashed #cbd5e1;margin-top:12px;padding-top:12px}.floor-outside-title{font-size:11.5px;color:#64748b;font-weight:600;margin-bottom:8px}.floor-outside{display:flex;gap:8px;flex-wrap:wrap}.floor-loc.outside{width:112px;height:82px;align-items:flex-start;padding:8px}.floor-loc.outside .floor-loc-code{font-size:13px}.floor-loc.outside .floor-loc-metric{text-align:left}.floor-loc.outside .floor-loc-secondary{font-size:8px}.floor-all-mapped,.floor-map-empty{font-size:12px;color:#64748b;padding:12px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc}
   @media(max-width:1200px){.kpis{grid-template-columns:repeat(3,1fr)}}
   @media(max-width:900px){.layout{flex-direction:column}.sidebar{width:100%;height:auto;flex-direction:row;overflow-x:auto;position:static;padding:12px}.brand{display:none}.nav{white-space:nowrap;margin:0 4px 0 0}.sidebadge{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.card.wide{grid-column:span 1}.zone-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
@@ -127,6 +135,11 @@
 
     <section class="page" data-page="zones">
       <div class="zone-summary" id="zoneSummary"></div>
+      <div class="card wide floor-map-card" style="margin-bottom:18px">
+        <h3>แผนผัง Zone และยอดหยิบจริง</h3>
+        <div class="sub">ตำแหน่งตาม Sheet Layout_Zone · สีและตัวเลขเปลี่ยนตามระบบ หน่วย วันที่ และกะที่เลือกด้านบน</div>
+        <div id="warehouseMap"></div>
+      </div>
       <div class="card wide" style="margin-bottom:18px">
         <h3>ปริมาณหยิบตาม Zone Master</h3><div class="sub">นำ Location 2 ตัวหน้าไปจับ Zone, Type Pick และ Owner ตาม Sheet Zone_V2</div>
         <div class="chartbox"><canvas id="zone"></canvas></div>
@@ -228,6 +241,7 @@
 <script src="pack_size_master.js?v=20260727-picker-name-v11"></script>
 <script src="picker_names_fallback.js?v=20260727-picker-fallback-v1"></script>
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
-<script src="app.js?v=20260727-zone-master-v13"></script>
+<script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
+<script src="app.js?v=20260727-zone-layout-v14"></script>
 </body>
 </html>
