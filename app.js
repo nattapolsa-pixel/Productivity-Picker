@@ -359,20 +359,20 @@ function mapGroupColors(info){
 
 function zoneMapColor(value, maxValue, isPcs, info){
   const val = Number(value) || 0;
-  const groupColors = mapGroupColors(info);
-  if(val <= 0) return {background:'#ffffff', border:groupColors.type, accent:groupColors.type, owner:groupColors.owner, type:groupColors.type, color:'#334155', intensity:0};
+  const monoColor = '#4f46e5';
+  const monoRgb = hexToRgb(monoColor);
+  if(val <= 0) return {background:'#ffffff', border:'#c7d2fe', accent:'#c7d2fe', owner:monoColor, type:monoColor, color:'#334155', intensity:0};
   const ratio = Math.min(1, val / Math.max(1, maxValue));
   const intensity = .15 + .85 * Math.pow(ratio, .48);
   const base = [248,250,252];
-  const target = hexToRgb(groupColors.owner);
-  const mixed = base.map((v,i)=>Math.round(v + (target[i]-v)*intensity));
+  const mixed = base.map((v,i)=>Math.round(v + (monoRgb[i]-v)*intensity));
   return {
     background:`rgb(${mixed.join(',')})`,
-    border:groupColors.type,
+    border:`rgba(${monoRgb.join(',')},${(.3 + intensity*.55).toFixed(2)})`,
     color:intensity > .58 ? '#ffffff' : '#1e293b',
-    accent:groupColors.type,
-    owner:groupColors.owner,
-    type:groupColors.type,
+    accent:monoColor,
+    owner:monoColor,
+    type:monoColor,
     intensity
   };
 }
@@ -445,17 +445,10 @@ function renderWarehouseMap(activeLocations, isPcs){
     const diff = mainValue(activeLocations.get(b)) - mainValue(activeLocations.get(a));
     return diff || a.localeCompare(b);
   });
-  const ownerLegend = [...new Set(mappedCodes.map(code => metadata(code).owner))].sort();
-  const typeLegend = [...new Set(mappedCodes.map(code => metadata(code).typePick))].sort();
-  const legendSwatches = (labels, palette) => labels.map(label => {
-    const color = colorForLabel(palette, label);
-    return `<span class="floor-group-key"><i style="background:${color}"></i>${escapeZoneHtml(label)}</span>`;
-  }).join('');
-
   root.innerHTML =
     `<div class="floor-map-legend"><div><span class="floor-legend-dot low"></span>น้อย</div><div><span class="floor-legend-bar ${isPcs ? 'pcs' : 'units'}"></span>มาก</div>` +
     `<div class="floor-legend-unit">ตัวเลขหลัก = ${escapeZoneHtml(mainUnit)} · วางเมาส์เพื่อดูรายละเอียดครบ</div></div>` +
-    `<div class="floor-map-group-legends"><div><b>สีพื้น = Owner:</b> ${legendSwatches(ownerLegend, ZONE_OWNER_COLORS)}</div><div><b>ขอบสี = Type Pick:</b> ${legendSwatches(typeLegend, ZONE_TYPE_COLORS)}</div></div>` +
+    `<div class="floor-map-group-legends"><b>การอ่านสี:</b> ใช้สีเดียวทั้งแผนผัง · สีเข้ม = ยอดหยิบมาก · สีอ่อน = ยอดหยิบน้อย · Owner และ Type Pick ดูได้จาก Tooltip และตารางด้านล่าง</div>` +
     `<div class="warehouse-map-scroll"><div class="warehouse-floor">` +
       `<section class="floor-onfloor">` +
         `<div class="floor-section-title">On Floor</div><div class="floor-owner-strip maxmart">MAX MART</div>` +
