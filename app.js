@@ -8,6 +8,7 @@ const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjL
 const DASHBOARD_SCHEMA_VERSION = 'pick-units-v3';
 const DASHBOARD_SCHEMA_VERSION_PREV = 'pick-units-v2';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
+const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
 // ==========================================================================
 
 // ====== ตั้งค่ากะ/OT (ปรับได้) ======
@@ -45,6 +46,7 @@ let hasLiveData = false;
 let activeLoadPromise = null;
 let activeLoadIsFresh = false;
 let queuedFreshPromise = null;
+let ZONE_MASTER = {...ZONE_MASTER_FALLBACK};
 const DASHBOARD_TIMEOUT_MS = 180000;
 const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
 
@@ -255,13 +257,68 @@ function getPickerName(code){
   return s;
 }
 
+function normalizeLocationCode(value){
+  const text = String(value || '').trim().toUpperCase();
+  return text ? text.slice(0, 2) : '??';
+}
+
+function prepareZoneMaster(){
+  const merged = {};
+  const add = source => {
+    if(!source || typeof source !== 'object') return;
+    Object.entries(source).forEach(([rawLocation, rawInfo]) => {
+      const location = normalizeLocationCode(rawLocation);
+      if(!rawInfo || typeof rawInfo !== 'object') return;
+      merged[location] = {
+        zone: String(rawInfo.zone || location).trim() || location,
+        typePick: String(rawInfo.typePick || rawInfo.type_pick || '-').trim() || '-',
+        owner: String(rawInfo.owner || '-').trim() || '-'
+      };
+    });
+  };
+  add(ZONE_MASTER_FALLBACK);
+  add(DATA && DATA.meta && DATA.meta.zone_master);
+  ZONE_MASTER = merged;
+}
+
+function getZoneInfo(rawLocation){
+  const location = normalizeLocationCode(rawLocation);
+  const info = ZONE_MASTER[location];
+  return {
+    location,
+    zone: info ? info.zone : location,
+    typePick: info ? info.typePick : 'ไม่พบใน Zone_V2',
+    owner: info ? info.owner : '-',
+    known: Boolean(info)
+  };
+}
+
+function getZoneMasterEntries(){
+  return Object.entries(ZONE_MASTER).map(([location, info]) => ({
+    location,
+    zone: info.zone,
+    typePick: info.typePick,
+    owner: info.owner,
+    known: true
+  }));
+}
+
+function escapeZoneHtml(value){
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // row width 7 = [dateIdx, zone, pickerIdx, skuIdx, pcs, pick_qty, minOfDay]
 function aggregate(system, from, to, sf){
   const S = DATA[system];
   let lines = 0, pcs = 0, pickQty = 0;
   const pickers = new Set(), zones = new Set();
-  const zoneMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, pickerZoneCnt = {};
+  const zoneMap = {}, locationMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, pickerZoneCnt = {}, pickerLocationCnt = {};
   const SH = S._sh;
 
   const rowCount = packedRowCount(S);
@@ -270,7 +327,9 @@ function aggregate(system, from, to, sf){
     if(si.sd < from || si.sd > to) continue;
     if(sf !== 'all' && si.sh !== sf) continue;
     const r = packedRowData(S, i);
-    const zone = r.zone;
+    const zoneInfo = getZoneInfo(r.zone);
+    const location = zoneInfo.location;
+    const zone = zoneInfo.zone;
     const picker = S.pickers[r.pickerIdx];
     const sku = S.skus[r.skuIdx];
     const pVal = r.pcs;
@@ -285,8 +344,17 @@ function aggregate(system, from, to, sf){
     if (excludedSkus.size > 0 && excludedSkus.has(sku)) continue;
 
     lines++; pcs += pVal; pickQty += qVal; pickers.add(picker); zones.add(zone);
-    (zoneMap[zone] = zoneMap[zone] || {pcs:0,qty:0,lines:0,pk:new Set()});
-    zoneMap[zone].pcs += pVal; zoneMap[zone].qty += qVal; zoneMap[zone].lines++; zoneMap[zone].pk.add(picker);
+    (zoneMap[zone] = zoneMap[zone] || {
+      pcs:0, qty:0, lines:0, pk:new Set(), locations:new Set(),
+      typePick:zoneInfo.typePick, owner:zoneInfo.owner, known:zoneInfo.known
+    });
+    zoneMap[zone].pcs += pVal; zoneMap[zone].qty += qVal; zoneMap[zone].lines++; zoneMap[zone].pk.add(picker); zoneMap[zone].locations.add(location);
+
+    (locationMap[location] = locationMap[location] || {
+      location, zone, typePick:zoneInfo.typePick, owner:zoneInfo.owner, known:zoneInfo.known,
+      pcs:0, qty:0, lines:0, pk:new Set()
+    });
+    locationMap[location].pcs += pVal; locationMap[location].qty += qVal; locationMap[location].lines++; locationMap[location].pk.add(picker);
 
     (itemMap[sku] = itemMap[sku] || {pcs:0,qty:0,lines:0});
     itemMap[sku].pcs += pVal; itemMap[sku].qty += qVal; itemMap[sku].lines++;
@@ -297,6 +365,8 @@ function aggregate(system, from, to, sf){
 
     (pickerZoneCnt[picker] = pickerZoneCnt[picker] || {});
     pickerZoneCnt[picker][zone] = (pickerZoneCnt[picker][zone]||0)+1;
+    (pickerLocationCnt[picker] = pickerLocationCnt[picker] || {});
+    pickerLocationCnt[picker][location] = (pickerLocationCnt[picker][location]||0)+1;
 
     (dayVol[si.sd] = dayVol[si.sd] || {lines:0,pcs:0,qty:0,pk:new Set()});
     dayVol[si.sd].lines++; dayVol[si.sd].pcs += pVal; dayVol[si.sd].qty += qVal; dayVol[si.sd].pk.add(picker);
@@ -346,12 +416,13 @@ function aggregate(system, from, to, sf){
   });
   const by_picker = Object.entries(byPicker).map(([picker,o]) => {
     const zc = pickerZoneCnt[picker] || {}; const zone = Object.keys(zc).sort((a,b)=>zc[b]-zc[a])[0] || '-';
+    const lc = pickerLocationCnt[picker] || {}; const location = Object.keys(lc).sort((a,b)=>lc[b]-lc[a])[0] || '-';
     const shift = Object.keys(o.sh).sort((a,b)=>o.sh[b]-o.sh[a])[0] || '-';
     return {
       picker, name:getPickerName(picker), pcs:o.pcs, qty:o.q, lines:o.n, ot:r1(o.ot), shift,
       avg_prod: r1(mean(o.prods)),
       avg_pcs_prod: r1(mean(o.prodsPcs)),
-      zone
+      zone, location
     };
   }).sort((a,b)=>b.qty-a.qty);
 
@@ -372,7 +443,14 @@ function aggregate(system, from, to, sf){
     };
   }
 
-  const by_zone = Object.entries(zoneMap).map(([zone,v])=>({zone,pcs:v.pcs,qty:v.qty,lines:v.lines,pickers:v.pk.size})).sort((a,b)=>b.qty-a.qty);
+  const by_zone = Object.entries(zoneMap).map(([zone,v])=>({
+    zone, typePick:v.typePick, owner:v.owner, known:v.known,
+    locations:[...v.locations].sort(), pcs:v.pcs, qty:v.qty, lines:v.lines, pickers:v.pk.size
+  })).sort((a,b)=>b.qty-a.qty);
+  const by_location = Object.values(locationMap).map(v=>({
+    location:v.location, zone:v.zone, typePick:v.typePick, owner:v.owner, known:v.known,
+    pcs:v.pcs, qty:v.qty, lines:v.lines, pickers:v.pk.size
+  })).sort((a,b)=>b.qty-a.qty);
   const by_item = Object.entries(itemMap).map(([sku,v])=>{
     const info = getItemInfo(sku);
     return { sku, name: info.name, owner: info.owner, pcs: v.pcs, qty: v.qty, lines: v.lines };
@@ -391,7 +469,7 @@ function aggregate(system, from, to, sf){
       avg_prod: r1(mean(productiveGroups.map(g=>g.prod))),
       avg_pcs_prod: r1(mean(productiveGroups.map(g=>g.pcsProd)))
     },
-    daily, by_zone, by_picker, by_timeslot, by_item, by_item_all
+    daily, by_zone, by_location, by_picker, by_timeslot, by_item, by_item_all
   };
 }
 
@@ -729,7 +807,7 @@ const builders = {
 
     new Chart(document.getElementById('picker'), {
       type:'bar',
-      data:{labels:p.map(x=>x.picker+' ('+x.zone+')'), datasets:[{data:mainProd, backgroundColor:p.map((x,i)=>PALETTE[i%PALETTE.length]), borderRadius:6}]},
+      data:{labels:p.map(x=>x.picker+' ('+x.location+')'), datasets:[{data:mainProd, backgroundColor:p.map((x,i)=>PALETTE[i%PALETTE.length]), borderRadius:6}]},
       options:{
         indexAxis:'y', maintainAspectRatio:false, layout:{padding:{right:55}},
         plugins:{
@@ -739,8 +817,11 @@ const builders = {
             callbacks:{
               label:(ctx)=>{
                 const picker = p[ctx.dataIndex];
+                const zoneInfo = getZoneInfo(picker.location);
                 return [
                   ` พนักงาน: ${picker.picker}${picker.name && picker.name !== picker.picker ? ' · ' + picker.name : ''}`,
+                  ` Location / Zone: ${picker.location} / ${picker.zone}`,
+                  ` Type Pick / Owner: ${zoneInfo.typePick} / ${zoneInfo.owner}`,
                   ` Productivity (หยิบ): ${fmt(picker.avg_prod)} หยิบ/ชม.`,
                   ` Productivity (ชิ้น): ${fmt(picker.avg_pcs_prod)} ชิ้น/ชม.`,
                   ` ปริมาณ: ${fmt(picker.pcs)} ชิ้น (${fmt(picker.qty)} หน่วยหยิบ) (OT: ${picker.ot > 0 ? picker.ot+' ชม.' : '-'})`
@@ -759,6 +840,44 @@ const builders = {
     z.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
     const chartValues = isPcs ? z.map(x=>x.pcs) : z.map(x=>x.qty);
     const chartLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
+    const activeLocations = new Map(A.by_location.map(x => [x.location, x]));
+    const masterEntries = getZoneMasterEntries();
+    const masterLocationsByZone = {};
+    masterEntries.forEach(x => {
+      (masterLocationsByZone[x.zone] = masterLocationsByZone[x.zone] || []).push(x.location);
+    });
+    Object.values(masterLocationsByZone).forEach(list => list.sort());
+    const unknownActive = A.by_location.filter(x => !ZONE_MASTER[x.location]);
+    const locationRows = masterEntries.map(x => ({
+      ...x,
+      ...(activeLocations.get(x.location) || {pcs:0, qty:0, lines:0, pickers:0})
+    })).concat(unknownActive);
+    locationRows.sort((a,b) => {
+      const av = isPcs ? Number(a.pcs || 0) : Number(a.qty || 0);
+      const bv = isPcs ? Number(b.pcs || 0) : Number(b.qty || 0);
+      return (bv - av) || a.location.localeCompare(b.location);
+    });
+
+    const summary = document.getElementById('zoneSummary');
+    if(summary){
+      const allTypes = new Set(masterEntries.map(x=>x.typePick).filter(x=>x && x !== '-'));
+      const allOwners = new Set(masterEntries.map(x=>x.owner).filter(x=>x && x !== '-'));
+      const cards = [
+        {label:'Zone ที่มีรายการ', value:z.length, detail:`จาก Master ${new Set(masterEntries.map(x=>x.zone)).size} Zone`},
+        {label:'Location ที่ใช้งาน', value:A.by_location.length, detail:`จาก Master ${masterEntries.length} Location`},
+        {label:'Type Pick', value:allTypes.size, detail:[...allTypes].sort().join(' · ')},
+        {label:'Owner', value:allOwners.size, detail:[...allOwners].sort().join(' · ')},
+        {
+          label:'Location นอก Zone_V2',
+          value:unknownActive.length,
+          detail:unknownActive.length ? unknownActive.map(x=>x.location).sort().join(', ') : 'ข้อมูลครบตาม Master'
+        }
+      ];
+      summary.innerHTML = cards.map(card =>
+        `<div class="zone-stat"><div class="zone-stat-label">${escapeZoneHtml(card.label)}</div>` +
+        `<div class="zone-stat-value">${fmt(card.value)}</div><div class="zone-stat-detail">${escapeZoneHtml(card.detail)}</div></div>`
+      ).join('');
+    }
 
     new Chart(document.getElementById('zone'), {
       type:'bar',
@@ -771,7 +890,22 @@ const builders = {
         maintainAspectRatio:false, layout:{padding:{top:22}},
         plugins:{
           legend:{display:true, position:'top', labels:{usePointStyle:true, boxWidth:8}},
-          datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#334155', font:{size:10, weight:'600'}}
+          datalabels:{anchor:'end', align:'end', formatter:fmt, color:'#334155', font:{size:10, weight:'600'}},
+          tooltip:{
+            callbacks:{
+              afterLabel:(ctx)=>{
+                const row = z[ctx.dataIndex];
+                const locations = masterLocationsByZone[row.zone] || row.locations || [];
+                return [
+                  `Type Pick: ${row.typePick || '-'}`,
+                  `Owner: ${row.owner || '-'}`,
+                  `Location: ${locations.join(', ') || '-'}`,
+                  `จำนวนชิ้น: ${fmt(row.pcs)} ชิ้น`,
+                  `หน่วยหยิบ: ${fmt(row.qty)} หน่วย`
+                ];
+              }
+            }
+          }
         },
         scales:{y:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, x:{grid:{display:false}}}
       }
@@ -786,9 +920,39 @@ const builders = {
       const e = document.createElement('div'); e.className = 'tile'; e.style.background = 'rgb('+mx.join(',')+')';
       if(t < .35) e.style.color = '#334155';
       const mainTxt = isPcs ? `${fmt(x.pcs)} ชิ้น (${fmt(x.qty)} หน่วย)` : `${fmt(x.qty)} หน่วย (${fmt(x.pcs)} ชิ้น)`;
-      e.innerHTML = '<div class="z">'+x.zone+'</div><div class="q">'+mainTxt+'</div><div class="p">'+x.pickers+' คน</div>';
+      const locations = masterLocationsByZone[x.zone] || x.locations || [];
+      e.innerHTML =
+        `<div class="z">${escapeZoneHtml(x.zone)}</div>` +
+        `<div class="zone-tags"><span>${escapeZoneHtml(x.typePick || '-')}</span><span>${escapeZoneHtml(x.owner || '-')}</span></div>` +
+        `<div class="q">${escapeZoneHtml(mainTxt)}</div>` +
+        `<div class="p">Location: ${escapeZoneHtml(locations.join(', ') || '-')} · ${fmt(x.pickers)} คน</div>`;
       heat.appendChild(e);
     });
+
+    const table = document.getElementById('zoneTable');
+    if(table){
+      const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
+      const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
+      let h = `<thead><tr><th>#</th><th>Location</th><th>Zone</th><th>Type Pick</th><th>Owner</th>` +
+        `<th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น ${isPcs ? '★' : ''}</th>` +
+        `<th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ ${!isPcs ? '★' : ''}</th>` +
+        `<th class="num">Picker</th><th>สถานะช่วงที่เลือก</th></tr></thead><tbody>`;
+      locationRows.forEach((row, i) => {
+        const active = Number(row.lines || 0) > 0;
+        h += `<tr class="${active ? '' : 'zone-inactive'}">` +
+          `<td><span class="rank">${i+1}</span></td>` +
+          `<td><b>${escapeZoneHtml(row.location)}</b></td>` +
+          `<td><span class="pill">${escapeZoneHtml(row.zone)}</span></td>` +
+          `<td>${escapeZoneHtml(row.typePick)}</td>` +
+          `<td>${escapeZoneHtml(row.owner)}</td>` +
+          `<td class="num" style="${pcsHeaderStyle}">${fmt(row.pcs || 0)}</td>` +
+          `<td class="num" style="${qtyHeaderStyle}">${fmt(row.qty || 0)}</td>` +
+          `<td class="num">${fmt(row.pickers || 0)}</td>` +
+          `<td><span class="zone-status ${active ? 'active' : ''}">${active ? 'มีรายการ' : 'ไม่มีรายการ'}</span></td></tr>`;
+      });
+      h += '</tbody>';
+      table.innerHTML = h;
+    }
   },
   pickers(){
     const isPcs = unitMode === 'pcs';
@@ -813,7 +977,7 @@ const builders = {
         <td><b>${p.picker}</b></td>
         <td style="line-height:1.35;"><div style="font-weight:600;">${pickerNameText}</div>${pickerNameText !== '-' ? `<div style="font-size:11px;color:#94a3b8;">${p.picker}</div>` : ''}</td>
         <td>${SHIFT_LABEL[p.shift] || p.shift}</td>
-        <td><span class="pill">${p.zone}</span></td>
+        <td><span class="pill">${p.zone}</span><div style="font-size:11px;color:#94a3b8;margin-top:3px;">Location ${p.location}</div></td>
         <td class="num" style="${pcsCellStyle}">${fmt(p.pcs)}</td>
         <td class="num" style="${qtyCellStyle}">${fmt(p.qty)}</td>
         <td class="num">${p.ot > 0 ? fmt(p.ot) : '-'}</td>
@@ -1062,6 +1226,7 @@ function setSideBadge(message){
 function clearDashboardState(){
   hasLiveData = false;
   DATA = emptyData();
+  prepareZoneMaster();
   ALL_DATES = []; DMIN = ''; DMAX = ''; dfrom = ''; dto = '';
   datePresetMode = 'all';
   trendMode = 'day';
@@ -1215,6 +1380,7 @@ async function loadDataOnce(force){
 
     validatePackSizeCoverage(j);
     DATA = j;
+    prepareZoneMaster();
     lastFetchTime = j.meta ? j.meta.generated : new Date().toISOString();
     sys = previous.sys; shiftF = previous.shiftF;
     computeBounds();

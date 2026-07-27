@@ -61,11 +61,17 @@
   tr:hover td{background:#f8fafc}
   .rank{display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;border-radius:7px;background:#eef2ff;color:#4338ca;font-weight:600;font-size:12px}
   .pill{background:#ecfeff;color:#0e7490;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:500}
-  .heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px;margin-top:6px}
+  .zone-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:18px}
+  .zone-stat{background:#fff;border:1px solid #e2e8f0;border-radius:15px;padding:14px 16px;box-shadow:0 8px 22px -18px rgba(15,23,42,.5)}
+  .zone-stat-label{font-size:11.5px;color:var(--muted);font-weight:600}.zone-stat-value{font-size:24px;font-weight:700;margin-top:4px}.zone-stat-detail{font-size:10.5px;color:#64748b;line-height:1.45;margin-top:4px;word-break:break-word}
+  .heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:6px}
   .tile{border-radius:14px;padding:16px;color:#fff;transition:transform .2s}.tile:hover{transform:scale(1.04)}
-  .tile .z{font-size:20px;font-weight:700}.tile .q{font-size:13px;opacity:.95;margin-top:4px}.tile .p{font-size:11px;opacity:.85;margin-top:2px}
+  .tile .z{font-size:20px;font-weight:700}.tile .q{font-size:13px;opacity:.95;margin-top:8px}.tile .p{font-size:11px;opacity:.9;margin-top:4px;line-height:1.45}
+  .zone-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.zone-tags span{font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;background:rgba(255,255,255,.24);border:1px solid rgba(255,255,255,.3)}
+  .zone-status{display:inline-flex;padding:3px 8px;border-radius:999px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;white-space:nowrap}.zone-status.active{background:#dcfce7;color:#15803d}
+  .zone-inactive td{color:#94a3b8}.zone-inactive td .pill{opacity:.65}
   @media(max-width:1200px){.kpis{grid-template-columns:repeat(3,1fr)}}
-  @media(max-width:900px){.layout{flex-direction:column}.sidebar{width:100%;height:auto;flex-direction:row;overflow-x:auto;position:static;padding:12px}.brand{display:none}.nav{white-space:nowrap;margin:0 4px 0 0}.sidebadge{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.card.wide{grid-column:span 1}}
+  @media(max-width:900px){.layout{flex-direction:column}.sidebar{width:100%;height:auto;flex-direction:row;overflow-x:auto;position:static;padding:12px}.brand{display:none}.nav{white-space:nowrap;margin:0 4px 0 0}.sidebadge{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.card.wide{grid-column:span 1}.zone-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 </style>
 </head>
 <body>
@@ -120,23 +126,29 @@
     </section>
 
     <section class="page" data-page="zones">
+      <div class="zone-summary" id="zoneSummary"></div>
       <div class="card wide" style="margin-bottom:18px">
-        <h3>ปริมาณหยิบตามโซน</h3><div class="sub">ปริมาณตามหน่วยที่เลือก แยกตาม Zone (2 ตัวหน้าของ Location)</div>
+        <h3>ปริมาณหยิบตาม Zone Master</h3><div class="sub">นำ Location 2 ตัวหน้าไปจับ Zone, Type Pick และ Owner ตาม Sheet Zone_V2</div>
         <div class="chartbox"><canvas id="zone"></canvas></div>
       </div>
-      <div class="card">
-        <h3>ผังคลัง · Heatmap ความหนาแน่นการหยิบ</h3>
-        <div class="sub">สีเข้ม = หยิบเยอะ · <i>ผังจริงตามตำแหน่งคลังรอข้อมูลเพิ่มเติม</i></div>
+      <div class="card wide" style="margin-bottom:18px">
+        <h3>Zone Master · Heatmap ความหนาแน่นการหยิบ</h3>
+        <div class="sub">สีเข้ม = หยิบเยอะ · การ์ดแสดง Zone, Type Pick, Owner และ Location ทั้งหมดในกลุ่ม</div>
         <div class="heat" id="heat"></div>
+      </div>
+      <div class="card wide">
+        <h3>รายละเอียด Location และ Zone</h3>
+        <div class="sub">แสดง Master ครบทุก Location รวมรายการที่ไม่มีการหยิบในช่วงวันที่ที่เลือก</div>
+        <div style="overflow-x:auto"><table id="zoneTable"></table></div>
       </div>
     </section>
 
     <section class="page" data-page="pickers">
       <div class="card wide">
         <h3>ตารางพนักงานหยิบ (เรียงตามปริมาณ)</h3>
-        <div class="sub">รหัส Picker · โซนหลัก · จำนวนชิ้น · หน่วยหยิบ · Productivity</div>
+        <div class="sub">รหัส Picker · ชื่อพนักงาน · Location/Zone หลัก · จำนวนชิ้น · หน่วยหยิบ · Productivity</div>
         <div style="overflow-x:auto"><table id="ptable"></table></div>
-        <div class="note">รหัสตัวเลขคือ Picker ID — เมื่อได้ตาราง map รหัส→ชื่อ จะแสดงเป็นชื่อจริงให้</div>
+        <div class="note">ชื่อพนักงานจับคู่จากรหัส Picker · Location หลักคือจุดที่พนักงานมีรายการหยิบบ่อยที่สุด และนำไปจับ Zone ตาม Master Zone_V2</div>
       </div>
     </section>
 
@@ -215,6 +227,7 @@
 <script src="item_master.js?v=20260724-itemlist1"></script>
 <script src="pack_size_master.js?v=20260727-picker-name-v11"></script>
 <script src="picker_names_fallback.js?v=20260727-picker-fallback-v1"></script>
-<script src="app.js?v=20260727-picker-name-v12"></script>
+<script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
+<script src="app.js?v=20260727-zone-master-v13"></script>
 </body>
 </html>

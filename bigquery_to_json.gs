@@ -30,6 +30,8 @@ const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
 const PICKER_NAME_TAB = 'บันทึกเวลาทำงาน';
 const PICKER_NAME_START_ROW = 26;
+const ZONE_MASTER_SHEET_ID = '1PMnlyYHswnV0nE73Alxh-ocIFtTipB9LMzACdNM9GFs';
+const ZONE_MASTER_TAB = 'Zone_V2';
 
 function doGet(e) {
   try {
@@ -603,9 +605,51 @@ function loadPickerNameMap_() {
   }
 }
 
+function loadZoneMasterMap_() {
+  try {
+    const ss = SpreadsheetApp.openById(ZONE_MASTER_SHEET_ID);
+    const sh = ss.getSheetByName(ZONE_MASTER_TAB);
+    if (!sh) return {};
+    const lastRow = sh.getLastRow();
+    if (lastRow < 2) return {};
+    const values = sh.getRange(2, 1, lastRow - 1, 8).getDisplayValues();
+    const map = {};
+
+    values.forEach(row => {
+      // ตารางหลักทางขวา: Location | Zone | Type Pick | Owner (E:H)
+      const location = String(row[4] || '').trim().toUpperCase();
+      const zone = String(row[5] || '').trim();
+      const typePick = String(row[6] || '').trim();
+      const owner = String(row[7] || '').trim();
+      if (location) {
+        map[location] = {
+          zone: zone || location,
+          typePick: typePick || '-',
+          owner: owner || '-'
+        };
+      }
+
+      // ตารางสรุปทางซ้ายมี Zone พิเศษที่ไม่ได้แตกซ้ำใน E:H เช่น BE/EA/FA/HB
+      const summaryZone = String(row[0] || '').trim().toUpperCase();
+      if (summaryZone && summaryZone.indexOf('-') === -1 && !map[summaryZone]) {
+        map[summaryZone] = {
+          zone: summaryZone,
+          typePick: String(row[1] || '').trim() || '-',
+          owner: String(row[2] || '').trim() || '-'
+        };
+      }
+    });
+    return map;
+  } catch (err) {
+    console.warn('loadZoneMasterMap_ failed: ' + err);
+    return {};
+  }
+}
+
 function buildDashboardData_(useQueryCache) {
   const currentDate = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
   const pickerNames = loadPickerNameMap_();
+  const zoneMaster = loadZoneMasterMap_();
   const sql =
     "SELECT UPPER(category) AS category, " +
     "FORMAT_DATE('%Y-%m-%d', pick_date) AS d, " +
@@ -647,6 +691,8 @@ function buildDashboardData_(useQueryCache) {
               dashboard_pick_units: 'frontend Pack Size master (largest exact divisor, excludes PAL)'
             },
             picker_names: pickerNames,
+            zone_master: zoneMaster,
+            zone_master_source: ZONE_MASTER_SHEET_ID + '/' + ZONE_MASTER_TAB,
             recent_days: RECENT_DAYS, rows: total },
     PTT: { row_width: 7, dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
     BPS: { row_width: 7, dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }
