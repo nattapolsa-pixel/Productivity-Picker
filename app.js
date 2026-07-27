@@ -95,7 +95,7 @@ function packedRowCount(S){
   return S && Array.isArray(S.rows) ? (width ? Math.floor(S.rows.length / width) : S.rows.length) : 0;
 }
 function validatePackSizeCoverage(payload){
-  if(!globalThis.PACK_SIZE_MASTER || !globalThis.PickUnits) {
+  if(!globalThis.PACK_SIZE_MASTER) {
     throw new Error('โหลด Pack Size master ไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ');
   }
   const missing = new Set();
@@ -112,6 +112,42 @@ function validatePackSizeCoverage(payload){
     throw new Error(`ไม่พบ Pack Size สำหรับ ${fmt(missing.size)} SKU (${examples}) กรุณาอัปเดตไฟล์ Pack Size master`);
   }
 }
+
+function calculatePickUnitsDetail(pieces, sku, fallbackPickQty){
+  const qty = Number(pieces);
+  if (!Number.isFinite(qty) || qty <= 0) {
+    return { units: 0, packSize: null, source: 'invalid-pieces' };
+  }
+
+  const master = globalThis.PACK_SIZE_MASTER;
+  const sizes = master ? master[String(sku || '').trim()] : null;
+  if (!Array.isArray(sizes) || sizes.length === 0) {
+    const fallback = Number(fallbackPickQty);
+    return {
+      units: Number.isFinite(fallback) && fallback > 0 ? fallback : qty,
+      packSize: null,
+      source: 'missing-pack-size'
+    };
+  }
+
+  const EPSILON = 1e-9;
+  for (const rawSize of sizes) {
+    const size = Number(rawSize);
+    if (!Number.isFinite(size) || size <= 0 || size > qty + EPSILON) continue;
+    const quotient = qty / size;
+    const rounded = Math.round(quotient);
+    if (Math.abs(quotient - rounded) <= EPSILON) {
+      return { units: rounded, packSize: size, source: 'pack-size' };
+    }
+  }
+
+  return { units: qty, packSize: 1, source: 'base-unit-fallback' };
+}
+
+function calculatePickUnits(pieces, sku, fallbackPickQty){
+  return calculatePickUnitsDetail(pieces, sku, fallbackPickQty).units;
+}
+
 function packedRowData(S, i){
   if (Number(S && S.row_width) !== 7) {
     throw new Error('Dashboard payload schema ไม่ตรงกับหน้าเว็บ');
@@ -126,7 +162,7 @@ function packedRowData(S, i){
     pickerIdx: S.rows[i*7+2],
     skuIdx,
     pcs,
-    pickQty: globalThis.PickUnits.calculate(pcs, sku, sourcePickQty),
+    pickQty: calculatePickUnits(pcs, sku, sourcePickQty),
     sourcePickQty,
     tmin: S.rows[i*7+6]
   };
