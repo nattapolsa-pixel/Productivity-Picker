@@ -5,7 +5,8 @@
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v2';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v3';
+const DASHBOARD_SCHEMA_VERSION_PREV = 'pick-units-v2';
 // ==========================================================================
 
 // ====== ตั้งค่ากะ/OT (ปรับได้) ======
@@ -235,6 +236,19 @@ function computeBounds(){
   DMIN = ALL_DATES[0] || ''; DMAX = ALL_DATES[ALL_DATES.length-1] || '';
 }
 
+function getPickerName(code){
+  const s = String(code || '').trim();
+  if(!s) return '-';
+  const map = DATA && DATA.meta && DATA.meta.picker_names;
+  if (map && typeof map === 'object') {
+    const byExact = map[s];
+    if (byExact && String(byExact).trim()) return String(byExact).trim();
+    const byNoLeadZero = map[s.replace(/^0+/, '')];
+    if (byNoLeadZero && String(byNoLeadZero).trim()) return String(byNoLeadZero).trim();
+  }
+  return s;
+}
+
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // row width 7 = [dateIdx, zone, pickerIdx, skuIdx, pcs, pick_qty, minOfDay]
 function aggregate(system, from, to, sf){
@@ -328,7 +342,7 @@ function aggregate(system, from, to, sf){
     const zc = pickerZoneCnt[picker] || {}; const zone = Object.keys(zc).sort((a,b)=>zc[b]-zc[a])[0] || '-';
     const shift = Object.keys(o.sh).sort((a,b)=>o.sh[b]-o.sh[a])[0] || '-';
     return {
-      picker, pcs:o.pcs, qty:o.q, lines:o.n, ot:r1(o.ot), shift,
+      picker, name:getPickerName(picker), pcs:o.pcs, qty:o.q, lines:o.n, ot:r1(o.ot), shift,
       avg_prod: r1(mean(o.prods)),
       avg_pcs_prod: r1(mean(o.prodsPcs)),
       zone
@@ -720,6 +734,7 @@ const builders = {
               label:(ctx)=>{
                 const picker = p[ctx.dataIndex];
                 return [
+                  ` พนักงาน: ${picker.picker}${picker.name && picker.name !== picker.picker ? ' · ' + picker.name : ''}`,
                   ` Productivity (หยิบ): ${fmt(picker.avg_prod)} หยิบ/ชม.`,
                   ` Productivity (ชิ้น): ${fmt(picker.avg_pcs_prod)} ชิ้น/ชม.`,
                   ` ปริมาณ: ${fmt(picker.pcs)} ชิ้น (${fmt(picker.qty)} หน่วยหยิบ) (OT: ${picker.ot > 0 ? picker.ot+' ชม.' : '-'})`
@@ -778,16 +793,19 @@ const builders = {
     const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
     const prodHeaderLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
 
-    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Pack Size) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th></tr></thead><tbody>`;
-    if(!list.length) h += '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
+    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>ชื่อพนักงาน</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Pack Size) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th></tr></thead><tbody>`;
+    if(!list.length) h += '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
     list.forEach((p,i) => {
       const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
       const qtyCellStyle = !isPcs ? 'background:#eef2ff;font-weight:700;color:#4338ca;' : 'color:#4338ca;font-weight:600;';
       const prodValue = isPcs ? p.avg_pcs_prod : p.avg_prod;
+      const pickerName = p.name || getPickerName(p.picker);
+      const pickerNameText = pickerName && pickerName !== p.picker ? pickerName : '-';
 
       h += `<tr>
         <td><span class="rank">${i + 1}</span></td>
         <td><b>${p.picker}</b></td>
+        <td style="line-height:1.35;"><div style="font-weight:600;">${pickerNameText}</div>${pickerNameText !== '-' ? `<div style="font-size:11px;color:#94a3b8;">${p.picker}</div>` : ''}</td>
         <td>${SHIFT_LABEL[p.shift] || p.shift}</td>
         <td><span class="pill">${p.zone}</span></td>
         <td class="num" style="${pcsCellStyle}">${fmt(p.pcs)}</td>
@@ -1174,7 +1192,11 @@ async function loadDataOnce(force){
       s && Number(s.row_width) === 7 &&
       Array.isArray(s.dates) && Array.isArray(s.pickers) && Array.isArray(s.skus) &&
       Array.isArray(s.rows) && s.rows.length % 7 === 0;
-    const valid = j && j.meta && j.meta.schema_version === DASHBOARD_SCHEMA_VERSION &&
+    const validSchema = j && j.meta && (
+      j.meta.schema_version === DASHBOARD_SCHEMA_VERSION ||
+      j.meta.schema_version === DASHBOARD_SCHEMA_VERSION_PREV
+    );
+    const valid = validSchema &&
       validSource(j.PTT) && validSource(j.BPS);
     if(!valid) throw new Error('รูปแบบข้อมูล BigQuery เป็นคนละรุ่นกับหน้าเว็บ กรุณากดรีเฟรชอีกครั้ง');
 

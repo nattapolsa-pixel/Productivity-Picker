@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v2';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v3';
 const MAX_UPLOAD_ROWS = 50000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const JOB_DEADLINE_MS = 240000;
@@ -27,6 +27,9 @@ const JOB_DEADLINE_MS = 240000;
 
 const CACHE_TTL = 21600;  // สูงสุด 6 ชม.; รุ่น cache จะเปลี่ยนทันทีหลัง upload สำเร็จ
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
+const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
+const PICKER_NAME_TAB = 'บันทึกเวลาทำงาน';
+const PICKER_NAME_START_ROW = 26;
 
 function doGet(e) {
   try {
@@ -579,8 +582,30 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+function loadPickerNameMap_() {
+  try {
+    const ss = SpreadsheetApp.openById(PICKER_NAME_SHEET_ID);
+    const sh = ss.getSheetByName(PICKER_NAME_TAB);
+    if (!sh) return {};
+    const lastRow = sh.getLastRow();
+    if (lastRow < PICKER_NAME_START_ROW) return {};
+    const values = sh.getRange(PICKER_NAME_START_ROW, 2, lastRow - PICKER_NAME_START_ROW + 1, 2).getDisplayValues();
+    const map = {};
+    values.forEach(row => {
+      const id = String(row[0] || '').trim();
+      const name = String(row[1] || '').trim();
+      if (id && name && !map[id]) map[id] = name;
+    });
+    return map;
+  } catch (err) {
+    console.warn('loadPickerNameMap_ failed: ' + err);
+    return {};
+  }
+}
+
 function buildDashboardData_(useQueryCache) {
   const currentDate = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  const pickerNames = loadPickerNameMap_();
   const sql =
     "SELECT UPPER(category) AS category, " +
     "FORMAT_DATE('%Y-%m-%d', pick_date) AS d, " +
@@ -621,6 +646,7 @@ function buildDashboardData_(useQueryCache) {
               source_pick_units: 'uom_qty',
               dashboard_pick_units: 'frontend Pack Size master (largest exact divisor, excludes PAL)'
             },
+            picker_names: pickerNames,
             recent_days: RECENT_DAYS, rows: total },
     PTT: { row_width: 7, dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
     BPS: { row_width: 7, dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }
