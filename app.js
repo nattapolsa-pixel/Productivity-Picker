@@ -33,7 +33,7 @@ const emptyData = () => ({
 let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
 let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
-let unitMode = 'units'; // 'units' (หน่วยหยิบ) หรือ 'pcs' (จำนวนชิ้น)
+let unitMode = 'pcs'; // เปิดหน้าเริ่มต้นเป็นจำนวนชิ้น แล้วให้หน่วยหยิบแสดงคู่กัน
 let trendMode = 'day';
 let datePresetMode = 'all';
 let excludedSkus = new Set();
