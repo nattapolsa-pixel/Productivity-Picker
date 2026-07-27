@@ -605,6 +605,28 @@ function loadPickerNameMap_() {
   }
 }
 
+function loadPickerAffiliationMap_() {
+  try {
+    const ss = SpreadsheetApp.openById(PICKER_NAME_SHEET_ID);
+    const sh = ss.getSheetByName(PICKER_NAME_TAB);
+    if (!sh) return {};
+    const lastRow = sh.getLastRow();
+    if (lastRow < PICKER_NAME_START_ROW) return {};
+    // B:E = รหัสพนักงาน, ชื่อ, ชื่อเล่น, สังกัด
+    const values = sh.getRange(PICKER_NAME_START_ROW, 2, lastRow - PICKER_NAME_START_ROW + 1, 4).getDisplayValues();
+    const map = {};
+    values.forEach(row => {
+      const id = String(row[0] || '').trim();
+      const affiliation = String(row[3] || '').trim();
+      if (id && affiliation && !map[id]) map[id] = affiliation;
+    });
+    return map;
+  } catch (err) {
+    console.warn('loadPickerAffiliationMap_ failed: ' + err);
+    return {};
+  }
+}
+
 function loadZoneMasterMap_() {
   try {
     const ss = SpreadsheetApp.openById(ZONE_MASTER_SHEET_ID);
@@ -649,6 +671,7 @@ function loadZoneMasterMap_() {
 function buildDashboardData_(useQueryCache) {
   const currentDate = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
   const pickerNames = loadPickerNameMap_();
+  const pickerAffiliations = loadPickerAffiliationMap_();
   const zoneMaster = loadZoneMasterMap_();
   const sql =
     "SELECT UPPER(category) AS category, " +
@@ -691,6 +714,7 @@ function buildDashboardData_(useQueryCache) {
               dashboard_pick_units: 'frontend Pack Size master (largest exact divisor, excludes PAL)'
             },
             picker_names: pickerNames,
+            picker_affiliations: pickerAffiliations,
             zone_master: zoneMaster,
             zone_master_source: ZONE_MASTER_SHEET_ID + '/' + ZONE_MASTER_TAB,
             recent_days: RECENT_DAYS, rows: total },

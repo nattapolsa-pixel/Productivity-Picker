@@ -8,6 +8,7 @@ const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjL
 const DASHBOARD_SCHEMA_VERSION = 'pick-units-v3';
 const DASHBOARD_SCHEMA_VERSION_PREV = 'pick-units-v2';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
+const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
 const ZONE_LAYOUT_CONFIG = (typeof window !== 'undefined' && window.ZONE_LAYOUT) ? window.ZONE_LAYOUT : {};
 // ==========================================================================
@@ -275,6 +276,24 @@ function getPickerName(code){
   return s;
 }
 
+function getPickerAffiliation(code){
+  const s = String(code || '').trim();
+  if(!s) return 'ไม่พบสังกัด';
+  const maps = [
+    DATA && DATA.meta && DATA.meta.picker_affiliations,
+    PICKER_AFFILIATION_FALLBACK
+  ];
+  for (const map of maps) {
+    if (map && typeof map === 'object') {
+      const byExact = map[s];
+      if (byExact && String(byExact).trim()) return String(byExact).trim();
+      const byNoLeadZero = map[s.replace(/^0+/, '')];
+      if (byNoLeadZero && String(byNoLeadZero).trim()) return String(byNoLeadZero).trim();
+    }
+  }
+  return 'ไม่พบสังกัด';
+}
+
 function normalizeLocationCode(value){
   const text = String(value || '').trim().toUpperCase();
   return text ? text.slice(0, 2) : '??';
@@ -519,13 +538,58 @@ function renderZoneProductivityBreakdown(){
   }
 }
 
+function renderAffiliationBreakdown(){
+  const root = document.getElementById('affiliationBreakdown');
+  if(!root || !A) return;
+  const rows = A.by_affiliation || [];
+  const daily = A.affiliation_daily || [];
+  if(!rows.length){
+    root.innerHTML = '<div class="floor-all-mapped">ยังไม่มีข้อมูล Productivity ตามสังกัดในช่วงที่เลือก</div>';
+    return;
+  }
+
+  const summaryRows = rows.map((row, index) => `<tr>
+    <td><span class="rank">${index + 1}</span></td>
+    <td><span class="affiliation-key">${escapeZoneHtml(row.name)}</span><span class="metric-sub">${fmt(row.productivePickers)} / ${fmt(row.pickers)} คน นับ Productivity</span></td>
+    <td class="num">${fmt(row.pcs)}<span class="metric-sub">${fmt(row.eligiblePcs)} ชิ้นที่นำไปคิด</span></td>
+    <td class="num">${fmt(row.qty)}<span class="metric-sub">${fmt(row.eligibleQty)} หน่วยที่นำไปคิด</span></td>
+    <td class="num">${fmt(row.hours)} ชม.<span class="metric-sub">${fmt(row.productiveGroups)} กลุ่ม ≥ ${MIN_PRODUCTIVE_HOURS} ชม.</span></td>
+    <td class="num"><span class="metric-main">${fmt(row.avg_prod)}</span> หน่วย/ชม.</td>
+    <td class="num"><span class="metric-main">${fmt(row.avg_pcs_prod)}</span> ชิ้น/ชม.</td>
+    <td class="num">${row.ot > 0 ? fmt(row.ot) : '-'} ชม.</td>
+  </tr>`).join('');
+
+  const dailyRows = daily.map((row, index) => `<tr>
+    <td>${escapeZoneHtml(row.date)}</td>
+    <td><span class="affiliation-key">${escapeZoneHtml(row.name)}</span></td>
+    <td class="num">${fmt(row.pickers)}</td>
+    <td class="num">${fmt(row.pcs)}</td>
+    <td class="num">${fmt(row.qty)}</td>
+    <td class="num">${fmt(row.hours)} ชม.</td>
+    <td class="num"><span class="metric-main">${fmt(row.avg_prod)}</span></td>
+    <td class="num"><span class="metric-main">${fmt(row.avg_pcs_prod)}</span></td>
+    <td class="num ot-cell">${row.ot > 0 ? fmt(row.ot) : '-'} ชม.</td>
+  </tr>`).join('');
+
+  root.innerHTML = `<div class="affiliation-table-wrap"><table class="affiliation-table"><thead><tr>
+    <th>#</th><th>สังกัด</th><th class="num">จำนวนชิ้นรวม</th><th class="num">หน่วยหยิบรวม</th><th class="num">ชั่วโมงที่นับ</th>
+    <th class="num">Productivity หน่วย/ชม.</th><th class="num">Productivity ชิ้น/ชม.</th><th class="num">OT รวม</th>
+  </tr></thead><tbody>${summaryRows}</tbody></table></div>
+  <div class="affiliation-daily-title">OT และ Productivity รายวันแยกตามสังกัด</div>
+  <div class="affiliation-table-wrap"><table class="affiliation-table affiliation-daily-table"><thead><tr>
+    <th>วันที่ (วันกะ)</th><th>สังกัด</th><th class="num">Picker</th><th class="num">จำนวนชิ้น</th><th class="num">หน่วยหยิบ</th>
+    <th class="num">ชั่วโมงที่นับ</th><th class="num">หน่วย/ชม.</th><th class="num">ชิ้น/ชม.</th><th class="num">OT รายวัน</th>
+  </tr></thead><tbody>${dailyRows || '<tr><td colspan="9" class="empty-cell">ยังไม่มีข้อมูลรายวัน</td></tr>'}</tbody></table></div>
+  <div class="zone-breakdown-foot">สังกัดจับจากรหัสพนักงานใน Sheet “บันทึกเวลาทำงาน” · OT ใช้กติกาเดียวกับหน้า Productivity และ Productivity จะไม่นับกลุ่มที่ทำงานต่ำกว่า ${MIN_PRODUCTIVE_HOURS} ชั่วโมง</div>`;
+}
+
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // row width 7 = [dateIdx, zone, pickerIdx, skuIdx, pcs, pick_qty, minOfDay]
 function aggregate(system, from, to, sf){
   const S = DATA[system];
   let lines = 0, pcs = 0, pickQty = 0;
   const pickers = new Set(), zones = new Set();
-  const zoneMap = {}, locationMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, ownerTypeGrp = {}, pickerZoneCnt = {}, pickerLocationCnt = {};
+  const zoneMap = {}, locationMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, ownerTypeGrp = {}, affiliationGrp = {}, pickerZoneCnt = {}, pickerLocationCnt = {};
   const SH = S._sh;
 
   const rowCount = packedRowCount(S);
@@ -590,6 +654,15 @@ function aggregate(system, from, to, sf){
       pcs:0, q:0, n:0, mx:-1
     });
     ownerType.pcs += pVal; ownerType.q += qVal; ownerType.n++; if(si.sm > ownerType.mx) ownerType.mx = si.sm;
+
+    // ผูกสังกัดจากรหัสพนักงานใน Sheet บันทึกเวลาทำงาน เพื่อสรุป Productivity และ OT รายสังกัด
+    const affiliation = getPickerAffiliation(picker);
+    const affiliationKey = picker+'|'+si.sd+'|'+si.sh+'|'+affiliation;
+    const affiliationGroup = affiliationGrp[affiliationKey] || (affiliationGrp[affiliationKey] = {
+      picker, sd:si.sd, sh:si.sh, affiliation,
+      pcs:0, q:0, n:0, mx:-1
+    });
+    affiliationGroup.pcs += pVal; affiliationGroup.q += qVal; affiliationGroup.n++; if(si.sm > affiliationGroup.mx) affiliationGroup.mx = si.sm;
   }
 
   const groups = Object.values(grp);
@@ -602,6 +675,14 @@ function aggregate(system, from, to, sf){
   });
   const ownerTypeGroups = Object.values(ownerTypeGrp);
   ownerTypeGroups.forEach(g => {
+    g.ot = otHours(g.mx);
+    g.wh = REG_HOURS + g.ot;
+    g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
+    g.prod = g.countable ? (g.q / g.wh) : 0;
+    g.pcsProd = g.countable ? (g.pcs / g.wh) : 0;
+  });
+  const affiliationGroups = Object.values(affiliationGrp);
+  affiliationGroups.forEach(g => {
     g.ot = otHours(g.mx);
     g.wh = REG_HOURS + g.ot;
     g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
@@ -629,7 +710,7 @@ function aggregate(system, from, to, sf){
 
   const byPicker = {};
   groups.forEach(g => {
-    const o = byPicker[g.picker] || (byPicker[g.picker] = {pcs:0,q:0,n:0,ot:0,prods:[],prodsPcs:[],sh:{}});
+    const o = byPicker[g.picker] || (byPicker[g.picker] = {pcs:0,q:0,n:0,ot:0,prods:[],prodsPcs:[],sh:{},affiliation:getPickerAffiliation(g.picker)});
     o.pcs += g.pcs; o.q += g.q; o.n += g.n; o.ot += g.ot;
     if(g.countable){
       o.prods.push(g.prod);
@@ -642,7 +723,7 @@ function aggregate(system, from, to, sf){
     const lc = pickerLocationCnt[picker] || {}; const location = Object.keys(lc).sort((a,b)=>lc[b]-lc[a])[0] || '-';
     const shift = Object.keys(o.sh).sort((a,b)=>o.sh[b]-o.sh[a])[0] || '-';
     return {
-      picker, name:getPickerName(picker), pcs:o.pcs, qty:o.q, lines:o.n, ot:r1(o.ot), shift,
+      picker, name:getPickerName(picker), affiliation:o.affiliation, pcs:o.pcs, qty:o.q, lines:o.n, ot:r1(o.ot), shift,
       avg_prod: r1(mean(o.prods)),
       avg_pcs_prod: r1(mean(o.prodsPcs)),
       zone, location
@@ -710,6 +791,57 @@ function aggregate(system, from, to, sf){
   }
   const by_owner = buildBreakdown('owner');
   const by_type_pick = buildBreakdown('typePick');
+  const affiliationMap = {};
+  const affiliationDailyMap = {};
+  affiliationGroups.forEach(g => {
+    const key = String(g.affiliation || 'ไม่พบสังกัด').trim() || 'ไม่พบสังกัด';
+    const out = affiliationMap[key] || (affiliationMap[key] = {
+      name:key, pcs:0, qty:0, lines:0, ot:0, hours:0,
+      eligiblePcs:0, eligibleQty:0, productiveGroups:0,
+      pickers:new Set(), productivePickers:new Set()
+    });
+    out.pcs += g.pcs; out.qty += g.q; out.lines += g.n; out.ot += g.ot; out.pickers.add(g.picker);
+    if(g.countable){
+      out.hours += g.wh;
+      out.eligiblePcs += g.pcs;
+      out.eligibleQty += g.q;
+      out.productiveGroups++;
+      out.productivePickers.add(g.picker);
+    }
+
+    const dailyKey = g.sd + '|' + key;
+    const day = affiliationDailyMap[dailyKey] || (affiliationDailyMap[dailyKey] = {
+      date:g.sd, name:key, pcs:0, qty:0, lines:0, ot:0, hours:0,
+      eligiblePcs:0, eligibleQty:0, productiveGroups:0,
+      pickers:new Set(), productivePickers:new Set()
+    });
+    day.pcs += g.pcs; day.qty += g.q; day.lines += g.n; day.ot += g.ot; day.pickers.add(g.picker);
+    if(g.countable){
+      day.hours += g.wh;
+      day.eligiblePcs += g.pcs;
+      day.eligibleQty += g.q;
+      day.productiveGroups++;
+      day.productivePickers.add(g.picker);
+    }
+  });
+  const by_affiliation = Object.values(affiliationMap).map(v => ({
+    name:v.name, pcs:v.pcs, qty:v.qty, lines:v.lines, ot:r1(v.ot), hours:r1(v.hours),
+    eligiblePcs:v.eligiblePcs, eligibleQty:v.eligibleQty,
+    productiveGroups:v.productiveGroups, pickers:v.pickers.size, productivePickers:v.productivePickers.size,
+    avg_prod:r1(v.hours ? v.eligibleQty / v.hours : 0),
+    avg_pcs_prod:r1(v.hours ? v.eligiblePcs / v.hours : 0)
+  })).sort((a,b)=>{
+    const aUnknown = a.name === 'ไม่พบสังกัด' ? 1 : 0;
+    const bUnknown = b.name === 'ไม่พบสังกัด' ? 1 : 0;
+    return (aUnknown - bUnknown) || (b.qty-a.qty) || a.name.localeCompare(b.name);
+  });
+  const affiliation_daily = Object.values(affiliationDailyMap).map(v => ({
+    date:v.date, name:v.name, pcs:v.pcs, qty:v.qty, lines:v.lines, ot:r1(v.ot), hours:r1(v.hours),
+    eligiblePcs:v.eligiblePcs, eligibleQty:v.eligibleQty,
+    productiveGroups:v.productiveGroups, pickers:v.pickers.size, productivePickers:v.productivePickers.size,
+    avg_prod:r1(v.hours ? v.eligibleQty / v.hours : 0),
+    avg_pcs_prod:r1(v.hours ? v.eligiblePcs / v.hours : 0)
+  })).sort((a,b)=>b.date.localeCompare(a.date) || (b.qty-a.qty) || a.name.localeCompare(b.name));
   const by_item = Object.entries(itemMap).map(([sku,v])=>{
     const info = getItemInfo(sku);
     return { sku, name: info.name, owner: info.owner, pcs: v.pcs, qty: v.qty, lines: v.lines };
@@ -728,7 +860,7 @@ function aggregate(system, from, to, sf){
       avg_prod: r1(mean(productiveGroups.map(g=>g.prod))),
       avg_pcs_prod: r1(mean(productiveGroups.map(g=>g.pcsProd)))
     },
-    daily, by_zone, by_location, by_picker, by_owner, by_type_pick, by_timeslot, by_item, by_item_all
+    daily, by_zone, by_location, by_picker, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all
   };
 }
 
@@ -1077,7 +1209,9 @@ const builders = {
               label:(ctx)=>{
                 const picker = p[ctx.dataIndex];
                 const zoneInfo = getZoneInfo(picker.location);
+                const affiliation = picker.affiliation || getPickerAffiliation(picker.picker);
                 return [
+                  ` สังกัด: ${affiliation}`,
                   ` พนักงาน: ${picker.picker}${picker.name && picker.name !== picker.picker ? ' · ' + picker.name : ''}`,
                   ` Location / Zone: ${picker.location} / ${picker.zone}`,
                   ` Type Pick / Owner: ${zoneInfo.typePick} / ${zoneInfo.owner}`,
@@ -1092,6 +1226,7 @@ const builders = {
         scales:{x:{grid:{color:'#eef2f7'}, ticks:{callback:fmt}}, y:{grid:{display:false}}}
       }
     });
+    renderAffiliationBreakdown();
   },
   zones(){
     const z = [...A.by_zone];
