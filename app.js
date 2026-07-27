@@ -37,12 +37,57 @@ let unitMode = 'pcs'; // เปิดหน้าเริ่มต้นเป�
 let trendMode = 'day';
 let datePresetMode = 'all';
 let excludedSkus = new Set();
+let excludedSkusSavedAt = null;
 let itemSearchTerm = '';
 let hasLiveData = false;
 let activeLoadPromise = null;
 let activeLoadIsFresh = false;
 let queuedFreshPromise = null;
 const DASHBOARD_TIMEOUT_MS = 180000;
+const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
+
+function normalizeSkuKey(sku){
+  return String(sku || '').trim();
+}
+
+function formatThaiDateTime(value){
+  if(!value) return '';
+  const dt = new Date(value);
+  if(Number.isNaN(dt.getTime())) return '';
+  return dt.toLocaleString('th-TH', {dateStyle:'short', timeStyle:'short'});
+}
+
+function loadExcludedSkusFromStorage(){
+  try{
+    const raw = localStorage.getItem(EXCLUDED_SKUS_STORAGE_KEY);
+    if(!raw){
+      excludedSkus = new Set();
+      excludedSkusSavedAt = null;
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed)
+      ? parsed
+      : (parsed && Array.isArray(parsed.skus) ? parsed.skus : []);
+    excludedSkus = new Set(list.map(normalizeSkuKey).filter(Boolean));
+    excludedSkusSavedAt = parsed && parsed.updatedAt ? parsed.updatedAt : null;
+  }catch(_){
+    excludedSkus = new Set();
+    excludedSkusSavedAt = null;
+  }
+}
+
+function saveExcludedSkusToStorage(){
+  try{
+    const payload = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      skus: [...excludedSkus].map(normalizeSkuKey).filter(Boolean).sort()
+    };
+    localStorage.setItem(EXCLUDED_SKUS_STORAGE_KEY, JSON.stringify(payload));
+    excludedSkusSavedAt = payload.updatedAt;
+  }catch(_){}
+}
 
 // ===== shift helpers =====
 // tmin = นาทีของวัน (เวลา local) · แปลงเป็น กะ + วันของกะ + นาทีนับจากต้นกะ
@@ -904,16 +949,19 @@ const builders = {
 };
 
 window.toggleExcludeSku = function(sku) {
+  sku = normalizeSkuKey(sku);
   if (excludedSkus.has(sku)) {
     excludedSkus.delete(sku);
   } else {
     excludedSkus.add(sku);
   }
+  saveExcludedSkusToStorage();
   render();
 };
 
 window.clearExcludedSkus = function() {
   excludedSkus.clear();
+  saveExcludedSkusToStorage();
   render();
 };
 
@@ -921,6 +969,7 @@ function renderExcludedBadges() {
   const bar = document.getElementById('excludedBar');
   const badgeContainer = document.getElementById('excludedBadges');
   const countBadge = document.getElementById('excludedCountBadge');
+  const savedAtBadge = document.getElementById('excludedSavedAt');
   const btnClear = document.getElementById('btnClearExcluded');
 
   if (btnClear && !btnClear._bound) {
@@ -932,11 +981,17 @@ function renderExcludedBadges() {
 
   if (excludedSkus.size === 0) {
     bar.style.display = 'none';
+    if (savedAtBadge) savedAtBadge.textContent = '';
     return;
   }
 
   bar.style.display = 'block';
   countBadge.textContent = excludedSkus.size.toLocaleString();
+  if (savedAtBadge) {
+    savedAtBadge.textContent = excludedSkusSavedAt
+      ? `บันทึกล่าสุด: ${formatThaiDateTime(excludedSkusSavedAt)}`
+      : 'รายการนี้จะถูกจำไว้ในเครื่องนี้อัตโนมัติ';
+  }
 
   let h = '';
   excludedSkus.forEach(sku => {
@@ -987,7 +1042,7 @@ function clearDashboardState(){
   datePresetMode = 'all';
   trendMode = 'day';
   A = null; built = {}; lastFetchTime = null;
-  excludedSkus.clear(); itemSearchTerm = '';
+  itemSearchTerm = '';
   destroyCharts();
   const sysbar = document.querySelector('.sysbar'); if(sysbar) sysbar.remove();
   const daterange = document.getElementById('daterange'); if(daterange) daterange.textContent = '';
@@ -1167,6 +1222,7 @@ async function loadDataOnce(force){
 
 // init
 try{ localStorage.removeItem('pick_dashboard_cache_v2'); }catch(_){}
+loadExcludedSkusFromStorage();
 bindDataStateActions();
 document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
 loadData();
