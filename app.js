@@ -7,6 +7,7 @@
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 const DASHBOARD_SCHEMA_VERSION = 'pick-units-v3';
 const DASHBOARD_SCHEMA_VERSION_PREV = 'pick-units-v2';
+const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 // ==========================================================================
 
 // ====== ตั้งค่ากะ/OT (ปรับได้) ======
@@ -239,12 +240,17 @@ function computeBounds(){
 function getPickerName(code){
   const s = String(code || '').trim();
   if(!s) return '-';
-  const map = DATA && DATA.meta && DATA.meta.picker_names;
-  if (map && typeof map === 'object') {
-    const byExact = map[s];
-    if (byExact && String(byExact).trim()) return String(byExact).trim();
-    const byNoLeadZero = map[s.replace(/^0+/, '')];
-    if (byNoLeadZero && String(byNoLeadZero).trim()) return String(byNoLeadZero).trim();
+  const maps = [
+    DATA && DATA.meta && DATA.meta.picker_names,
+    PICKER_NAME_FALLBACK
+  ];
+  for (const map of maps) {
+    if (map && typeof map === 'object') {
+      const byExact = map[s];
+      if (byExact && String(byExact).trim()) return String(byExact).trim();
+      const byNoLeadZero = map[s.replace(/^0+/, '')];
+      if (byNoLeadZero && String(byNoLeadZero).trim()) return String(byNoLeadZero).trim();
+    }
   }
   return s;
 }
