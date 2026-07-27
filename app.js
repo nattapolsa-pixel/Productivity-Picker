@@ -428,13 +428,13 @@ function renderKPIs(){
   const isPcs = unitMode === 'pcs';
   const defs = [
     {
-      lbl: isPcs ? 'ปริมาณชิ้นรวม ★' : 'จำนวนชิ้นรวม',
+      lbl: isPcs ? 'ปริมาณชิ้นรวม (QTY เดิม) ★' : 'จำนวนชิ้นรวม (QTY เดิม)',
       val: k.pcs,
       unit: 'ชิ้น',
       grad: isPcs ? 'linear-gradient(90deg,#14b8a6,#0ea5e9)' : 'linear-gradient(90deg,#94a3b8,#cbd5e1)'
     },
     {
-      lbl: !isPcs ? 'หน่วยหยิบรวม ★' : 'หน่วยหยิบรวม',
+      lbl: !isPcs ? 'หน่วยหยิบรวม (Pack Size) ★' : 'หน่วยหยิบรวม (Pack Size)',
       val: k.qty,
       unit: 'หน่วยหยิบ',
       grad: !isPcs ? 'linear-gradient(90deg,#3b82f6,#6366f1)' : 'linear-gradient(90deg,#94a3b8,#cbd5e1)'
@@ -477,7 +477,7 @@ const builders = {
         if(mode === 'week'){ const day = (dt.getDay()+6)%7; const mo = new Date(dt); mo.setDate(dt.getDate()-day); k = 'wk '+mo.toISOString().slice(5,10); }
         if(mode === 'month') k = d.date.slice(0,7);
         if(!map[k]) map[k] = {pcs:0, qty:0, ps:[], psPcs:[]};
-        map[k].pcs += (d.pcs || d.qty);
+        map[k].pcs += Number(d.pcs) || 0;
         map[k].qty += d.qty;
         if(d.avg_prod>0) map[k].ps.push(d.avg_prod);
         if(d.avg_pcs_prod>0) map[k].psPcs.push(d.avg_pcs_prod);
@@ -697,7 +697,7 @@ const builders = {
     const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
     const prodHeaderLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
 
-    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (Pcs) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Units) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th></tr></thead><tbody>`;
+    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Pack Size) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th></tr></thead><tbody>`;
     if(!list.length) h += '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
     list.forEach((p,i) => {
       const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
@@ -829,7 +829,7 @@ const builders = {
       const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
       const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
 
-      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
+      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Pack Size) ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
       if (!displayItems.length) {
         h += '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
       } else {
