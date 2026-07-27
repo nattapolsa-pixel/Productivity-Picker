@@ -21,6 +21,22 @@ const MIN_PRODUCTIVE_HOURS = 3; // งานต่ำกว่านี้ไม
 
 const fmt = n => Number(n).toLocaleString('en-US');
 const PALETTE = ['#6366f1','#14b8a6','#f59e0b','#f43f5e','#0ea5e9','#8b5cf6','#10b981','#ec4899','#f97316','#22c55e','#3b82f6','#eab308'];
+const ZONE_OWNER_COLORS = Object.freeze({
+  'max mart':'#0f766e',
+  'punthai':'#2563eb',
+  'gfa':'#ea580c',
+  'lube':'#be123c',
+  '-':'#64748b'
+});
+const ZONE_TYPE_COLORS = Object.freeze({
+  'full rack':'#7c3aed',
+  'half rack':'#0891b2',
+  'mezzanine':'#c026d3',
+  'micro rack':'#16a34a',
+  'pick to sort':'#d97706',
+  'on floor':'#475569',
+  '-':'#94a3b8'
+});
 const TITLES = {overview:'ภาพรวม',prod:'Productivity',zones:'โซน & ผังคลัง',pickers:'พนักงาน (Picker)',time:'ช่วงเวลา',items:'สินค้า (Items)'};
 const SHIFT_LABEL = {morning:'🌅 เช้า', night:'🌙 ดึก', '-':'-'};
 
@@ -43,6 +59,7 @@ let datePresetMode = 'all';
 let excludedSkus = new Set();
 let excludedSkusSavedAt = null;
 let itemSearchTerm = '';
+let zoneBreakdownMode = 'owner';
 let hasLiveData = false;
 let activeLoadPromise = null;
 let activeLoadIsFresh = false;
@@ -322,18 +339,40 @@ function formatMapValue(value){
   }).format(n);
 }
 
-function zoneMapColor(value, maxValue, isPcs){
+function hexToRgb(hex){
+  const m = String(hex || '').match(/^#?([0-9a-f]{6})$/i);
+  if(!m) return [100,116,139];
+  return [0,1,2].map(i => parseInt(m[1].slice(i*2, i*2+2), 16));
+}
+
+function colorForLabel(palette, label){
+  const key = String(label || '-').trim().toLowerCase();
+  return palette[key] || palette['-'];
+}
+
+function mapGroupColors(info){
+  return {
+    owner: colorForLabel(ZONE_OWNER_COLORS, info && info.owner),
+    type: colorForLabel(ZONE_TYPE_COLORS, info && info.typePick)
+  };
+}
+
+function zoneMapColor(value, maxValue, isPcs, info){
   const val = Number(value) || 0;
-  if(val <= 0) return {background:'#ffffff', border:'#cbd5e1', color:'#334155', intensity:0};
+  const groupColors = mapGroupColors(info);
+  if(val <= 0) return {background:'#ffffff', border:groupColors.type, accent:groupColors.type, owner:groupColors.owner, type:groupColors.type, color:'#334155', intensity:0};
   const ratio = Math.min(1, val / Math.max(1, maxValue));
   const intensity = .15 + .85 * Math.pow(ratio, .48);
   const base = [248,250,252];
-  const target = isPcs ? [13,148,136] : [79,70,229];
+  const target = hexToRgb(groupColors.owner);
   const mixed = base.map((v,i)=>Math.round(v + (target[i]-v)*intensity));
   return {
     background:`rgb(${mixed.join(',')})`,
-    border:`rgba(${target.join(',')},.72)`,
+    border:groupColors.type,
     color:intensity > .58 ? '#ffffff' : '#1e293b',
+    accent:groupColors.type,
+    owner:groupColors.owner,
+    type:groupColors.type,
     intensity
   };
 }
@@ -374,7 +413,7 @@ function renderWarehouseMap(activeLocations, isPcs){
     const info = metadata(code);
     const primary = mainValue(row);
     const secondary = isPcs ? Number(row.qty || 0) : Number(row.pcs || 0);
-    const color = zoneMapColor(primary, maxValue, isPcs);
+    const color = zoneMapColor(primary, maxValue, isPcs, info);
     const active = Number(row.lines || 0) > 0;
     const title = [
       `Location: ${code}`,
@@ -386,7 +425,7 @@ function renderWarehouseMap(activeLocations, isPcs){
       `Picker: ${fmt(row.pickers || 0)} คน`
     ].join('\n');
     return `<div class="floor-loc ${extraClass || ''} ${active ? 'active' : 'inactive'}" data-location="${escapeZoneHtml(code)}"` +
-      ` style="--floor-bg:${color.background};--floor-border:${color.border};--floor-fg:${color.color}" title="${escapeZoneHtml(title)}">` +
+      ` style="--floor-bg:${color.background};--floor-border:${color.border};--floor-accent:${color.accent || color.border};--floor-fg:${color.color}" data-owner="${escapeZoneHtml(info.owner)}" data-type-pick="${escapeZoneHtml(info.typePick)}" title="${escapeZoneHtml(title)}">` +
       `<div class="floor-loc-code">${escapeZoneHtml(code)}</div>` +
       `<div class="floor-loc-metric"><strong>${formatMapValue(primary)}</strong><span>${escapeZoneHtml(mainUnit)}</span></div>` +
       `<div class="floor-loc-secondary">${formatMapValue(secondary)} ${escapeZoneHtml(secondaryUnit)}</div>` +
@@ -406,10 +445,17 @@ function renderWarehouseMap(activeLocations, isPcs){
     const diff = mainValue(activeLocations.get(b)) - mainValue(activeLocations.get(a));
     return diff || a.localeCompare(b);
   });
+  const ownerLegend = [...new Set(mappedCodes.map(code => metadata(code).owner))].sort();
+  const typeLegend = [...new Set(mappedCodes.map(code => metadata(code).typePick))].sort();
+  const legendSwatches = (labels, palette) => labels.map(label => {
+    const color = colorForLabel(palette, label);
+    return `<span class="floor-group-key"><i style="background:${color}"></i>${escapeZoneHtml(label)}</span>`;
+  }).join('');
 
   root.innerHTML =
     `<div class="floor-map-legend"><div><span class="floor-legend-dot low"></span>น้อย</div><div><span class="floor-legend-bar ${isPcs ? 'pcs' : 'units'}"></span>มาก</div>` +
     `<div class="floor-legend-unit">ตัวเลขหลัก = ${escapeZoneHtml(mainUnit)} · วางเมาส์เพื่อดูรายละเอียดครบ</div></div>` +
+    `<div class="floor-map-group-legends"><div><b>สีพื้น = Owner:</b> ${legendSwatches(ownerLegend, ZONE_OWNER_COLORS)}</div><div><b>ขอบสี = Type Pick:</b> ${legendSwatches(typeLegend, ZONE_TYPE_COLORS)}</div></div>` +
     `<div class="warehouse-map-scroll"><div class="warehouse-floor">` +
       `<section class="floor-onfloor">` +
         `<div class="floor-section-title">On Floor</div><div class="floor-owner-strip maxmart">MAX MART</div>` +
@@ -434,13 +480,59 @@ function renderWarehouseMap(activeLocations, isPcs){
     `</div>`;
 }
 
+function renderZoneProductivityBreakdown(){
+  const root = document.getElementById('zoneBreakdown');
+  if(!root || !A) return;
+  const switchRoot = document.getElementById('zoneBreakdownSwitch');
+  const mode = zoneBreakdownMode === 'type' ? 'type' : 'owner';
+  const rows = mode === 'type' ? (A.by_type_pick || []) : (A.by_owner || []);
+  const label = mode === 'type' ? 'Type Pick' : 'Owner';
+  const palette = mode === 'type' ? ZONE_TYPE_COLORS : ZONE_OWNER_COLORS;
+  const blank = `<div class="floor-all-mapped">ยังไม่มีข้อมูล Productivity สำหรับช่วงที่เลือก</div>`;
+  if(!rows.length){ root.innerHTML = blank; return; }
+  const body = rows.map((row, index) => {
+    const color = colorForLabel(palette, row.name);
+    const displayName = mode === 'owner' && row.name === '-' ? 'ไม่พบ Owner' : row.name;
+    const related = mode === 'type' ? row.owners : row.types;
+    const relatedLabel = related && related.length ? related.map(x => x === '-' ? 'ไม่พบ Owner' : x).join(', ') : '-';
+    const productivity = Number(row.avg_prod || 0);
+    const pcsProductivity = Number(row.avg_pcs_prod || 0);
+    return `<tr>` +
+      `<td><span class="rank">${index + 1}</span></td>` +
+      `<td><span class="zone-breakdown-key"><i style="background:${color}"></i>${escapeZoneHtml(displayName)}</span><span class="metric-sub">${label === 'Owner' ? 'Type Pick: ' : 'Owner: '}${escapeZoneHtml(relatedLabel)}</span></td>` +
+      `<td class="num">${fmt(row.pcs)}<span class="metric-sub">${fmt(row.eligiblePcs)} นับ Productivity</span></td>` +
+      `<td class="num">${fmt(row.qty)}<span class="metric-sub">${fmt(row.eligibleQty)} นับ Productivity</span></td>` +
+      `<td class="num">${fmt(row.hours)} ชม.<span class="metric-sub">${fmt(row.productiveGroups)} กลุ่ม ≥ 3 ชม.</span></td>` +
+      `<td class="num"><span class="metric-main">${fmt(productivity)}</span> หยิบ/ชม.<span class="metric-sub">เฉลี่ยถ่วงน้ำหนัก</span></td>` +
+      `<td class="num"><span class="metric-main">${fmt(pcsProductivity)}</span> ชิ้น/ชม.</td>` +
+      `<td class="num">${fmt(row.productivePickers)} / ${fmt(row.pickers)} คน</td>` +
+      `</tr>`;
+  }).join('');
+  root.innerHTML = `<div class="zone-breakdown-wrap"><table class="zone-breakdown-table"><thead><tr>` +
+    `<th>#</th><th>${label}</th><th class="num">จำนวนชิ้นรวม</th><th class="num">หน่วยหยิบรวม</th><th class="num">ชั่วโมงที่นับ</th>` +
+    `<th class="num">Productivity หยิบ/ชม.</th><th class="num">Productivity ชิ้น/ชม.</th><th class="num">Picker ที่นับ / ทั้งหมด</th>` +
+    `</tr></thead><tbody>${body}</tbody></table></div>` +
+    `<div class="zone-breakdown-foot">Productivity ใช้เฉพาะกลุ่มที่มีเวลาทำงานตั้งแต่ ${MIN_PRODUCTIVE_HOURS} ชั่วโมงขึ้นไป · จำนวนชิ้น/หน่วยหยิบรวมยังแสดงยอดทั้งหมดของช่วงที่เลือก</div>`;
+  if(switchRoot){
+    switchRoot.querySelectorAll('button').forEach(button => {
+      button.classList.toggle('active', (button.dataset.breakdown === 'type') === (mode === 'type'));
+      button.onclick = () => {
+        const next = button.dataset.breakdown === 'type' ? 'type' : 'owner';
+        if(zoneBreakdownMode === next) return;
+        zoneBreakdownMode = next;
+        renderZoneProductivityBreakdown();
+      };
+    });
+  }
+}
+
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // row width 7 = [dateIdx, zone, pickerIdx, skuIdx, pcs, pick_qty, minOfDay]
 function aggregate(system, from, to, sf){
   const S = DATA[system];
   let lines = 0, pcs = 0, pickQty = 0;
   const pickers = new Set(), zones = new Set();
-  const zoneMap = {}, locationMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, pickerZoneCnt = {}, pickerLocationCnt = {};
+  const zoneMap = {}, locationMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, ownerTypeGrp = {}, pickerZoneCnt = {}, pickerLocationCnt = {};
   const SH = S._sh;
 
   const rowCount = packedRowCount(S);
@@ -497,10 +589,26 @@ function aggregate(system, from, to, sf){
     const k = picker+'|'+si.sd+'|'+si.sh;
     const b = grp[k] || (grp[k] = {picker, sd:si.sd, sh:si.sh, pcs:0, q:0, n:0, mx:-1});
     b.pcs += pVal; b.q += qVal; b.n++; if(si.sm > b.mx) b.mx = si.sm;
+
+    // แยกกลุ่มเพื่อวัด Productivity ตาม Owner และ Type Pick โดยใช้กติกาเวลาเดียวกับรายคน
+    const ownerTypeKey = picker+'|'+si.sd+'|'+si.sh+'|'+zoneInfo.owner+'|'+zoneInfo.typePick;
+    const ownerType = ownerTypeGrp[ownerTypeKey] || (ownerTypeGrp[ownerTypeKey] = {
+      picker, sd:si.sd, sh:si.sh, owner:zoneInfo.owner || '-', typePick:zoneInfo.typePick || '-',
+      pcs:0, q:0, n:0, mx:-1
+    });
+    ownerType.pcs += pVal; ownerType.q += qVal; ownerType.n++; if(si.sm > ownerType.mx) ownerType.mx = si.sm;
   }
 
   const groups = Object.values(grp);
   groups.forEach(g => {
+    g.ot = otHours(g.mx);
+    g.wh = REG_HOURS + g.ot;
+    g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
+    g.prod = g.countable ? (g.q / g.wh) : 0;
+    g.pcsProd = g.countable ? (g.pcs / g.wh) : 0;
+  });
+  const ownerTypeGroups = Object.values(ownerTypeGrp);
+  ownerTypeGroups.forEach(g => {
     g.ot = otHours(g.mx);
     g.wh = REG_HOURS + g.ot;
     g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
@@ -573,6 +681,42 @@ function aggregate(system, from, to, sf){
     location:v.location, zone:v.zone, typePick:v.typePick, owner:v.owner, known:v.known,
     pcs:v.pcs, qty:v.qty, lines:v.lines, pickers:v.pk.size
   })).sort((a,b)=>b.qty-a.qty);
+  function buildBreakdown(keyName){
+    const map = {};
+    ownerTypeGroups.forEach(g => {
+      const key = String(g[keyName] || '-').trim() || '-';
+      const out = map[key] || (map[key] = {
+        name:key, pcs:0, qty:0, lines:0, hours:0, eligiblePcs:0, eligibleQty:0,
+        productiveGroups:0, pickers:new Set(), productivePickers:new Set(), types:new Set(), owners:new Set(), avgValues:[], avgPcsValues:[]
+      });
+      out.pcs += g.pcs; out.qty += g.q; out.lines += g.n; out.pickers.add(g.picker);
+      out.types.add(g.typePick); out.owners.add(g.owner);
+      if(g.countable){
+        out.hours += g.wh;
+        out.eligiblePcs += g.pcs;
+        out.eligibleQty += g.q;
+        out.productiveGroups++;
+        out.productivePickers.add(g.picker);
+        out.avgValues.push(g.prod);
+        out.avgPcsValues.push(g.pcsProd);
+      }
+    });
+    return Object.values(map).map(v => ({
+      name:v.name, pcs:v.pcs, qty:v.qty, lines:v.lines,
+      hours:r1(v.hours), eligiblePcs:v.eligiblePcs, eligibleQty:v.eligibleQty,
+      productiveGroups:v.productiveGroups, pickers:v.pickers.size, productivePickers:v.productivePickers.size,
+      types:[...v.types].sort(), owners:[...v.owners].sort(),
+      avg_prod:r1(v.hours ? v.eligibleQty / v.hours : 0),
+      avg_pcs_prod:r1(v.hours ? v.eligiblePcs / v.hours : 0),
+      mean_prod:r1(mean(v.avgValues)), mean_pcs_prod:r1(mean(v.avgPcsValues))
+    })).sort((a,b)=>{
+      const aUnknown = a.name === '-' || a.name === 'ไม่พบใน Zone_V2' ? 1 : 0;
+      const bUnknown = b.name === '-' || b.name === 'ไม่พบใน Zone_V2' ? 1 : 0;
+      return (aUnknown - bUnknown) || (b.avg_prod-a.avg_prod) || (b.qty-a.qty) || a.name.localeCompare(b.name);
+    });
+  }
+  const by_owner = buildBreakdown('owner');
+  const by_type_pick = buildBreakdown('typePick');
   const by_item = Object.entries(itemMap).map(([sku,v])=>{
     const info = getItemInfo(sku);
     return { sku, name: info.name, owner: info.owner, pcs: v.pcs, qty: v.qty, lines: v.lines };
@@ -591,7 +735,7 @@ function aggregate(system, from, to, sf){
       avg_prod: r1(mean(productiveGroups.map(g=>g.prod))),
       avg_pcs_prod: r1(mean(productiveGroups.map(g=>g.pcsProd)))
     },
-    daily, by_zone, by_location, by_picker, by_timeslot, by_item, by_item_all
+    daily, by_zone, by_location, by_picker, by_owner, by_type_pick, by_timeslot, by_item, by_item_all
   };
 }
 
@@ -1002,6 +1146,7 @@ const builders = {
     }
 
     renderWarehouseMap(activeLocations, isPcs);
+    renderZoneProductivityBreakdown();
 
     new Chart(document.getElementById('zone'), {
       type:'bar',
