@@ -616,7 +616,11 @@ function buildDashboardData_(useQueryCache) {
   return {
     meta: { generated: new Date().toISOString(), source: 'BigQuery v_pick_enriched',
             schema_version: DASHBOARD_SCHEMA_VERSION,
-            unit_definition: { pieces: 'qty', pick_units: 'uom_qty' },
+            unit_definition: {
+              pieces: 'qty',
+              source_pick_units: 'uom_qty',
+              dashboard_pick_units: 'frontend Pack Size master (largest exact divisor, excludes PAL)'
+            },
             recent_days: RECENT_DAYS, rows: total },
     PTT: { row_width: 7, dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
     BPS: { row_width: 7, dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }

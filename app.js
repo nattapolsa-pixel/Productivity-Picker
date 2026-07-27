@@ -94,17 +94,40 @@ function packedRowCount(S){
   const width = Number(S && S.row_width) || 0;
   return S && Array.isArray(S.rows) ? (width ? Math.floor(S.rows.length / width) : S.rows.length) : 0;
 }
+function validatePackSizeCoverage(payload){
+  if(!globalThis.PACK_SIZE_MASTER || !globalThis.PickUnits) {
+    throw new Error('โหลด Pack Size master ไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ');
+  }
+  const missing = new Set();
+  ['PTT','BPS'].forEach(name => {
+    const source = payload && payload[name];
+    if(!source || !Array.isArray(source.skus)) return;
+    source.skus.forEach(sku => {
+      const key = String(sku || '').trim();
+      if(key && !globalThis.PACK_SIZE_MASTER[key]) missing.add(key);
+    });
+  });
+  if(missing.size > 0) {
+    const examples = [...missing].slice(0, 10).join(', ');
+    throw new Error(`ไม่พบ Pack Size สำหรับ ${fmt(missing.size)} SKU (${examples}) กรุณาอัปเดตไฟล์ Pack Size master`);
+  }
+}
 function packedRowData(S, i){
   if (Number(S && S.row_width) !== 7) {
     throw new Error('Dashboard payload schema ไม่ตรงกับหน้าเว็บ');
   }
+  const skuIdx = S.rows[i*7+3];
+  const pcs = Number(S.rows[i*7+4]) || 0;
+  const sourcePickQty = Number(S.rows[i*7+5]) || 0;
+  const sku = S.skus[skuIdx];
   return {
     dateIdx: S.rows[i*7],
     zone: S.rows[i*7+1],
     pickerIdx: S.rows[i*7+2],
-    skuIdx: S.rows[i*7+3],
-    pcs: S.rows[i*7+4],
-    pickQty: S.rows[i*7+5],
+    skuIdx,
+    pcs,
+    pickQty: globalThis.PickUnits.calculate(pcs, sku, sourcePickQty),
+    sourcePickQty,
     tmin: S.rows[i*7+6]
   };
 }
@@ -1071,6 +1094,7 @@ async function loadDataOnce(force){
       return {ok:true, rows:0};
     }
 
+    validatePackSizeCoverage(j);
     DATA = j;
     lastFetchTime = j.meta ? j.meta.generated : new Date().toISOString();
     sys = previous.sys; shiftF = previous.shiftF;
@@ -1082,7 +1106,8 @@ async function loadDataOnce(force){
     datePresetMode = (keepFrom || keepTo) ? (previous.datePresetMode || 'custom') : 'all';
     trendMode = previous.trendMode || trendMode;
     hideDataState();
-    setSideBadge('BigQuery สด ' + fmt(totalRows) + ' แถว\nอัปเดต ' + new Date(lastFetchTime).toLocaleString('th-TH', {dateStyle:'short', timeStyle:'short'}));
+    const packCount = globalThis.PACK_SIZE_META ? fmt(globalThis.PACK_SIZE_META.skuCount) : '-';
+    setSideBadge('BigQuery สด ' + fmt(totalRows) + ' แถว\nPack Size ' + packCount + ' SKU\nอัปเดต ' + new Date(lastFetchTime).toLocaleString('th-TH', {dateStyle:'short', timeStyle:'short'}));
     buildControls();
     render();
     return {ok:true, rows:totalRows};

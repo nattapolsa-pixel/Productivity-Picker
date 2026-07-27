@@ -2,3 +2,5 @@
 ~$*.xlsx
 หัวหน้า/
 .gemini/
+__pycache__/
+*.pyc
