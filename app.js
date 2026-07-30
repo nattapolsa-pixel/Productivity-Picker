@@ -394,10 +394,10 @@ function escapeZoneHtml(value){
 
 function formatMapValue(value){
   const n = Number(value) || 0;
-  if(n < 1000) return fmt(n);
+  if(n < 100000) return fmt(n);
   return new Intl.NumberFormat('en-US', {
     notation:'compact',
-    maximumFractionDigits:n >= 100000 ? 0 : 1
+    maximumFractionDigits:1
   }).format(n);
 }
 
