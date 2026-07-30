@@ -1177,6 +1177,7 @@ function selectPickerDrilldown(pickerId){
 }
 
 function renderPickerDrilldown(){
+  const searchInputEl = document.getElementById('pickerSearchInput');
   const selectEl = document.getElementById('pickerSelect');
   const dateSelectEl = document.getElementById('pickerDateSelect');
   const contentEl = document.getElementById('pickerDetailContent');
@@ -1192,14 +1193,49 @@ function renderPickerDrilldown(){
     pcs: p.pcs
   }));
 
+  // Filter pickers based on search input
+  let filteredList = pickersList;
+  if(searchInputEl && searchInputEl.value.trim()){
+    const q = searchInputEl.value.trim().toLowerCase();
+    filteredList = pickersList.filter(p =>
+      p.id.toLowerCase().includes(q) ||
+      (p.name && p.name.toLowerCase().includes(q)) ||
+      (p.affiliation && p.affiliation.toLowerCase().includes(q))
+    );
+  }
+
   // Populate picker select options
-  let optionsHtml = '<option value="">-- เลือกพนักงาน --</option>';
-  pickersList.forEach(p => {
+  let optionsHtml = `<option value="">-- เลือกพนักงาน (${filteredList.length}) --</option>`;
+  filteredList.forEach(p => {
     const isPcs = unitMode === 'pcs';
     const label = `${p.id} - ${p.name !== '-' ? p.name : ''} (${p.affiliation}) [${fmt(isPcs ? p.pcs : p.qty)} ${isPcs ? 'ชิ้น' : 'หน่วย'}]`;
     optionsHtml += `<option value="${escapeZoneHtml(p.id)}"${p.id === selectedPickerId ? ' selected' : ''}>${escapeZoneHtml(label)}</option>`;
   });
   selectEl.innerHTML = optionsHtml;
+
+  // Bind input search events
+  if(searchInputEl && !searchInputEl._bound){
+    searchInputEl._bound = true;
+    searchInputEl.oninput = () => {
+      renderPickerDrilldown();
+      const currentSelect = document.getElementById('pickerSelect');
+      if (currentSelect && currentSelect.options.length === 2 && currentSelect.options[1].value) {
+        selectedPickerId = currentSelect.options[1].value;
+        currentSelect.value = selectedPickerId;
+        renderPickerDrilldown();
+      }
+    };
+    searchInputEl.onkeydown = (e) => {
+      if(e.key === 'Enter') {
+        const currentSelect = document.getElementById('pickerSelect');
+        if (currentSelect && currentSelect.options.length > 1 && currentSelect.options[1].value) {
+          selectedPickerId = currentSelect.options[1].value;
+          currentSelect.value = selectedPickerId;
+          renderPickerDrilldown();
+        }
+      }
+    };
+  }
 
   // Bind change handlers once
   if(!selectEl._bound){
@@ -1222,6 +1258,7 @@ function renderPickerDrilldown(){
     resetBtn.onclick = () => {
       selectedPickerId = '';
       selectedPickerDate = 'all';
+      if(searchInputEl) searchInputEl.value = '';
       if(selectEl) selectEl.value = '';
       renderPickerDrilldown();
     };
