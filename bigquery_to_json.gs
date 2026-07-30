@@ -25,8 +25,10 @@ const MAX_POST_BYTES = 12 * 1024 * 1024;
 const JOB_DEADLINE_MS = 240000;
 // ==========================================================
 
-const CACHE_TTL = 21600;  // สูงสุด 6 ชม.; รุ่น cache จะเปลี่ยนทันทีหลัง upload สำเร็จ
+const MASTER_CACHE_TTL = 900; // Master จาก Google Sheets เปลี่ยนไม่บ่อย ลดเวลาเปิด Sheet ทุก cache miss
+const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่างเดียวกับ revision เพื่อลด cache chunk เก่าค้าง
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
 const PICKER_NAME_TAB = 'บันทึกเวลาทำงาน';
 const PICKER_NAME_START_ROW = 26;
@@ -35,9 +37,20 @@ const ZONE_MASTER_TAB = 'Zone_V2';
 
 function doGet(e) {
   try {
-    // fresh=1 ใช้หลังอัปโหลด/กดลองอีกครั้ง เพื่อข้าม BigQuery query cache
+    // mode=revision เป็นคำตอบขนาดเล็กสำหรับหน้าเว็บที่มี IndexedDB cache อยู่แล้ว
+    // ช่วยไม่ต้องดาวน์โหลด dashboard หลาย MB ซ้ำเมื่อข้อมูล BigQuery ยังไม่เปลี่ยน
+    const mode = String(e && e.parameter && e.parameter.mode || '').toLowerCase();
+    const revision = getDashboardRevisionToken_(getDataRevision_());
+    if (mode === 'revision') {
+      return json_({
+        schema_version: DASHBOARD_SCHEMA_VERSION,
+        revision: revision
+      });
+    }
+
+    // fresh=1 ข้ามเฉพาะ Script Cache; BigQuery query cache ปลอดภัยเพราะ
+    // BigQuery จะยกเลิกผล cache เองเมื่อตารางต้นทางเปลี่ยน
     const fresh = !!(e && e.parameter && e.parameter.fresh === '1');
-    const revision = getDataRevision_();
     if (!fresh) {
       try {
         const cached = getCached_(revision);
@@ -46,11 +59,12 @@ function doGet(e) {
         console.warn('Dashboard cache read failed: ' + cacheReadErr);
       }
     }
-    const dataObj = buildDashboardData_(!fresh);
+    const dataObj = buildDashboardData_(true);
+    dataObj.meta.data_revision = revision;
     const json = JSON.stringify(dataObj);
     try {
       // กัน GET เก่าที่เริ่มก่อน upload เขียน cache ทับข้อมูลรุ่นใหม่
-      if (getDataRevision_() === revision) setCached_(json, revision);
+      if (getDashboardRevisionToken_(getDataRevision_()) === revision) setCached_(json, revision);
     } catch (cacheWriteErr) {
       console.warn('Dashboard cache write failed: ' + cacheWriteErr);
     }
@@ -64,6 +78,16 @@ function getDataRevision_() {
   return PropertiesService.getScriptProperties().getProperty(CACHE_REVISION_PROPERTY) || '0';
 }
 
+function getDashboardRefreshBucket_() {
+  return Math.floor(Date.now() / (MASTER_CACHE_TTL * 1000));
+}
+
+function getDashboardRevisionToken_(dataRevision) {
+  // Uploads bump dataRevision immediately. The time bucket also detects data
+  // changed outside this endpoint (BigQuery or master Sheets) within 15 minutes.
+  return String(dataRevision || '0') + ':' + getDashboardRefreshBucket_();
+}
+
 function bumpDataRevision_() {
   PropertiesService.getScriptProperties().setProperty(
     CACHE_REVISION_PROPERTY,
@@ -73,7 +97,8 @@ function bumpDataRevision_() {
 
 function cachePrefix_(revision) {
   // ผูก cache กับ schema เพื่อไม่ให้ deployment ใหม่อ่าน payload รุ่นเก่า
-  return 'dash_' + DASHBOARD_SCHEMA_VERSION + '_' + String(revision || '0') + '_';
+  return 'dash_' + DASHBOARD_SCHEMA_VERSION + '_' + DASHBOARD_CACHE_FORMAT_VERSION +
+    '_' + String(revision || '0') + '_';
 }
 
 function clearCache_(revision) {
@@ -151,28 +176,30 @@ function uploadToBigQuery_(rows, fmt, meta) {
     throw err;
   }
 
-  const canonical = normalized.rows
-    .map(function(row) {
-      return JSON.stringify([
-        row.pickdetailkey,
-        row.lpn,
-        row.qty,
-        row.sku,
-        row.owner,
-        row.uom_qty,
-        row.category,
-        row.picker_id,
-        row.location,
-        row.pick_ts_source
-      ]);
-    })
-    .join('\n');
-  const uploadId = sha256Hex_(UPLOAD_SCHEMA_VERSION + '\n' + canonical);
   const requestId = Utilities.getUuid().replace(/-/g, '');
   const stageTable = 'pick_stage_' + requestId.substring(0, 24);
   const loadJobId = 'pick_load_' + requestId;
   // uploadId ใช้ตอบกลับเพื่อตรวจสอบคำขอ แต่ไม่ต้องเขียนซ้ำในทุกแถวของ
   // temporary stage เพราะ MERGE อ้างอิงด้วย pickdetailkey เท่านั้น
+  // รหัส upload ไม่รวม source_row_number เพื่อให้ข้อมูลธุรกิจชุดเดิมได้รหัสเดิม
+  // แม้ไฟล์จะย้ายตำแหน่งหัวตาราง/เลขแถวต้นทาง
+  let canonical = normalized.rows.map(function(row) {
+    return JSON.stringify([
+      row.pickdetailkey,
+      row.lpn,
+      row.qty,
+      row.sku,
+      row.owner,
+      row.uom_qty,
+      row.category,
+      row.picker_id,
+      row.location,
+      row.pick_ts_source
+    ]);
+  }).join('\n');
+  const uploadId = sha256Hex_(UPLOAD_SCHEMA_VERSION + '\n' + canonical);
+  canonical = null;
+
   const ndjson = normalized.rows.map(function(row) {
     return JSON.stringify(row);
   }).join('\n');
@@ -183,7 +210,6 @@ function uploadToBigQuery_(rows, fmt, meta) {
       'ข้อมูลหลังตรวจสอบมีขนาดเกินขีดจำกัด กรุณาแบ่งไฟล์แล้วนำเข้าใหม่'
     );
   }
-
   let stageCreated = false;
   let loadJob = null;
   let mergeCounts = null;
@@ -212,7 +238,7 @@ function uploadToBigQuery_(rows, fmt, meta) {
       );
     }
     mergeCounts = mergeStage_(stageTable);
-    const previousRevision = getDataRevision_();
+    const previousRevision = getDashboardRevisionToken_(getDataRevision_());
     bumpDataRevision_();
     clearCache_(previousRevision);
   } finally {
@@ -503,11 +529,14 @@ function mergeStage_(stageTable) {
     'DECLARE inserted_rows INT64;',
     'DECLARE updated_rows INT64;',
     'DECLARE unchanged_rows INT64;',
-    'SET source_rows = (SELECT COUNT(*) FROM ' + stage + ');',
-    'SET inserted_rows = (SELECT COUNT(*) FROM ' + stage + ' S LEFT JOIN ' + main +
-      ' T USING (pickdetailkey) WHERE T.pickdetailkey IS NULL);',
-    'SET updated_rows = (SELECT COUNT(*) FROM ' + stage + ' S JOIN ' + main +
-      ' T USING (pickdetailkey) WHERE ' + different + ');',
+    // เก็บ source/insert/update ในการ JOIN รอบเดียว ลดการสแกน stage/main ก่อน MERGE
+    'SET (source_rows, inserted_rows, updated_rows) = (',
+    '  SELECT AS STRUCT',
+    '    COUNT(*) AS source_rows,',
+    '    COUNTIF(T.pickdetailkey IS NULL) AS inserted_rows,',
+    '    COUNTIF(T.pickdetailkey IS NOT NULL AND ' + different + ') AS updated_rows',
+    '  FROM ' + stage + ' S LEFT JOIN ' + main + ' T USING (pickdetailkey)',
+    ');',
     'SET unchanged_rows = source_rows - inserted_rows - updated_rows;',
     'MERGE ' + main + ' T USING ' + stage + ' S ON T.pickdetailkey = S.pickdetailkey',
     'WHEN MATCHED AND ' + different + ' THEN UPDATE SET',
@@ -584,50 +613,63 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function loadPickerNameMap_() {
+function masterCacheKey_(key) {
+  // Keep master data in the same time window as the dashboard revision token.
+  return 'master_' + DASHBOARD_SCHEMA_VERSION + '_' +
+    getDashboardRefreshBucket_() + '_' + key;
+}
+
+function readMasterCache_(key) {
   try {
-    const ss = SpreadsheetApp.openById(PICKER_NAME_SHEET_ID);
-    const sh = ss.getSheetByName(PICKER_NAME_TAB);
-    if (!sh) return {};
-    const lastRow = sh.getLastRow();
-    if (lastRow < PICKER_NAME_START_ROW) return {};
-    const values = sh.getRange(PICKER_NAME_START_ROW, 2, lastRow - PICKER_NAME_START_ROW + 1, 2).getDisplayValues();
-    const map = {};
-    values.forEach(row => {
-      const id = String(row[0] || '').trim();
-      const name = String(row[1] || '').trim();
-      if (id && name && !map[id]) map[id] = name;
-    });
-    return map;
-  } catch (err) {
-    console.warn('loadPickerNameMap_ failed: ' + err);
-    return {};
+    const value = CacheService.getScriptCache().get(masterCacheKey_(key));
+    return value ? JSON.parse(value) : null;
+  } catch (_) {
+    return null;
   }
 }
 
-function loadPickerAffiliationMap_() {
+function writeMasterCache_(key, value) {
+  try {
+    CacheService.getScriptCache().put(
+      masterCacheKey_(key),
+      JSON.stringify(value),
+      MASTER_CACHE_TTL
+    );
+  } catch (_) {}
+}
+
+function loadPickerDirectory_() {
+  const cached = readMasterCache_('picker_directory_v1');
+  if (cached && cached.names && cached.affiliations) return cached;
+
   try {
     const ss = SpreadsheetApp.openById(PICKER_NAME_SHEET_ID);
     const sh = ss.getSheetByName(PICKER_NAME_TAB);
-    if (!sh) return {};
+    if (!sh) return { names: {}, affiliations: {} };
     const lastRow = sh.getLastRow();
-    if (lastRow < PICKER_NAME_START_ROW) return {};
+    if (lastRow < PICKER_NAME_START_ROW) return { names: {}, affiliations: {} };
     // B:E = รหัสพนักงาน, ชื่อ, ชื่อเล่น, สังกัด
     const values = sh.getRange(PICKER_NAME_START_ROW, 2, lastRow - PICKER_NAME_START_ROW + 1, 4).getDisplayValues();
-    const map = {};
+    const directory = { names: {}, affiliations: {} };
     values.forEach(row => {
       const id = String(row[0] || '').trim();
+      const name = String(row[1] || '').trim();
       const affiliation = String(row[3] || '').trim();
-      if (id && affiliation && !map[id]) map[id] = affiliation;
+      if (id && name && !directory.names[id]) directory.names[id] = name;
+      if (id && affiliation && !directory.affiliations[id]) directory.affiliations[id] = affiliation;
     });
-    return map;
+    writeMasterCache_('picker_directory_v1', directory);
+    return directory;
   } catch (err) {
-    console.warn('loadPickerAffiliationMap_ failed: ' + err);
-    return {};
+    console.warn('loadPickerDirectory_ failed: ' + err);
+    return { names: {}, affiliations: {} };
   }
 }
 
 function loadZoneMasterMap_() {
+  const cached = readMasterCache_('zone_master_v1');
+  if (cached) return cached;
+
   try {
     const ss = SpreadsheetApp.openById(ZONE_MASTER_SHEET_ID);
     const sh = ss.getSheetByName(ZONE_MASTER_TAB);
@@ -661,6 +703,7 @@ function loadZoneMasterMap_() {
         };
       }
     });
+    writeMasterCache_('zone_master_v1', map);
     return map;
   } catch (err) {
     console.warn('loadZoneMasterMap_ failed: ' + err);
@@ -670,8 +713,9 @@ function loadZoneMasterMap_() {
 
 function buildDashboardData_(useQueryCache) {
   const currentDate = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
-  const pickerNames = loadPickerNameMap_();
-  const pickerAffiliations = loadPickerAffiliationMap_();
+  const pickerDirectory = loadPickerDirectory_();
+  const pickerNames = pickerDirectory.names;
+  const pickerAffiliations = pickerDirectory.affiliations;
   const zoneMaster = loadZoneMasterMap_();
   const sql =
     "SELECT UPPER(category) AS category, " +
@@ -681,7 +725,8 @@ function buildDashboardData_(useQueryCache) {
     "qty AS pcs, " +
     "uom_qty AS pick_qty " +
     "FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".v_pick_enriched` " +
-    "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY)";
+    "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY) " +
+    "AND UPPER(category) IN ('PTT','BPS')";
 
   const mk = () => ({ _d:{}, _p:{}, _s:{}, dates:[], pickers:[], skus:[], rows:[] });
   const sysd = { PTT: mk(), BPS: mk() };

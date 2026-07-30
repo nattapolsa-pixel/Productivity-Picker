@@ -66,8 +66,15 @@ let activeLoadPromise = null;
 let activeLoadIsFresh = false;
 let queuedFreshPromise = null;
 let ZONE_MASTER = {...ZONE_MASTER_FALLBACK};
+let aggregateCache = new Map();
+let excludedSkuRevision = 0;
+let dashboardCacheRevision = '';
 const DASHBOARD_TIMEOUT_MS = 180000;
 const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
+const DASHBOARD_CACHE_DB = 'pick_dashboard_cache_v1';
+const DASHBOARD_CACHE_STORE = 'responses';
+const DASHBOARD_CACHE_KEY = DASHBOARD_SCHEMA_VERSION + ':latest';
+const DASHBOARD_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function normalizeSkuKey(sku){
   const value = String(sku ?? '').replace(/\u00a0/g, ' ').trim();
@@ -131,6 +138,11 @@ function saveExcludedSkusToStorage(){
     localStorage.setItem(EXCLUDED_SKUS_STORAGE_KEY, JSON.stringify(payload));
     excludedSkusSavedAt = payload.updatedAt;
   }catch(_){}
+}
+
+function invalidateAggregationCache(){
+  excludedSkuRevision++;
+  aggregateCache.clear();
 }
 
 // ===== shift helpers =====
@@ -245,13 +257,16 @@ function packedRowData(S, i){
   const pcs = Number(S.rows[i*7+4]) || 0;
   const sourcePickQty = Number(S.rows[i*7+5]) || 0;
   const sku = S.skus[skuIdx];
+  const cachedPickQty = S._pickQty && Number(S._pickQty[i]);
   return {
     dateIdx: S.rows[i*7],
     zone: S.rows[i*7+1],
     pickerIdx: S.rows[i*7+2],
     skuIdx,
     pcs,
-    pickQty: calculatePickUnits(pcs, sku, sourcePickQty),
+    pickQty: Number.isFinite(cachedPickQty)
+      ? cachedPickQty
+      : calculatePickUnits(pcs, sku, sourcePickQty),
     sourcePickQty,
     tmin: S.rows[i*7+6]
   };
@@ -264,9 +279,16 @@ function prepShifts(){
     if(!S || !Array.isArray(S.rows)) return;
     const count = packedRowCount(S);
     S._sh = new Array(count);
+    S._pickQty = new Array(count);
     for(let i=0;i<count;i++) {
-      const r = packedRowData(S, i);
-      S._sh[i] = shiftOf(S.dates[r.dateIdx], r.tmin);
+      const offset = i * 7;
+      const dateIdx = S.rows[offset];
+      const skuIdx = S.rows[offset + 3];
+      const pcs = Number(S.rows[offset + 4]) || 0;
+      const sourcePickQty = Number(S.rows[offset + 5]) || 0;
+      const tmin = Number(S.rows[offset + 6]) || 0;
+      S._pickQty[i] = calculatePickUnits(pcs, S.skus[skuIdx], sourcePickQty);
+      S._sh[i] = shiftOf(S.dates[dateIdx], tmin);
     }
   });
 }
@@ -607,6 +629,9 @@ function renderAffiliationBreakdown(){
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // row width 7 = [dateIdx, zone, pickerIdx, skuIdx, pcs, pick_qty, minOfDay]
 function aggregate(system, from, to, sf){
+  const cacheKey = [system, from, to, sf, excludedSkuRevision].join('|');
+  if(aggregateCache.has(cacheKey)) return aggregateCache.get(cacheKey);
+
   const S = DATA[system];
   let lines = 0, pcs = 0, pickQty = 0;
   const pickers = new Set(), zones = new Set();
@@ -876,7 +901,7 @@ function aggregate(system, from, to, sf){
   const by_timeslot = Object.keys(slotMap).map(Number).sort((a,b)=>a-b).map(h=>({label:String(h).padStart(2,'0')+':00', pcs:slotMap[h].pcs, qty:slotMap[h].qty, lines:slotMap[h].lines}));
 
   const totOt = groups.reduce((s,g)=>s+g.ot,0);
-  return {
+  const result = {
     kpis: {
       lines, pcs, qty: pickQty, pickers: pickers.size, ot: r1(totOt),
       avg_prod: r1(mean(productiveGroups.map(g=>g.prod))),
@@ -884,32 +909,26 @@ function aggregate(system, from, to, sf){
     },
     daily, by_zone, by_location, by_picker, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all
   };
+  aggregateCache.set(cacheKey, result);
+  return result;
 }
 
-// qty รวมของระบบตามช่วง+กะ (สำหรับกราฟเทียบ)
-function sysQty(system, from, to, sf){
-  const S = DATA[system], SH = S._sh || []; let q = 0;
+// ยอดรวมของระบบตามช่วง+กะ (สแกนครั้งเดียวได้ทั้งชิ้นและหน่วยหยิบ)
+function sysTotals(system, from, to, sf){
+  const S = DATA[system], SH = S._sh || [];
+  let pcs = 0, qty = 0;
   const rowCount = packedRowCount(S);
   for(let i=0;i<rowCount;i++){
     const si = SH[i];
     if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)){
       const r = packedRowData(S, i), sku = S.skus[r.skuIdx];
-      if(!isSkuExcluded(sku)) q += r.pickQty;
+      if(!isSkuExcluded(sku)){
+        pcs += r.pcs;
+        qty += r.pickQty;
+      }
     }
   }
-  return q;
-}
-function sysPcs(system, from, to, sf){
-  const S = DATA[system], SH = S._sh || []; let q = 0;
-  const rowCount = packedRowCount(S);
-  for(let i=0;i<rowCount;i++){
-    const si = SH[i];
-    if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)){
-      const r = packedRowData(S, i), sku = S.skus[r.skuIdx];
-      if(!isSkuExcluded(sku)) q += r.pcs;
-    }
-  }
-  return q;
+  return {pcs, qty};
 }
 
 // ===== controls =====
@@ -1049,10 +1068,28 @@ function renderKPIs(){
   countUp();
 }
 function countUp(){
-  document.querySelectorAll('.num').forEach(el => {
-    if(el.dataset.done) return; el.dataset.done = 1;
-    const t = parseFloat(el.dataset.t), dec = t % 1 !== 0; let c = 0, s = t / 45;
-    const iv = setInterval(() => { c += s; if(c >= t){ c = t; clearInterval(iv); } el.textContent = dec ? c.toFixed(1) : fmt(Math.round(c)); }, 18);
+  document.querySelectorAll('#kpis .num[data-t]').forEach(el => {
+    if(el.dataset.done) return;
+    const t = Number(el.dataset.t);
+    if(!Number.isFinite(t)) return;
+    el.dataset.done = '1';
+    if(el._countUpTimer) clearInterval(el._countUpTimer);
+    const dec = t % 1 !== 0;
+    let c = 0;
+    const step = t / 45;
+    if(t <= 0){
+      el.textContent = dec ? t.toFixed(1) : fmt(Math.round(t));
+      return;
+    }
+    el._countUpTimer = setInterval(() => {
+      c += step;
+      if(c >= t){
+        c = t;
+        clearInterval(el._countUpTimer);
+        el._countUpTimer = null;
+      }
+      el.textContent = dec ? c.toFixed(1) : fmt(Math.round(c));
+    }, 18);
   });
 }
 
@@ -1151,9 +1188,11 @@ const builders = {
       b.classList.add('active'); trendMode = b.dataset.mode; drawTrend(trendMode);
     });
     document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('active', b.dataset.mode === trendMode));
-    const cqPcs = sysPcs('PTT', dfrom, dto, shiftF), bqPcs = sysPcs('BPS', dfrom, dto, shiftF);
-    const cqQty = sysQty('PTT', dfrom, dto, shiftF), bqQty = sysQty('BPS', dfrom, dto, shiftF);
-    const catData = isPcs ? [cqPcs, bqPcs] : [cqQty, bqQty];
+    const pttTotals = sysTotals('PTT', dfrom, dto, shiftF);
+    const bpsTotals = sysTotals('BPS', dfrom, dto, shiftF);
+    const catData = isPcs
+      ? [pttTotals.pcs, bpsTotals.pcs]
+      : [pttTotals.qty, bpsTotals.qty];
     const unitTxt = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
     const donutUnitTxt = isPcs ? 'ชิ้น' : 'หยิบ';
     const donutTotal = catData.reduce((a,b)=>a+b,0) || 1;
@@ -1195,8 +1234,8 @@ const builders = {
               label:(ctx)=>{
                 const idx = ctx.dataIndex;
                 const sysName = ctx.label;
-                const pVal = idx === 0 ? cqPcs : bqPcs;
-                const qVal = idx === 0 ? cqQty : bqQty;
+                const pVal = idx === 0 ? pttTotals.pcs : bpsTotals.pcs;
+                const qVal = idx === 0 ? pttTotals.qty : bpsTotals.qty;
                 return [
                   ` ${sysName}`,
                   ` จำนวนชิ้น: ${fmt(pVal)} ชิ้น`,
@@ -1565,12 +1604,14 @@ window.toggleExcludeSku = function(sku) {
     excludedSkus.add(key);
   }
   saveExcludedSkusToStorage();
+  invalidateAggregationCache();
   render();
 };
 
 window.clearExcludedSkus = function() {
   excludedSkus.clear();
   saveExcludedSkusToStorage();
+  invalidateAggregationCache();
   render();
 };
 
@@ -1632,7 +1673,7 @@ function render(){
   renderExcludedBadges();
   document.getElementById('ptable').innerHTML = '';
   const elItable = document.getElementById('itable'); if (elItable) elItable.innerHTML = '';
-  document.querySelectorAll('.num').forEach(el => el.removeAttribute('data-done'));
+  document.querySelectorAll('#kpis .num[data-t]').forEach(el => el.removeAttribute('data-done'));
   built = {};
   updateDateHeader();
   renderKPIs();
@@ -1647,6 +1688,8 @@ function setSideBadge(message){
 function clearDashboardState(){
   hasLiveData = false;
   DATA = emptyData();
+  dashboardCacheRevision = '';
+  aggregateCache.clear();
   prepareZoneMaster();
   ALL_DATES = []; DMIN = ''; DMAX = ''; dfrom = ''; dto = '';
   datePresetMode = 'all';
@@ -1724,6 +1767,192 @@ function setUpdating(on){
   if(on) el.textContent = '⏳ กำลังอัปเดตข้อมูลล่าสุด…'; else updateFresh();
 }
 
+// ===== IndexedDB cache: แสดงข้อมูลรอบล่าสุดทันที แล้วตรวจ revision เบื้องหลัง =====
+function openDashboardCacheDb(){
+  return new Promise((resolve, reject) => {
+    if(typeof indexedDB === 'undefined') {
+      reject(new Error('IndexedDB unavailable'));
+      return;
+    }
+    const request = indexedDB.open(DASHBOARD_CACHE_DB, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if(!db.objectStoreNames.contains(DASHBOARD_CACHE_STORE)) {
+        db.createObjectStore(DASHBOARD_CACHE_STORE, {keyPath:'key'});
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('เปิด cache ไม่สำเร็จ'));
+    request.onblocked = () => reject(new Error('Dashboard cache ถูกใช้งานอยู่'));
+  });
+}
+
+function idbRequestResult(request){
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('อ่าน cache ไม่สำเร็จ'));
+  });
+}
+
+async function readDashboardResponseCache(){
+  let db;
+  try{
+    db = await openDashboardCacheDb();
+    const tx = db.transaction(DASHBOARD_CACHE_STORE, 'readonly');
+    const record = await idbRequestResult(tx.objectStore(DASHBOARD_CACHE_STORE).get(DASHBOARD_CACHE_KEY));
+    if(!record || typeof record.body !== 'string') return null;
+    if(Date.now() - Number(record.savedAt || 0) > DASHBOARD_CACHE_MAX_AGE_MS) {
+      void clearDashboardResponseCache();
+      return null;
+    }
+    return record;
+  }catch(_){
+    return null;
+  }finally{
+    if(db) db.close();
+  }
+}
+
+async function writeDashboardResponseCache(body, payload){
+  let db;
+  try{
+    db = await openDashboardCacheDb();
+    const tx = db.transaction(DASHBOARD_CACHE_STORE, 'readwrite');
+    tx.objectStore(DASHBOARD_CACHE_STORE).put({
+      key: DASHBOARD_CACHE_KEY,
+      schemaVersion: DASHBOARD_SCHEMA_VERSION,
+      revision: String(payload && payload.meta && payload.meta.data_revision || ''),
+      generated: String(payload && payload.meta && payload.meta.generated || ''),
+      savedAt: Date.now(),
+      body
+    });
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error('บันทึก cache ไม่สำเร็จ'));
+      tx.onabort = () => reject(tx.error || new Error('ยกเลิกการบันทึก cache'));
+    });
+  }catch(err){
+    console.warn('บันทึก Dashboard cache ไม่สำเร็จ:', err);
+  }finally{
+    if(db) db.close();
+  }
+}
+
+async function clearDashboardResponseCache(){
+  let db;
+  try{
+    db = await openDashboardCacheDb();
+    const tx = db.transaction(DASHBOARD_CACHE_STORE, 'readwrite');
+    tx.objectStore(DASHBOARD_CACHE_STORE).delete(DASHBOARD_CACHE_KEY);
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error('ลบ cache ไม่สำเร็จ'));
+      tx.onabort = () => reject(tx.error || new Error('ยกเลิกการลบ cache'));
+    });
+  }catch(_){
+    // cache เป็นตัวช่วยเท่านั้น ต้องไม่ทำให้หน้าเว็บหยุดทำงาน
+  }finally{
+    if(db) db.close();
+  }
+}
+
+function dashboardPayloadRowCount(payload){
+  const validSource = source =>
+    source && Number(source.row_width) === 7 &&
+    Array.isArray(source.dates) && Array.isArray(source.pickers) && Array.isArray(source.skus) &&
+    Array.isArray(source.rows) && source.rows.length % 7 === 0;
+  const validSchema = payload && payload.meta && (
+    payload.meta.schema_version === DASHBOARD_SCHEMA_VERSION ||
+    payload.meta.schema_version === DASHBOARD_SCHEMA_VERSION_PREV
+  );
+  if(!validSchema || !validSource(payload.PTT) || !validSource(payload.BPS)) {
+    throw new Error('รูปแบบข้อมูล BigQuery เป็นคนละรุ่นกับหน้าเว็บ กรุณากดรีเฟรชอีกครั้ง');
+  }
+  const packedRows = packedRowCount(payload.PTT) + packedRowCount(payload.BPS);
+  return Number(payload.meta && payload.meta.rows) || packedRows;
+}
+
+function setDashboardSourceBadge(totalRows, source){
+  const packCount = globalThis.PACK_SIZE_META ? fmt(globalThis.PACK_SIZE_META.skuCount) : '-';
+  const updated = formatThaiDateTime(lastFetchTime) || '-';
+  if(source === 'cache') {
+    setSideBadge(
+      'ข้อมูลจากเครื่อง ' + fmt(totalRows) + ' แถว\n' +
+      'Pack Size ' + packCount + ' SKU\n' +
+      'ข้อมูล ณ ' + updated + '\nกำลังตรวจ BigQuery…'
+    );
+    return;
+  }
+  setSideBadge(
+    'BigQuery ล่าสุด ' + fmt(totalRows) + ' แถว\n' +
+    'Pack Size ' + packCount + ' SKU\n' +
+    'อัปเดต ' + updated
+  );
+}
+
+function applyDashboardPayload(payload, previous, source){
+  const totalRows = dashboardPayloadRowCount(payload);
+  if(totalRows === 0) return 0;
+
+  validatePackSizeCoverage(payload);
+  DATA = payload;
+  aggregateCache.clear();
+  prepareZoneMaster();
+  lastFetchTime = payload.meta ? payload.meta.generated : new Date().toISOString();
+  dashboardCacheRevision = String(payload.meta && payload.meta.data_revision || '');
+  sys = previous.sys;
+  shiftF = previous.shiftF;
+  computeBounds();
+  const keepFrom = previous.dfrom && previous.dfrom>=DMIN && previous.dfrom<=DMAX;
+  const keepTo = previous.dto && previous.dto>=DMIN && previous.dto<=DMAX;
+  dfrom = keepFrom ? previous.dfrom : DMIN;
+  dto   = keepTo ? previous.dto : DMAX;
+  datePresetMode = (keepFrom || keepTo) ? (previous.datePresetMode || 'custom') : 'all';
+  trendMode = previous.trendMode || trendMode;
+  hideDataState();
+  setDashboardSourceBadge(totalRows, source);
+  buildControls();
+  render();
+  return totalRows;
+}
+
+async function restoreDashboardFromCache(){
+  const record = await readDashboardResponseCache();
+  if(!record) return false;
+  try{
+    const payload = JSON.parse(record.body);
+    const previous = {sys, shiftF, dfrom, dto, datePresetMode, trendMode};
+    const rows = applyDashboardPayload(payload, previous, 'cache');
+    if(rows <= 0) {
+      void clearDashboardResponseCache();
+      return false;
+    }
+    return true;
+  }catch(err){
+    console.warn('Dashboard cache ใช้งานไม่ได้ จะโหลดจาก BigQuery ใหม่:', err);
+    void clearDashboardResponseCache();
+    return false;
+  }
+}
+
+async function fetchRevisionOrDashboard(signal){
+  const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
+    'mode=revision&t=' + Date.now();
+  const response = await fetch(url, {cache:'no-store', signal});
+  if(!response.ok) throw new Error('HTTP ' + response.status);
+  const body = await response.text();
+  const payload = JSON.parse(body);
+  if(payload && payload.error) throw new Error(payload.error);
+  if(payload && payload.meta && payload.PTT && payload.BPS) {
+    // รองรับ Apps Script deployment รุ่นเดิมที่ยังไม่รู้จัก mode=revision
+    return {payload, body};
+  }
+  if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION || payload.revision == null) {
+    throw new Error('Apps Script ตอบ revision ไม่ถูกต้อง');
+  }
+  return {revision:String(payload.revision)};
+}
+
 // ===== โหลดข้อมูล: ดึงตรงจาก BigQuery และกันคำขอซ้อน =====
 function loadData(force){
   if(activeLoadPromise){
@@ -1757,65 +1986,59 @@ async function loadDataOnce(force){
     return {ok:false, rows:0};
   }
 
-  if(!hadLiveData) showDataState('loading', 'กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่');
-  showLoading(true, 'กำลังดึงข้อมูลสด 100% ตรงจาก BigQuery…');
+  if(!hadLiveData) {
+    showDataState('loading', 'กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่');
+    showLoading(true, 'กำลังดึงข้อมูลสด 100% ตรงจาก BigQuery…');
+  }
   setUpdating(true);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DASHBOARD_TIMEOUT_MS);
 
   try{
-    const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
-      'fresh=' + (force ? '1' : '0') + '&t=' + Date.now();
-    const res = await fetch(url, {cache:'no-store', signal:controller.signal});
-    if(!res.ok) throw new Error('HTTP ' + res.status);
-    const body = await res.text();
-    let j;
-    try {
-      j = JSON.parse(body);
-    } catch(_) {
-      if(body.includes('ไม่มีหน่วยความจำ')) {
-        throw new Error('Apps Script มีหน่วยความจำไม่พอสำหรับข้อมูลชุดนี้');
+    let body = '';
+    let j = null;
+
+    if(!force && hadLiveData && dashboardCacheRevision) {
+      const probe = await fetchRevisionOrDashboard(controller.signal);
+      if(probe.revision != null) {
+        if(probe.revision === dashboardCacheRevision) {
+          const currentRows = dashboardPayloadRowCount(DATA);
+          setDashboardSourceBadge(currentRows, 'live');
+          return {ok:true, rows:currentRows, unchanged:true};
+        }
+      } else {
+        j = probe.payload;
+        body = probe.body;
       }
-      throw new Error('Apps Script ตอบกลับมาไม่ใช่ข้อมูล JSON');
+    }
+
+    if(!j) {
+      const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
+        'fresh=' + (force ? '1' : '0') + '&t=' + Date.now();
+      const res = await fetch(url, {cache:'no-store', signal:controller.signal});
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      body = await res.text();
+      try {
+        j = JSON.parse(body);
+      } catch(_) {
+        if(body.includes('ไม่มีหน่วยความจำ')) {
+          throw new Error('Apps Script มีหน่วยความจำไม่พอสำหรับข้อมูลชุดนี้');
+        }
+        throw new Error('Apps Script ตอบกลับมาไม่ใช่ข้อมูล JSON');
+      }
     }
     if(j && j.error) throw new Error(j.error);
-    const validSource = s =>
-      s && Number(s.row_width) === 7 &&
-      Array.isArray(s.dates) && Array.isArray(s.pickers) && Array.isArray(s.skus) &&
-      Array.isArray(s.rows) && s.rows.length % 7 === 0;
-    const validSchema = j && j.meta && (
-      j.meta.schema_version === DASHBOARD_SCHEMA_VERSION ||
-      j.meta.schema_version === DASHBOARD_SCHEMA_VERSION_PREV
-    );
-    const valid = validSchema &&
-      validSource(j.PTT) && validSource(j.BPS);
-    if(!valid) throw new Error('รูปแบบข้อมูล BigQuery เป็นคนละรุ่นกับหน้าเว็บ กรุณากดรีเฟรชอีกครั้ง');
-
-    const packedRows = packedRowCount(j.PTT) + packedRowCount(j.BPS);
-    const totalRows = Number(j.meta && j.meta.rows) || packedRows;
+    const totalRows = dashboardPayloadRowCount(j);
     if(totalRows === 0){
+      dashboardCacheRevision = '';
+      await clearDashboardResponseCache();
       showDataState('empty', 'ไม่มีข้อมูลเก่าค้างอยู่แล้ว กรุณานำเข้าไฟล์ Pick Detail ชุดใหม่', j.meta);
       return {ok:true, rows:0};
     }
 
-    validatePackSizeCoverage(j);
-    DATA = j;
-    prepareZoneMaster();
-    lastFetchTime = j.meta ? j.meta.generated : new Date().toISOString();
-    sys = previous.sys; shiftF = previous.shiftF;
-    computeBounds();
-    const keepFrom = previous.dfrom && previous.dfrom>=DMIN && previous.dfrom<=DMAX;
-    const keepTo = previous.dto && previous.dto>=DMIN && previous.dto<=DMAX;
-    dfrom = keepFrom ? previous.dfrom : DMIN;
-    dto   = keepTo ? previous.dto : DMAX;
-    datePresetMode = (keepFrom || keepTo) ? (previous.datePresetMode || 'custom') : 'all';
-    trendMode = previous.trendMode || trendMode;
-    hideDataState();
-    const packCount = globalThis.PACK_SIZE_META ? fmt(globalThis.PACK_SIZE_META.skuCount) : '-';
-    setSideBadge('BigQuery สด ' + fmt(totalRows) + ' แถว\nPack Size ' + packCount + ' SKU\nอัปเดต ' + new Date(lastFetchTime).toLocaleString('th-TH', {dateStyle:'short', timeStyle:'short'}));
-    buildControls();
-    render();
+    applyDashboardPayload(j, previous, 'live');
+    void writeDashboardResponseCache(body, j);
     return {ok:true, rows:totalRows};
   }catch(err){
     console.warn('ดึงข้อมูลสดไม่สำเร็จ:', err);
@@ -1836,11 +2059,14 @@ async function loadDataOnce(force){
 }
 
 // init
-try{ localStorage.removeItem('pick_dashboard_cache_v2'); }catch(_){}
 loadExcludedSkusFromStorage();
 bindDataStateActions();
 document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
-loadData();
+async function bootstrapDashboard(){
+  await restoreDashboardFromCache();
+  return loadData(false);
+}
+bootstrapDashboard();
 
 // ===== ระบบอัปโหลดไฟล์ Pick Detail (.csv) ตรงเข้า BigQuery =====
 (function initWebUploader(){
@@ -1858,9 +2084,11 @@ loadData();
   if(!btnOpen || !modal) return;
 
   let selectedFile = null;
+  let xlsxLoadPromise = null;
   const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
   const MAX_UPLOAD_ROWS = 50000;
   const MAX_FILE_BYTES = 25 * 1024 * 1024;
+  const XLSX_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
   const REQUIRED_HEADERS = [
     {index:1, name:'PICKDETAILKEY'},
     {index:12, name:'ID'},
@@ -1875,7 +2103,46 @@ loadData();
     {index:66, name:'EXT_UDF_DATE1'}
   ];
 
-  const openModal = () => { modal.style.display = 'flex'; resetUI(); };
+  function ensureXlsxLoaded(){
+    if(typeof XLSX !== 'undefined') return Promise.resolve(XLSX);
+    if(xlsxLoadPromise) return xlsxLoadPromise;
+
+    xlsxLoadPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = XLSX_SCRIPT_URL;
+      script.async = true;
+      script.dataset.xlsxLoader = '1';
+      script.onload = () => {
+        if(typeof XLSX !== 'undefined') resolve(XLSX);
+        else {
+          script.remove();
+          xlsxLoadPromise = null;
+          reject(new Error('โหลดตัวอ่านไฟล์ Excel ไม่สำเร็จ'));
+        }
+      };
+      script.onerror = () => {
+        script.remove();
+        xlsxLoadPromise = null;
+        reject(new Error('เชื่อมต่อ CDN สำหรับเปิดไฟล์ Excel ไม่สำเร็จ กรุณาลองอีกครั้ง'));
+      };
+      document.head.appendChild(script);
+    });
+    return xlsxLoadPromise;
+  }
+
+  const openModal = () => {
+    modal.style.display = 'flex';
+    resetUI();
+    // เริ่มโหลด SheetJS เมื่อผู้ใช้เปิดหน้าต่างอัปโหลดเท่านั้น
+    void ensureXlsxLoaded().catch(err => {
+      if(progressBox) progressBox.style.display = 'block';
+      if(progressBar) {
+        progressBar.style.width = '100%';
+        progressBar.style.background = '#ef4444';
+      }
+      if(statusText) statusText.textContent = '❌ ' + err.message;
+    });
+  };
   const closeModal = () => { modal.style.display = 'none'; resetUI(); };
 
   btnOpen.onclick = openModal;
@@ -1945,6 +2212,7 @@ loadData();
     btnStart.onclick = async () => {
       if (!selectedFile || !DATA_URL) return;
       const fileForUpload = selectedFile;
+      const hadDashboardBeforeUpload = hasLiveData;
       setUploadBusy(true);
       progressBox.style.display = 'block';
       statusText.textContent = '⏳ กำลังอ่านข้อมูลไฟล์...';
@@ -1952,7 +2220,7 @@ loadData();
       progressBar.style.background = 'linear-gradient(90deg,#2563eb,#3b82f6)';
 
       try {
-        if (typeof XLSX === 'undefined') throw new Error('ไม่สามารถเปิดตัวอ่านไฟล์ Excel ได้ กรุณารีเฟรชหน้าเว็บ');
+        await ensureXlsxLoaded();
         statusText.textContent = '⚙️ กำลังตรวจโครงสร้างและข้อมูลทุกแถว...';
         progressBar.style.width = '30%';
         const parsed = await readPickDetailFile(fileForUpload);
@@ -1975,7 +2243,7 @@ loadData();
           rows: rows,
           meta: parsed.meta
         });
-        const sizeKB = Math.round(new Blob([payload]).size / 1024);
+        const sizeKB = Math.round(payload.length / 1024);
         statusText.textContent = `🚀 ตรวจผ่าน ${rows.length.toLocaleString()} แถว กำลังส่งเข้า BigQuery (~${sizeKB.toLocaleString()} KB)...`;
         progressBar.style.width = '55%';
 
@@ -1987,13 +2255,28 @@ loadData();
           `(เพิ่ม ${Number(counts.inserted || 0).toLocaleString()}, แก้ไข ${Number(counts.updated || 0).toLocaleString()}, ` +
           `มีอยู่แล้ว ${Number(counts.unchanged || 0).toLocaleString()}) กำลังตรวจหน้าเว็บ...`;
 
-        const refreshed = await refreshDashboardAfterUpload();
+        const refreshPromise = refreshDashboardAfterUpload();
         progressBar.style.width = '100%';
+        if(hadDashboardBeforeUpload) {
+          setSideBadge(
+            'นำเข้า BigQuery สำเร็จ ' +
+            Number(counts.visible || json.rowsProcessed || 0).toLocaleString() +
+            ' แถว\nกำลังอัปเดต Dashboard เบื้องหลัง…'
+          );
+          closeModal();
+          void refreshPromise.then(refreshed => {
+            if(!refreshed) {
+              setSideBadge('ข้อมูลเข้า BigQuery แล้ว\nDashboard ยังตอบกลับไม่ทัน กรุณากดรีเฟรช');
+            }
+          });
+          return;
+        }
+
+        const refreshed = await refreshPromise;
         if (refreshed) {
           statusText.textContent =
             `🎉 นำเข้าสำเร็จและหน้าเว็บอัปเดตแล้ว ` +
             `${Number(counts.visible || json.rowsProcessed || 0).toLocaleString()} แถว`;
-          await sleep(1200);
           closeModal();
         } else {
           progressBar.style.background = '#f59e0b';
@@ -2040,36 +2323,34 @@ loadData();
     }
     const source = findPickDetailWorksheet(workbook);
     const firstSheet = source.sheetName;
-    const sheetData = XLSX.utils.sheet_to_json(source.sheet, {
-      header:1,
-      raw:true,
-      defval:''
-    });
-    const headerRow = sheetData[0] || [];
-    const headers = REQUIRED_HEADERS.map(h => String(headerRow[h.index] || '').trim().toUpperCase());
+    const headers = REQUIRED_HEADERS.map(header =>
+      String(readWorksheetCellValue(source.sheet, source.headerRowIndex, header.index) || '')
+        .trim()
+        .toUpperCase()
+    );
     REQUIRED_HEADERS.forEach((header, index) => {
       if (headers[index] !== header.name) {
         const column = XLSX.utils.encode_col(header.index);
+        const actual = readWorksheetCellValue(source.sheet, source.headerRowIndex, header.index);
         throw new Error(
-          `หัวคอลัมน์ ${column} ต้องเป็น ${header.name} แต่พบ “${String(headerRow[header.index] || '').trim() || '(ว่าง)'}”`
+          `หัวคอลัมน์ ${column} ต้องเป็น ${header.name} แต่พบ “${String(actual || '').trim() || '(ว่าง)'}”`
         );
       }
     });
     return {
-      rows: parsePickRows(sheetData, source.headerRowIndex),
+      rows: parsePickRowsFromWorksheet(source.sheet, source.headerRowIndex, source.lastRowIndex),
       meta: {
         schemaVersion: UPLOAD_SCHEMA_VERSION,
         filename: file.name,
         sheetName: firstSheet,
         headerRow: source.headerRowIndex + 1,
-        sourceRowCount: Math.max(sheetData.length - 2, 0),
+        sourceRowCount: Math.max(source.lastRowIndex - source.headerRowIndex - 1, 0),
         headers: headers
       }
     };
   }
 
   function findPickDetailWorksheet(workbook) {
-    const maxRequiredColumn = Math.max(...REQUIRED_HEADERS.map(header => header.index));
     for(const sheetName of workbook.SheetNames) {
       const sheet = workbook.Sheets[sheetName];
       if(!sheet) continue;
@@ -2081,21 +2362,14 @@ loadData();
         });
         if(!matches) continue;
 
-        let range;
+        let lastRowIndex = rowIndex;
         try {
-          range = sheet['!ref']
-            ? XLSX.utils.decode_range(sheet['!ref'])
-            : {s:{r:rowIndex,c:0}, e:{r:rowIndex,c:maxRequiredColumn}};
-        } catch(_) {
-          range = {s:{r:rowIndex,c:0}, e:{r:rowIndex,c:maxRequiredColumn}};
-        }
-        range.s.r = rowIndex;
-        range.s.c = 0;
-        range.e.r = Math.max(range.e.r, rowIndex);
-        range.e.c = Math.max(range.e.c, maxRequiredColumn);
-        sheet['!ref'] = XLSX.utils.encode_range(range);
+          if(sheet['!ref']) {
+            lastRowIndex = Math.max(XLSX.utils.decode_range(sheet['!ref']).e.r, rowIndex);
+          }
+        } catch(_) {}
 
-        return {sheetName, sheet, headerRowIndex:rowIndex};
+        return {sheetName, sheet, headerRowIndex:rowIndex, lastRowIndex};
       }
     }
     throw new Error(
@@ -2151,6 +2425,12 @@ loadData();
 
   async function refreshDashboardAfterUpload() {
     statusText.textContent = '🔄 BigQuery บันทึกสำเร็จแล้ว กำลังอัปเดตหน้าเว็บหนึ่งครั้ง...';
+    // A GET that started before the MERGE may still be in flight. Wait for it,
+    // then force one new request so the upload result cannot be hidden by that response.
+    const pendingLoad = activeLoadPromise;
+    if(pendingLoad) {
+      try { await pendingLoad; } catch(_) {}
+    }
     const result = await loadData(true);
     return !!(result && result.ok && result.rows > 0);
   }
@@ -2236,26 +2516,29 @@ loadData();
     return s;
   }
 
-  function parsePickRows(sheetData, headerRowIndex) {
-    if (!sheetData || sheetData.length <= 2) return [];
+  function parsePickRowsFromWorksheet(sheet, headerRowIndex, lastRowIndex) {
+    if (!sheet || lastRowIndex < headerRowIndex + 2) return [];
     const parsedRows = [];
-    for (let i = 2; i < sheetData.length; i++) {
-      const cols = sheetData[i] || [];
-      if (!cols || cols.length === 0) continue;
-      const relevant = [1,12,28,31,36,40,55,56,58,64,66];
-      if(relevant.every(index => cols[index] == null || String(cols[index]).trim() === '')) continue;
+    const relevant = REQUIRED_HEADERS.map(header => header.index);
+    for (let rowIndex = headerRowIndex + 2; rowIndex <= lastRowIndex; rowIndex++) {
+      // อ่านเฉพาะ 11 คอลัมน์ที่ระบบใช้จริง ไม่สร้าง array ครบทุกคอลัมน์/ทุกแถว
+      const values = {};
+      relevant.forEach(columnIndex => {
+        values[columnIndex] = readWorksheetCellValue(sheet, rowIndex, columnIndex);
+      });
+      if(relevant.every(index => values[index] == null || String(values[index]).trim() === '')) continue;
       parsedRows.push([
-        cols[1] != null ? String(cols[1]).trim() : '',
-        cols[12] != null ? String(cols[12]).trim() : '',
-        numericValue(cols[28]),
-        cols[31] != null ? String(cols[31]).trim() : '',
-        cols[36] != null ? String(cols[36]).trim() : '',
-        numericValue(cols[40]),
-        cols[55] != null ? String(cols[55]).trim().toUpperCase() : '',
-        String(cols[56] || cols[58] || '').trim(),
-        cols[64] != null ? String(cols[64]).trim() : '',
-        fmtExcelDate(cols[66]),
-        Number(headerRowIndex || 0) + i + 1
+        values[1] != null ? String(values[1]).trim() : '',
+        values[12] != null ? String(values[12]).trim() : '',
+        numericValue(values[28]),
+        values[31] != null ? String(values[31]).trim() : '',
+        values[36] != null ? String(values[36]).trim() : '',
+        numericValue(values[40]),
+        values[55] != null ? String(values[55]).trim().toUpperCase() : '',
+        String(values[56] || values[58] || '').trim(),
+        values[64] != null ? String(values[64]).trim() : '',
+        fmtExcelDate(values[66]),
+        rowIndex + 1
       ]);
     }
     return parsedRows;
