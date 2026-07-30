@@ -199,6 +199,36 @@
     </section>
 
     <section class="page" data-page="pickers">
+      <!-- 🔍 Card เจาะลึกการทำงานรายบุคคล (Picker Drill-down) -->
+      <div class="card wide" style="margin-bottom:20px; border-top: 4px solid var(--indigo); background:#ffffff;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+          <div>
+            <h3 style="font-size:17px; color:#0f172a; margin:0;">🔍 เจาะลึกการทำงานรายบุคคล (Individual Picker Drill-down)</h3>
+            <div class="sub" style="margin-top:2px;">เลือกรายชื่อพนักงานและวันที่ เพื่อดู Zone ที่ทำ, Time Slot และรายการสินค้าที่หยิบ</div>
+          </div>
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <div style="position:relative;">
+              <select id="pickerSelect" style="padding:8px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; font-family:inherit; outline:none; background:#f8fafc; cursor:pointer; min-width:220px; font-weight:500;">
+                <option value="">-- เลือกพนักงาน --</option>
+              </select>
+            </div>
+            <div>
+              <select id="pickerDateSelect" style="padding:8px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; font-family:inherit; outline:none; background:#f8fafc; cursor:pointer; font-weight:500;">
+                <option value="all">ทุกวันที่</option>
+              </select>
+            </div>
+            <button id="btnResetPickerFilter" style="border:0; background:#eef2ff; color:#4338ca; padding:8px 14px; border-radius:10px; font-size:12.5px; font-weight:600; cursor:pointer; transition:.2s;">🧹 รีเซ็ต</button>
+          </div>
+        </div>
+
+        <!-- รายละเอียดของพนักงานที่เลือก -->
+        <div id="pickerDetailContent">
+          <div style="text-align:center; color:#94a3b8; padding:32px; background:#f8fafc; border-radius:14px; border:1px dashed #cbd5e1;">
+            👆 กรุณาเลือกรายชื่อพนักงานจากดรอปดาวน์ด้านบนเพื่อเริ่มดูรายงานเจาะลึก
+          </div>
+        </div>
+      </div>
+
       <div class="card wide">
         <h3>ตารางพนักงานหยิบ (เรียงตามปริมาณ)</h3>
         <div class="sub">รหัส Picker · ชื่อพนักงาน · สังกัด · Location/Zone หลัก · จำนวนชิ้น · หน่วยหยิบ · Productivity</div>

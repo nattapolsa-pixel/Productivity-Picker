@@ -337,6 +337,23 @@ function getPickerAffiliation(code){
   return 'ไม่พบสังกัด';
 }
 
+function getItemInfo(sku) {
+  if (!sku) return { sku: '', name: '-', owner: '-' };
+  const s = String(sku).trim();
+  let m = (typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) ? ITEM_MASTER[s] : null;
+
+  if (!m && typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) {
+    const sNoZero = s.replace(/^0+/, '');
+    m = ITEM_MASTER[sNoZero];
+  }
+
+  return {
+    sku: s,
+    name: m ? (m.name || s) : s,
+    owner: m ? (m.owner || '-') : '-'
+  };
+}
+
 function normalizeLocationCode(value){
   const text = String(value || '').trim().toUpperCase();
   return text ? text.slice(0, 2) : '??';
@@ -646,7 +663,7 @@ function aggregate(system, from, to, sf){
   const S = DATA[system];
   let lines = 0, pcs = 0, pickQty = 0;
   const pickers = new Set(), zones = new Set();
-  const zoneMap = {}, locationMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, zoneGrp = {}, ownerTypeGrp = {}, affiliationGrp = {}, pickerZoneCnt = {}, pickerLocationCnt = {};
+  const zoneMap = {}, locationMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, zoneGrp = {}, ownerTypeGrp = {}, affiliationGrp = {}, pickerZoneCnt = {}, pickerLocationCnt = {}, pickerDrilldownMap = {};
   const SH = S._sh;
 
   const rowCount = packedRowCount(S);
@@ -729,6 +746,32 @@ function aggregate(system, from, to, sf){
       pcs:0, q:0, n:0, mx:-1, mn:999999
     });
     affiliationGroup.pcs += pVal; affiliationGroup.q += qVal; affiliationGroup.n++; if(si.sm > affiliationGroup.mx) affiliationGroup.mx = si.sm; if(si.sm < affiliationGroup.mn) affiliationGroup.mn = si.sm;
+
+    // สรุปข้อมูลเจาะลึกรายบุคคล (Picker Drill-down: Zone, Time Slot, SKU)
+    const pDrill = pickerDrilldownMap[picker] || (pickerDrilldownMap[picker] = {
+      picker,
+      name: getPickerName(picker),
+      affiliation,
+      dates: new Set(),
+      byDate: {}
+    });
+    pDrill.dates.add(si.sd);
+    const dRec = pDrill.byDate[si.sd] || (pDrill.byDate[si.sd] = {
+      date: si.sd, pcs: 0, qty: 0, lines: 0, minMinutes: 999999, maxMinutes: -1,
+      zones: {}, slots: {}, skus: {}
+    });
+    dRec.pcs += pVal; dRec.qty += qVal; dRec.lines++;
+    if (r.tmin < dRec.minMinutes) dRec.minMinutes = r.tmin;
+    if (r.tmin > dRec.maxMinutes) dRec.maxMinutes = r.tmin;
+
+    (dRec.zones[zone] = dRec.zones[zone] || { pcs: 0, qty: 0, lines: 0 });
+    dRec.zones[zone].pcs += pVal; dRec.zones[zone].qty += qVal; dRec.zones[zone].lines++;
+
+    (dRec.slots[hr] = dRec.slots[hr] || { pcs: 0, qty: 0, lines: 0 });
+    dRec.slots[hr].pcs += pVal; dRec.slots[hr].qty += qVal; dRec.slots[hr].lines++;
+
+    (dRec.skus[sku] = dRec.skus[sku] || { pcs: 0, qty: 0, lines: 0 });
+    dRec.skus[sku].pcs += pVal; dRec.skus[sku].qty += qVal; dRec.skus[sku].lines++;
   }
 
   function applyProductivityHours(g){
@@ -933,7 +976,7 @@ function aggregate(system, from, to, sf){
       avg_prod: r1(mean(productiveGroups.map(g=>g.prod))),
       avg_pcs_prod: r1(mean(productiveGroups.map(g=>g.pcsProd)))
     },
-    daily, by_zone, by_location, by_picker, by_zone_prod, zone_prod_map, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all
+    daily, by_zone, by_location, by_picker, by_zone_prod, zone_prod_map, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all, picker_drilldown: pickerDrilldownMap
   };
   aggregateCache.set(cacheKey, result);
   return result;
@@ -1117,6 +1160,301 @@ function countUp(){
       el.textContent = dec ? c.toFixed(1) : fmt(Math.round(c));
     }, 18);
   });
+}
+
+// ===== Individual Picker Drill-down Renderer =====
+let selectedPickerId = '';
+let selectedPickerDate = 'all';
+
+function selectPickerDrilldown(pickerId){
+  selectedPickerId = String(pickerId || '').trim();
+  selectedPickerDate = 'all';
+  const selectEl = document.getElementById('pickerSelect');
+  if(selectEl) selectEl.value = selectedPickerId;
+  renderPickerDrilldown();
+  const cardEl = document.getElementById('pickerDetailContent');
+  if(cardEl) cardEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function renderPickerDrilldown(){
+  const selectEl = document.getElementById('pickerSelect');
+  const dateSelectEl = document.getElementById('pickerDateSelect');
+  const contentEl = document.getElementById('pickerDetailContent');
+  const resetBtn = document.getElementById('btnResetPickerFilter');
+  if(!selectEl || !contentEl || !A) return;
+
+  const drillMap = A.picker_drilldown || {};
+  const pickersList = (A.by_picker || []).map(p => ({
+    id: p.picker,
+    name: p.name || getPickerName(p.picker),
+    affiliation: p.affiliation || getPickerAffiliation(p.picker),
+    qty: p.qty,
+    pcs: p.pcs
+  }));
+
+  // Populate picker select options
+  let optionsHtml = '<option value="">-- เลือกพนักงาน --</option>';
+  pickersList.forEach(p => {
+    const isPcs = unitMode === 'pcs';
+    const label = `${p.id} - ${p.name !== '-' ? p.name : ''} (${p.affiliation}) [${fmt(isPcs ? p.pcs : p.qty)} ${isPcs ? 'ชิ้น' : 'หน่วย'}]`;
+    optionsHtml += `<option value="${escapeZoneHtml(p.id)}"${p.id === selectedPickerId ? ' selected' : ''}>${escapeZoneHtml(label)}</option>`;
+  });
+  selectEl.innerHTML = optionsHtml;
+
+  // Bind change handlers once
+  if(!selectEl._bound){
+    selectEl._bound = true;
+    selectEl.onchange = () => {
+      selectedPickerId = selectEl.value;
+      selectedPickerDate = 'all';
+      renderPickerDrilldown();
+    };
+  }
+  if(dateSelectEl && !dateSelectEl._bound){
+    dateSelectEl._bound = true;
+    dateSelectEl.onchange = () => {
+      selectedPickerDate = dateSelectEl.value;
+      renderPickerDrilldown();
+    };
+  }
+  if(resetBtn && !resetBtn._bound){
+    resetBtn._bound = true;
+    resetBtn.onclick = () => {
+      selectedPickerId = '';
+      selectedPickerDate = 'all';
+      if(selectEl) selectEl.value = '';
+      renderPickerDrilldown();
+    };
+  }
+
+  if(!selectedPickerId || !drillMap[selectedPickerId]){
+    contentEl.innerHTML = `
+      <div style="text-align:center; color:#94a3b8; padding:36px; background:#f8fafc; border-radius:14px; border:1px dashed #cbd5e1;">
+        👆 กรุณาเลือกรายชื่อพนักงานจากดรอปดาวน์ด้านบน หรือกดเลือกจากตารางด้านล่างเพื่อเริ่มดูรายงานเจาะลึก
+      </div>`;
+    if(dateSelectEl) dateSelectEl.innerHTML = '<option value="all">ทุกวันที่</option>';
+    return;
+  }
+
+  const pData = drillMap[selectedPickerId];
+  const datesArray = [...(pData.dates || [])].sort();
+
+  // Populate date select options
+  if(dateSelectEl){
+    let dateOptions = '<option value="all">ทุกวันที่ (' + datesArray.length + ' วัน)</option>';
+    datesArray.forEach(d => {
+      dateOptions += `<option value="${d}"${d === selectedPickerDate ? ' selected' : ''}>📅 ${d}</option>`;
+    });
+    dateSelectEl.innerHTML = dateOptions;
+  }
+
+  // Filter records based on selectedPickerDate
+  let totalPcs = 0, totalQty = 0, totalLines = 0;
+  const activeZonesMap = {}, activeSlotsMap = {}, activeSkusMap = {};
+  let totalWorkHours = 0;
+
+  const targetDates = selectedPickerDate === 'all' ? datesArray : (pData.byDate[selectedPickerDate] ? [selectedPickerDate] : []);
+
+  targetDates.forEach(d => {
+    const dRec = pData.byDate[d];
+    if(!dRec) return;
+    totalPcs += dRec.pcs;
+    totalQty += dRec.qty;
+    totalLines += dRec.lines;
+
+    // work hours per day
+    if(dRec.minMinutes < dRec.maxMinutes){
+      let spanMin = dRec.maxMinutes - dRec.minMinutes;
+      let wh = spanMin / 60.0;
+      if(wh >= 8.5 && wh <= 9.5 && dRec.maxMinutes <= 570) wh = 9.0;
+      totalWorkHours += Math.max(wh, 0.1);
+    }
+
+    // zones
+    Object.entries(dRec.zones || {}).forEach(([z, v]) => {
+      const zRec = activeZonesMap[z] || (activeZonesMap[z] = { pcs: 0, qty: 0, lines: 0 });
+      zRec.pcs += v.pcs; zRec.qty += v.qty; zRec.lines += v.lines;
+    });
+
+    // slots
+    Object.entries(dRec.slots || {}).forEach(([hr, v]) => {
+      const sRec = activeSlotsMap[hr] || (activeSlotsMap[hr] = { pcs: 0, qty: 0, lines: 0 });
+      sRec.pcs += v.pcs; sRec.qty += v.qty; sRec.lines += v.lines;
+    });
+
+    // skus
+    Object.entries(dRec.skus || {}).forEach(([sku, v]) => {
+      const kRec = activeSkusMap[sku] || (activeSkusMap[sku] = { pcs: 0, qty: 0, lines: 0 });
+      kRec.pcs += v.pcs; kRec.qty += v.qty; kRec.lines += v.lines;
+    });
+  });
+
+  const isPcs = unitMode === 'pcs';
+  const displayMainVal = isPcs ? totalPcs : totalQty;
+  const displayMainUnit = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
+  const prod = totalWorkHours > 0 ? (displayMainVal / totalWorkHours) : 0;
+
+  const pickerName = pData.name !== '-' ? pData.name : pData.picker;
+  const activeZonesList = Object.keys(activeZonesMap).sort((a,b) => (isPcs ? activeZonesMap[b].pcs - activeZonesMap[a].pcs : activeZonesMap[b].qty - activeZonesMap[a].qty));
+  const activeSkusList = Object.keys(activeSkusMap).sort((a,b) => (isPcs ? activeSkusMap[b].pcs - activeSkusMap[a].pcs : activeSkusMap[b].qty - activeSkusMap[a].qty));
+  const activeSlotsList = Object.keys(activeSlotsMap).map(Number).sort((a,b) => a - b);
+
+  // Render Header KPIs & Details
+  let html = `
+  <div style="background:linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border:1px solid #e2e8f0; border-radius:16px; padding:18px; margin-bottom:18px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+      <div>
+        <div style="font-size:18px; font-weight:700; color:#1e293b; display:flex; align-items:center; gap:8px;">
+          <span>👤 ${escapeZoneHtml(pickerName)}</span>
+          <span style="font-size:12px; font-weight:600; color:#6366f1; background:#e0e7ff; padding:2px 8px; border-radius:6px;">รหัส ${escapeZoneHtml(pData.picker)}</span>
+          <span style="font-size:12px; font-weight:600; color:#0f766e; background:#ccfbf1; padding:2px 8px; border-radius:6px;">สังกัด: ${escapeZoneHtml(pData.affiliation)}</span>
+        </div>
+        <div style="font-size:12px; color:#64748b; margin-top:4px;">
+          📅 วันที่เลือก: <b>${selectedPickerDate === 'all' ? 'ทุกวันที่ (' + targetDates.length + ' วัน)' : selectedPickerDate}</b>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mini KPIs -->
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:10px;">
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:600;">ปริมาณชิ้น (QTY)</div>
+        <div style="font-size:18px; font-weight:700; color:#0284c7; margin-top:2px;">${fmt(totalPcs)} <span style="font-size:11px; font-weight:400;">ชิ้น</span></div>
+      </div>
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:600;">หน่วยหยิบ (Pack)</div>
+        <div style="font-size:18px; font-weight:700; color:#4338ca; margin-top:2px;">${fmt(totalQty)} <span style="font-size:11px; font-weight:400;">หน่วย</span></div>
+      </div>
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:600;">จำนวนบรรทัด</div>
+        <div style="font-size:18px; font-weight:700; color:#0f766e; margin-top:2px;">${fmt(totalLines)} <span style="font-size:11px; font-weight:400;">lines</span></div>
+      </div>
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:600;">ชั่วโมงหยิบจริง</div>
+        <div style="font-size:18px; font-weight:700; color:#d97706; margin-top:2px;">${fmt(Math.round(totalWorkHours * 10) / 10)} <span style="font-size:11px; font-weight:400;">ชม.</span></div>
+      </div>
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:600;">Productivity</div>
+        <div style="font-size:18px; font-weight:700; color:#e11d48; margin-top:2px;">${fmt(Math.round(prod))} <span style="font-size:11px; font-weight:400;">${isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.'}</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Section Grid: Zone Breakdown & Time Slot -->
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px;">
+    <!-- Zone Breakdown -->
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:16px;">
+      <h4 style="font-size:14px; font-weight:700; color:#1e293b; margin:0 0 10px; display:flex; justify-content:space-between;">
+        <span>📍 โซนที่เข้าทำงาน (${activeZonesList.length} Zone)</span>
+        <span style="font-size:11px; color:#64748b; font-weight:400;">เรียงตามปริมาณ</span>
+      </h4>
+      <div style="max-height:220px; overflow-y:auto;">
+        <table style="width:100%; font-size:12.5px; border-collapse:collapse;">
+          <thead>
+            <tr style="background:#f8fafc; text-align:left; color:#64748b; font-size:11px;">
+              <th style="padding:6px 8px;">Zone</th>
+              <th style="padding:6px 8px;" class="num">ชิ้น (QTY)</th>
+              <th style="padding:6px 8px;" class="num">หน่วยหยิบ</th>
+              <th style="padding:6px 8px;" class="num">สัดส่วน</th>
+            </tr>
+          </thead>
+          <tbody>`;
+
+  activeZonesList.forEach(z => {
+    const zv = activeZonesMap[z];
+    const share = displayMainVal > 0 ? (isPcs ? (zv.pcs / displayMainVal) * 100 : (zv.qty / displayMainVal) * 100) : 0;
+    html += `
+            <tr style="border-bottom:1px solid #f1f5f9;">
+              <td style="padding:7px 8px; font-weight:600;"><span class="pill">${escapeZoneHtml(z)}</span></td>
+              <td style="padding:7px 8px;" class="num">${fmt(zv.pcs)}</td>
+              <td style="padding:7px 8px;" class="num">${fmt(zv.qty)}</td>
+              <td style="padding:7px 8px;" class="num"><span style="font-size:11px; font-weight:700; color:#6366f1;">${share.toFixed(1)}%</span></td>
+            </tr>`;
+  });
+
+  html += `
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Time Slot Breakdown -->
+    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:16px;">
+      <h4 style="font-size:14px; font-weight:700; color:#1e293b; margin:0 0 10px;">
+        ⏰ ช่วงเวลาการทำงาน (Time Slot)
+      </h4>
+      <div style="max-height:220px; overflow-y:auto; padding-right:4px;">`;
+
+  if(!activeSlotsList.length){
+    html += `<div style="color:#94a3b8; text-align:center; padding:20px;">ไม่มีข้อมูลช่วงเวลา</div>`;
+  } else {
+    const maxValInSlots = Math.max(...activeSlotsList.map(hr => isPcs ? activeSlotsMap[hr].pcs : activeSlotsMap[hr].qty), 1);
+    activeSlotsList.forEach(hr => {
+      const sv = activeSlotsMap[hr];
+      const val = isPcs ? sv.pcs : sv.qty;
+      const pct = Math.min(100, Math.max(8, (val / maxValInSlots) * 100));
+      const timeLabel = String(hr).padStart(2,'0') + ':00 - ' + String(hr).padStart(2,'0') + ':59';
+      html += `
+        <div style="margin-bottom:8px; font-size:12px;">
+          <div style="display:flex; justify-content:space-between; margin-bottom:2px; font-weight:500;">
+            <span style="color:#475569;">🕒 ${timeLabel}</span>
+            <span style="font-weight:700; color:#0f172a;">${fmt(val)} ${displayMainUnit} <span style="font-size:10px; color:#94a3b8;">(${fmt(sv.lines)} lines)</span></span>
+          </div>
+          <div style="width:100%; height:8px; background:#f1f5f9; border-radius:4px; overflow:hidden;">
+            <div style="width:${pct.toFixed(1)}%; height:100%; background:linear-gradient(90deg, #6366f1, #8b5cf6); border-radius:4px;"></div>
+          </div>
+        </div>`;
+    });
+  }
+
+  html += `
+      </div>
+    </div>
+  </div>
+
+  <!-- SKU / Item Breakdown Table -->
+  <div style="background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:16px;">
+    <h4 style="font-size:14px; font-weight:700; color:#1e293b; margin:0 0 10px; display:flex; justify-content:space-between;">
+      <span>📦 รายการสินค้าที่หยิบ (${activeSkusList.length} SKUs)</span>
+      <span style="font-size:11px; color:#64748b; font-weight:400;">เรียงตามปริมาณ</span>
+    </h4>
+    <div style="max-height:280px; overflow-x:auto; overflow-y:auto;">
+      <table style="width:100%; font-size:12.5px; border-collapse:collapse;">
+        <thead>
+          <tr style="background:#f8fafc; text-align:left; color:#64748b; font-size:11px; position:sticky; top:0; z-index:2;">
+            <th style="padding:8px 10px;">#</th>
+            <th style="padding:8px 10px;">รหัส SKU</th>
+            <th style="padding:8px 10px;">ชื่อสินค้า</th>
+            <th style="padding:8px 10px;">Owner</th>
+            <th style="padding:8px 10px;" class="num">ชิ้น (QTY)</th>
+            <th style="padding:8px 10px;" class="num">หน่วยหยิบ (Pack)</th>
+            <th style="padding:8px 10px;" class="num">จำนวน Lines</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+  activeSkusList.forEach((sku, idx) => {
+    const kv = activeSkusMap[sku];
+    const info = getItemInfo(sku);
+    html += `
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:7px 10px;"><span class="rank" style="font-size:11px; width:20px; height:20px;">${idx + 1}</span></td>
+            <td style="padding:7px 10px; font-weight:700; color:#0f172a;">${escapeZoneHtml(sku)}</td>
+            <td style="padding:7px 10px; color:#334155;"><div style="font-weight:600;">${escapeZoneHtml(info.name)}</div></td>
+            <td style="padding:7px 10px;"><span class="pill" style="font-size:11px;">${escapeZoneHtml(info.owner)}</span></td>
+            <td style="padding:7px 10px;" class="num" style="font-weight:700; color:#0284c7;">${fmt(kv.pcs)}</td>
+            <td style="padding:7px 10px;" class="num" style="font-weight:700; color:#4338ca;">${fmt(kv.qty)}</td>
+            <td style="padding:7px 10px;" class="num">${fmt(kv.lines)}</td>
+          </tr>`;
+  });
+
+  html += `
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+
+  contentEl.innerHTML = html;
 }
 
 // ===== chart builders =====
@@ -1439,6 +1777,8 @@ const builders = {
     }
   },
   pickers(){
+    renderPickerDrilldown();
+
     const isPcs = unitMode === 'pcs';
     const list = [...A.by_picker];
     list.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
@@ -1447,8 +1787,8 @@ const builders = {
     const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
     const prodHeaderLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
 
-    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>ชื่อพนักงาน</th><th>สังกัด</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Pack Size) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th></tr></thead><tbody>`;
-    if(!list.length) h += '<tr><td colspan="10" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
+    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>ชื่อพนักงาน</th><th>สังกัด</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Pack Size) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th><th style="text-align:center;">เจาะลึก</th></tr></thead><tbody>`;
+    if(!list.length) h += '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
     list.forEach((p,i) => {
       const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
       const qtyCellStyle = !isPcs ? 'background:#eef2ff;font-weight:700;color:#4338ca;' : 'color:#4338ca;font-weight:600;';
@@ -1456,7 +1796,7 @@ const builders = {
       const pickerName = p.name || getPickerName(p.picker);
       const pickerNameText = pickerName && pickerName !== p.picker ? pickerName : '-';
 
-      h += `<tr>
+      h += `<tr style="cursor:pointer;" onclick="selectPickerDrilldown('${p.picker}')" title="คลิกเพื่อดูรายงานเจาะลึกของ ${escapeZoneHtml(p.picker)}">
         <td><span class="rank">${i + 1}</span></td>
         <td><b>${p.picker}</b></td>
         <td style="line-height:1.35;"><div style="font-weight:600;">${pickerNameText}</div>${pickerNameText !== '-' ? `<div style="font-size:11px;color:#94a3b8;">${p.picker}</div>` : ''}</td>
@@ -1467,6 +1807,7 @@ const builders = {
         <td class="num" style="${qtyCellStyle}">${fmt(p.qty)}</td>
         <td class="num">${p.ot > 0 ? fmt(p.ot) : '-'}</td>
         <td class="num" style="font-weight:700;color:#e11d48;">${fmt(prodValue)}</td>
+        <td style="text-align:center;"><button style="border:0; background:#e0e7ff; color:#4338ca; padding:4px 10px; border-radius:6px; font-size:11.5px; font-weight:600; cursor:pointer;">🔍 ดูเจาะลึก</button></td>
       </tr>`;
     });
     h += '</tbody>'; document.getElementById('ptable').innerHTML = h;

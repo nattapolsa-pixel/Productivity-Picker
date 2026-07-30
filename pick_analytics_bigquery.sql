@@ -284,6 +284,20 @@ LEFT JOIN prod p       USING (picker_id)
 LEFT JOIN main_zone mz USING (picker_id)
 ORDER BY v.total_qty DESC;
 
+-- 5.5.1 สรุปเจาะลึกรายบุคคล (Picker Drill-down รายวัน + Zone + Time Slot + SKU)
+CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_dash_picker_drilldown_daily` AS
+SELECT
+  picker_id,
+  pick_date,
+  zone,
+  time_slot,
+  pick_hour,
+  sku,
+  COUNT(*)      AS pick_lines,
+  SUM(pick_qty) AS total_qty
+FROM `productivity-pick.pick_analytics.v_pick_enriched`
+GROUP BY picker_id, pick_date, zone, time_slot, pick_hour, sku;
+
 -- 5.6 สรุปตาม Item (Top SKU)
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_dash_by_item` AS
 SELECT sku,
