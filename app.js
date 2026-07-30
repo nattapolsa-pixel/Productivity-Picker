@@ -499,6 +499,7 @@ function renderWarehouseMap(activeLocations, isPcs){
       `<div class="floor-loc-metric"><strong>${formatMapValue(primary)}</strong><span>${escapeZoneHtml(mainUnit)}</span></div>` +
       `<div class="floor-loc-secondary">${formatMapValue(secondary)} ${escapeZoneHtml(secondaryUnit)}</div>` +
       `<div class="floor-loc-prod">⚡ Prod ${escapeZoneHtml(prodText)}</div>` +
+      `<div class="floor-loc-pickers">👤 ${fmt(row.pickers || 0)} คน</div>` +
       `</div>`;
   }
 
