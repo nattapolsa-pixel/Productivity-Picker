@@ -691,51 +691,51 @@ function aggregate(system, from, to, sf){
 
     // group ต่อ (คน, วันของกะ, กะ) เพื่อคิด work-hours + OT
     const k = picker+'|'+si.sd+'|'+si.sh;
-    const b = grp[k] || (grp[k] = {picker, sd:si.sd, sh:si.sh, pcs:0, q:0, n:0, mx:-1});
-    b.pcs += pVal; b.q += qVal; b.n++; if(si.sm > b.mx) b.mx = si.sm;
+    const b = grp[k] || (grp[k] = {picker, sd:si.sd, sh:si.sh, pcs:0, q:0, n:0, mx:-1, mn:999999});
+    b.pcs += pVal; b.q += qVal; b.n++; if(si.sm > b.mx) b.mx = si.sm; if(si.sm < b.mn) b.mn = si.sm;
 
     // แยกกลุ่มเพื่อวัด Productivity ตาม Owner และ Type Pick โดยใช้กติกาเวลาเดียวกับรายคน
     const ownerTypeKey = picker+'|'+si.sd+'|'+si.sh+'|'+zoneInfo.owner+'|'+zoneInfo.typePick;
     const ownerType = ownerTypeGrp[ownerTypeKey] || (ownerTypeGrp[ownerTypeKey] = {
       picker, sd:si.sd, sh:si.sh, owner:zoneInfo.owner || '-', typePick:zoneInfo.typePick || '-',
-      pcs:0, q:0, n:0, mx:-1
+      pcs:0, q:0, n:0, mx:-1, mn:999999
     });
-    ownerType.pcs += pVal; ownerType.q += qVal; ownerType.n++; if(si.sm > ownerType.mx) ownerType.mx = si.sm;
+    ownerType.pcs += pVal; ownerType.q += qVal; ownerType.n++; if(si.sm > ownerType.mx) ownerType.mx = si.sm; if(si.sm < ownerType.mn) ownerType.mn = si.sm;
 
     // ผูกสังกัดจากรหัสพนักงานใน Sheet บันทึกเวลาทำงาน เพื่อสรุป Productivity และ OT รายสังกัด
     const affiliation = getPickerAffiliation(picker);
     const affiliationKey = picker+'|'+si.sd+'|'+si.sh+'|'+affiliation;
     const affiliationGroup = affiliationGrp[affiliationKey] || (affiliationGrp[affiliationKey] = {
       picker, sd:si.sd, sh:si.sh, affiliation,
-      pcs:0, q:0, n:0, mx:-1
+      pcs:0, q:0, n:0, mx:-1, mn:999999
     });
-    affiliationGroup.pcs += pVal; affiliationGroup.q += qVal; affiliationGroup.n++; if(si.sm > affiliationGroup.mx) affiliationGroup.mx = si.sm;
+    affiliationGroup.pcs += pVal; affiliationGroup.q += qVal; affiliationGroup.n++; if(si.sm > affiliationGroup.mx) affiliationGroup.mx = si.sm; if(si.sm < affiliationGroup.mn) affiliationGroup.mn = si.sm;
+  }
+
+  function applyProductivityHours(g){
+    g.ot = otHours(g.mx);
+    if(g.n <= 0 || g.mn < 0 || g.mn > g.mx){
+      g.wh = 0;
+    }else{
+      let spanMin = g.mx - g.mn;
+      let wh = spanMin / 60.0;
+      if(wh >= 8.5 && wh <= 9.5 && g.mx <= 570){
+        wh = 9.0;
+      }
+      wh = Math.round(wh * 100) / 100;
+      g.wh = Math.max(wh, 0.1);
+    }
+    g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
+    g.prod = g.countable ? (g.q / g.wh) : 0;
+    g.pcsProd = g.countable ? (g.pcs / g.wh) : 0;
   }
 
   const groups = Object.values(grp);
-  groups.forEach(g => {
-    g.ot = otHours(g.mx);
-    g.wh = REG_HOURS + g.ot;
-    g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
-    g.prod = g.countable ? (g.q / g.wh) : 0;
-    g.pcsProd = g.countable ? (g.pcs / g.wh) : 0;
-  });
+  groups.forEach(applyProductivityHours);
   const ownerTypeGroups = Object.values(ownerTypeGrp);
-  ownerTypeGroups.forEach(g => {
-    g.ot = otHours(g.mx);
-    g.wh = REG_HOURS + g.ot;
-    g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
-    g.prod = g.countable ? (g.q / g.wh) : 0;
-    g.pcsProd = g.countable ? (g.pcs / g.wh) : 0;
-  });
+  ownerTypeGroups.forEach(applyProductivityHours);
   const affiliationGroups = Object.values(affiliationGrp);
-  affiliationGroups.forEach(g => {
-    g.ot = otHours(g.mx);
-    g.wh = REG_HOURS + g.ot;
-    g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
-    g.prod = g.countable ? (g.q / g.wh) : 0;
-    g.pcsProd = g.countable ? (g.pcs / g.wh) : 0;
-  });
+  affiliationGroups.forEach(applyProductivityHours);
   const r1 = n => Math.round(n*10)/10;
   const mean = a => a.length ? a.reduce((x,y)=>x+y,0)/a.length : 0;
   const productiveGroups = groups.filter(g => g.countable);

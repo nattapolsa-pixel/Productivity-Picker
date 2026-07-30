@@ -177,7 +177,8 @@ SELECT
   ROUND(SAFE_DIVIDE(total_qty, work_hours), 2) AS raw_productivity,   -- ก่อนใช้กติกา
   -- Productivity หลังใช้กติกา
   CASE
-    WHEN work_hours > 3 AND SAFE_DIVIDE(total_qty, work_hours) > 1000 THEN 0
+    WHEN work_hours < 3 THEN 0
+    WHEN work_hours >= 3 AND SAFE_DIVIDE(total_qty, work_hours) > 1000 THEN 0
     ELSE ROUND(SAFE_DIVIDE(total_qty, work_hours), 2)
   END AS productivity
 FROM calc;
