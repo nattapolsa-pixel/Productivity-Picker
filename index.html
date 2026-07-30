@@ -81,7 +81,31 @@
   .floor-micro{width:88px;display:grid;grid-template-columns:25px 1fr;gap:7px;margin-top:25px}.floor-micro-owner{background:#dcefd9;color:#14532d;font-size:9px;font-weight:700;writing-mode:vertical-rl;transform:rotate(180deg);display:flex;align-items:center;justify-content:center;border-radius:4px}.floor-micro-stack{display:grid;gap:14px}.floor-loc.micro{height:178px}.floor-loc.micro .floor-loc-code{font-size:22px}
   .floor-outside-wrap{border-top:1px dashed #cbd5e1;margin-top:12px;padding-top:12px}.floor-outside-title{font-size:11.5px;color:#64748b;font-weight:600;margin-bottom:8px}.floor-outside{display:flex;gap:8px;flex-wrap:wrap}.floor-loc.outside{width:112px;height:82px;align-items:flex-start;padding:8px}.floor-loc.outside .floor-loc-code{font-size:13px}.floor-loc.outside .floor-loc-metric{text-align:left}.floor-loc.outside .floor-loc-secondary{font-size:8px}.floor-all-mapped,.floor-map-empty{font-size:12px;color:#64748b;padding:12px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc}
   @media(max-width:1200px){.kpis{grid-template-columns:repeat(3,1fr)}}
-  @media(max-width:900px){.layout{flex-direction:column}.sidebar{width:100%;height:auto;flex-direction:row;overflow-x:auto;position:static;padding:12px}.brand{display:none}.nav{white-space:nowrap;margin:0 4px 0 0}.sidebadge{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.card.wide{grid-column:span 1}.zone-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:900px){
+    .layout{display:block}
+    .sidebar{width:100%;height:auto;flex-direction:row;align-items:stretch;overflow-x:auto;overflow-y:hidden;position:sticky;top:0;z-index:100;padding:8px 10px;gap:4px;box-shadow:0 4px 18px -12px rgba(30,41,59,.55);-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+    .brand{display:none}.sidebadge{display:none}
+    .nav{flex:0 0 auto;width:auto;min-width:max-content;white-space:nowrap;margin:0;padding:10px 12px;min-height:42px;font-size:13px;gap:8px}
+    .nav svg{width:17px;height:17px}.upload-btn{flex:0 0 auto;width:auto!important;min-width:max-content;margin:0 0 0 4px!important;padding:10px 13px!important;font-size:12px!important}
+    .content{padding:14px 12px calc(34px + env(safe-area-inset-bottom));overflow:hidden}
+    .pagehead{align-items:flex-start;margin-bottom:12px;gap:4px}.pagehead h1{font-size:22px}.daterange{width:100%;font-size:11.5px;line-height:1.5}
+    .kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}.kpi{padding:13px 12px;border-radius:14px}.kpi .lbl{font-size:11px;line-height:1.35;margin-bottom:7px}.kpi .val{font-size:20px}.kpi .unit{font-size:10px}
+    .grid{grid-template-columns:1fr;gap:12px}.card.wide{grid-column:span 1}.card{padding:14px;border-radius:14px}.card h3{font-size:14px}.card .sub{font-size:11px;line-height:1.5}
+    .chartbox{height:250px}.chartbox.tall{height:330px}
+    .controls{gap:8px;margin-bottom:10px}.controls .seg{width:100%;display:flex}.controls .seg button{flex:1;min-width:0;padding:8px 6px;font-size:12px;line-height:1.25}
+    table{min-width:760px;font-size:12px}th,td{padding:9px 10px}.zone-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:12px}.zone-stat{padding:11px 12px}.zone-stat-label{font-size:10.5px}.zone-stat-value{font-size:19px}.zone-stat-detail{font-size:9.5px}
+    .heat{grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}.tile{padding:12px}.tile .z{font-size:18px}
+    .warehouse-map-scroll,.zone-breakdown-wrap,.affiliation-table-wrap,.card>div[style*="overflow-x:auto"]{overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .zone-breakdown-switch{width:100%;display:flex}.zone-breakdown-switch button{flex:1;padding:8px 6px}
+    .sysbar{flex-direction:column;align-items:stretch!important;gap:8px!important;margin:-4px 0 14px!important}.sysbar .lab{font-size:11.5px;padding:0 2px}.sysbar .systog{width:100%;display:flex!important}.sysbar .systog button{flex:1;min-width:0;padding:9px 6px;font-size:11px;line-height:1.25;white-space:normal}
+    .sysbar .datebar{width:100%;display:flex;padding:6px}.sysbar .datebar input[type=date]{flex:1;min-width:0;width:0;padding:7px 4px;font-size:11px}.sysbar .datebar .sep{flex:0 0 auto}
+    .sysbar .datepreset{width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.sysbar .datepreset button{padding:8px 5px;font-size:11px}.sysbar .refreshbtn{width:100%;justify-content:center;padding:9px}.sysbar .freshtxt{font-size:10px;line-height:1.4}
+    #dataState{min-height:340px;padding:32px 16px}#dataState h2{font-size:19px}#dataState p{font-size:12px}
+    #uploadModal>div{width:calc(100% - 24px)!important;max-height:calc(100vh - 24px);overflow:auto;padding:18px!important;border-radius:16px!important}#uploadModal h2{font-size:17px!important}#uploadModal p{font-size:12px!important}#dropZone{padding:26px 14px!important}
+  }
+  @media(max-width:420px){
+    .sidebar{padding:8px}.nav{padding:9px 10px;font-size:12px;gap:7px}.nav svg{width:16px;height:16px}.content{padding-left:10px;padding-right:10px}.kpi .val{font-size:18px}.kpi .unit{display:block;margin:5px 0 0}.chartbox{height:230px}.chartbox.tall{height:300px}.sysbar .systog button{font-size:10.5px}
+  }
 </style>
 </head>
 <body>
