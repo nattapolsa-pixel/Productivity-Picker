@@ -54,7 +54,7 @@ const emptyData = () => ({
 let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
 let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
-let unitMode = 'pcs'; // เปิดหน้าเริ่มต้นเป็นจำนวนชิ้น แล้วให้หน่วยหยิบแสดงคู่กัน
+let unitMode = 'units'; // เปิดหน้าเริ่มต้นเป็นหน่วยหยิบ (Units / Pack Size)
 let trendMode = 'day';
 let datePresetMode = 'all';
 let excludedSkus = new Set();
@@ -1332,8 +1332,8 @@ function renderPickerDrilldown(){
   const prod = totalWorkHours > 0 ? (displayMainVal / totalWorkHours) : 0;
 
   const pickerName = pData.name !== '-' ? pData.name : pData.picker;
-  const activeZonesList = Object.keys(activeZonesMap).sort((a,b) => (isPcs ? activeZonesMap[b].pcs - activeZonesMap[a].pcs : activeZonesMap[b].qty - activeZonesMap[a].qty));
-  const activeSkusList = Object.keys(activeSkusMap).sort((a,b) => (isPcs ? activeSkusMap[b].pcs - activeSkusMap[a].pcs : activeSkusMap[b].qty - activeSkusMap[a].qty));
+  const activeZonesList = Object.keys(activeZonesMap).sort((a,b) => (activeZonesMap[b].qty - activeZonesMap[a].qty) || (activeZonesMap[b].pcs - activeZonesMap[a].pcs));
+  const activeSkusList = Object.keys(activeSkusMap).sort((a,b) => (activeSkusMap[b].qty - activeSkusMap[a].qty) || (activeSkusMap[b].pcs - activeSkusMap[a].pcs));
   const activeSlotsList = Object.keys(activeSlotsMap).map(Number).sort((a,b) => a - b);
 
   // Render Header KPIs & Details
@@ -1693,7 +1693,7 @@ const builders = {
   zones(){
     const z = [...A.by_zone];
     const isPcs = unitMode === 'pcs';
-    z.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
+    z.sort((a, b) => (b.qty - a.qty) || (b.pcs - a.pcs));
     const chartValues = isPcs ? z.map(x=>x.pcs) : z.map(x=>x.qty);
     const chartLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
     const activeLocations = new Map(A.by_location.map(x => [x.location, x]));
@@ -1709,9 +1709,9 @@ const builders = {
       ...(activeLocations.get(x.location) || {pcs:0, qty:0, lines:0, pickers:0})
     })).concat(unknownActive);
     locationRows.sort((a,b) => {
-      const av = isPcs ? Number(a.pcs || 0) : Number(a.qty || 0);
-      const bv = isPcs ? Number(b.pcs || 0) : Number(b.qty || 0);
-      return (bv - av) || a.location.localeCompare(b.location);
+      const av = Number(a.qty || 0);
+      const bv = Number(b.qty || 0);
+      return (bv - av) || (Number(b.pcs || 0) - Number(a.pcs || 0)) || a.location.localeCompare(b.location);
     });
 
     const summary = document.getElementById('zoneSummary');
@@ -1818,7 +1818,7 @@ const builders = {
 
     const isPcs = unitMode === 'pcs';
     const list = [...A.by_picker];
-    list.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
+    list.sort((a, b) => (b.qty - a.qty) || (b.pcs - a.pcs));
 
     const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
     const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
@@ -1874,7 +1874,7 @@ const builders = {
   items(){
     const isPcs = unitMode === 'pcs';
     let it = [...A.by_item];
-    it.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
+    it.sort((a, b) => (b.qty - a.qty) || (b.pcs - a.pcs));
     it = it.slice(0, 10);
 
     const labels = it.map(x => {
@@ -1945,7 +1945,7 @@ const builders = {
       if (!elTable) return;
 
       let allItems = [...(A.by_item_all || [])];
-      allItems.sort((a, b) => isPcs ? (b.pcs - a.pcs) : (b.qty - a.qty));
+      allItems.sort((a, b) => (b.qty - a.qty) || (b.pcs - a.pcs));
 
       if (itemSearchTerm) {
         allItems = allItems.filter(x => 
