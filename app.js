@@ -477,6 +477,12 @@ function renderWarehouseMap(activeLocations, isPcs){
     const secondary = isPcs ? Number(row.qty || 0) : Number(row.pcs || 0);
     const color = zoneMapColor(primary, maxValue, isPcs, info);
     const active = Number(row.lines || 0) > 0;
+
+    const zProdMap = A && A.zone_prod_map;
+    const zProd = zProdMap ? (zProdMap[info.zone] || zProdMap[code]) : null;
+    const prodVal = zProd ? (isPcs ? Number(zProd.avg_pcs_prod || 0) : Number(zProd.avg_prod || 0)) : 0;
+    const prodText = prodVal > 0 ? fmt(prodVal) : '-';
+
     const title = [
       `Location: ${code}`,
       `Zone: ${info.zone}`,
@@ -484,6 +490,7 @@ function renderWarehouseMap(activeLocations, isPcs){
       `Owner: ${info.owner}`,
       `จำนวนชิ้น: ${fmt(row.pcs || 0)} ชิ้น`,
       `หน่วยหยิบ: ${fmt(row.qty || 0)} หน่วย`,
+      `Productivity: ${prodText} ${isPcs ? 'ชิ้น/ชม.' : 'หน่วย/ชม.'}`,
       `Picker: ${fmt(row.pickers || 0)} คน`
     ].join('\n');
     return `<div class="floor-loc ${extraClass || ''} ${active ? 'active' : 'inactive'}" data-location="${escapeZoneHtml(code)}"` +
@@ -491,6 +498,7 @@ function renderWarehouseMap(activeLocations, isPcs){
       `<div class="floor-loc-code">${escapeZoneHtml(code)}</div>` +
       `<div class="floor-loc-metric"><strong>${formatMapValue(primary)}</strong><span>${escapeZoneHtml(mainUnit)}</span></div>` +
       `<div class="floor-loc-secondary">${formatMapValue(secondary)} ${escapeZoneHtml(secondaryUnit)}</div>` +
+      `<div class="floor-loc-prod">⚡ Productivity ${escapeZoneHtml(prodText)}</div>` +
       `</div>`;
   }
 
@@ -539,22 +547,23 @@ function renderZoneProductivityBreakdown(){
   const root = document.getElementById('zoneBreakdown');
   if(!root || !A) return;
   const switchRoot = document.getElementById('zoneBreakdownSwitch');
-  const mode = zoneBreakdownMode === 'type' ? 'type' : 'owner';
-  const rows = mode === 'type' ? (A.by_type_pick || []) : (A.by_owner || []);
-  const label = mode === 'type' ? 'Type Pick' : 'Owner';
-  const palette = mode === 'type' ? ZONE_TYPE_COLORS : ZONE_OWNER_COLORS;
+  const mode = zoneBreakdownMode === 'type' ? 'type' : (zoneBreakdownMode === 'zone' ? 'zone' : 'owner');
+  const rows = mode === 'type' ? (A.by_type_pick || []) : (mode === 'zone' ? (A.by_zone_prod || []) : (A.by_owner || []));
+  const label = mode === 'type' ? 'Type Pick' : (mode === 'zone' ? 'Zone' : 'Owner');
+  const palette = mode === 'type' ? ZONE_TYPE_COLORS : (mode === 'zone' ? PALETTE : ZONE_OWNER_COLORS);
   const blank = `<div class="floor-all-mapped">ยังไม่มีข้อมูล Productivity สำหรับช่วงที่เลือก</div>`;
   if(!rows.length){ root.innerHTML = blank; return; }
   const body = rows.map((row, index) => {
-    const color = colorForLabel(palette, row.name);
-    const displayName = mode === 'owner' && row.name === '-' ? 'ไม่พบ Owner' : row.name;
-    const related = mode === 'type' ? row.owners : row.types;
-    const relatedLabel = related && related.length ? related.map(x => x === '-' ? 'ไม่พบ Owner' : x).join(', ') : '-';
+    const color = mode === 'zone' ? PALETTE[index % PALETTE.length] : colorForLabel(palette, row.name);
+    const displayName = (mode === 'owner' && row.name === '-') ? 'ไม่พบ Owner' : row.name;
+    const relatedLabel = mode === 'zone'
+      ? `Owner: ${(row.owners||[]).map(x=>x==='-'?'ไม่พบ Owner':x).join(', ')} | Type: ${(row.types||[]).join(', ')}`
+      : (mode === 'type' ? `Owner: ${(row.owners||[]).map(x=>x==='-'?'ไม่พบ Owner':x).join(', ')}` : `Type Pick: ${(row.types||[]).join(', ')}`);
     const productivity = Number(row.avg_prod || 0);
     const pcsProductivity = Number(row.avg_pcs_prod || 0);
     return `<tr>` +
       `<td><span class="rank">${index + 1}</span></td>` +
-      `<td><span class="zone-breakdown-key"><i style="background:${color}"></i>${escapeZoneHtml(displayName)}</span><span class="metric-sub">${label === 'Owner' ? 'Type Pick: ' : 'Owner: '}${escapeZoneHtml(relatedLabel)}</span></td>` +
+      `<td><span class="zone-breakdown-key"><i style="background:${color}"></i>${escapeZoneHtml(displayName)}</span><span class="metric-sub">${escapeZoneHtml(relatedLabel)}</span></td>` +
       `<td class="num">${fmt(row.pcs)}<span class="metric-sub">${fmt(row.eligiblePcs)} นับ Productivity</span></td>` +
       `<td class="num">${fmt(row.qty)}<span class="metric-sub">${fmt(row.eligibleQty)} นับ Productivity</span></td>` +
       `<td class="num">${fmt(row.hours)} ชม.<span class="metric-sub">${fmt(row.productiveGroups)} กลุ่ม ≥ 3 ชม.</span></td>` +
@@ -570,9 +579,10 @@ function renderZoneProductivityBreakdown(){
     `<div class="zone-breakdown-foot">Productivity ใช้เฉพาะกลุ่มที่มีเวลาทำงานตั้งแต่ ${MIN_PRODUCTIVE_HOURS} ชั่วโมงขึ้นไป · จำนวนชิ้น/หน่วยหยิบรวมยังแสดงยอดทั้งหมดของช่วงที่เลือก</div>`;
   if(switchRoot){
     switchRoot.querySelectorAll('button').forEach(button => {
-      button.classList.toggle('active', (button.dataset.breakdown === 'type') === (mode === 'type'));
+      const bMode = button.dataset.breakdown;
+      button.classList.toggle('active', bMode === mode);
       button.onclick = () => {
-        const next = button.dataset.breakdown === 'type' ? 'type' : 'owner';
+        const next = bMode === 'type' ? 'type' : (bMode === 'zone' ? 'zone' : 'owner');
         if(zoneBreakdownMode === next) return;
         zoneBreakdownMode = next;
         renderZoneProductivityBreakdown();
@@ -635,7 +645,7 @@ function aggregate(system, from, to, sf){
   const S = DATA[system];
   let lines = 0, pcs = 0, pickQty = 0;
   const pickers = new Set(), zones = new Set();
-  const zoneMap = {}, locationMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, ownerTypeGrp = {}, affiliationGrp = {}, pickerZoneCnt = {}, pickerLocationCnt = {};
+  const zoneMap = {}, locationMap = {}, itemMap = {}, itemMapAll = {}, slotMap = {}, dayVol = {}, grp = {}, zoneGrp = {}, ownerTypeGrp = {}, affiliationGrp = {}, pickerZoneCnt = {}, pickerLocationCnt = {};
   const SH = S._sh;
 
   const rowCount = packedRowCount(S);
@@ -694,6 +704,14 @@ function aggregate(system, from, to, sf){
     const b = grp[k] || (grp[k] = {picker, sd:si.sd, sh:si.sh, pcs:0, q:0, n:0, mx:-1, mn:999999});
     b.pcs += pVal; b.q += qVal; b.n++; if(si.sm > b.mx) b.mx = si.sm; if(si.sm < b.mn) b.mn = si.sm;
 
+    // แยกกลุ่มตาม Zone เพื่อคำนวณ Zone Productivity
+    const zoneGrpKey = picker+'|'+si.sd+'|'+si.sh+'|'+zone;
+    const zoneGroup = zoneGrp[zoneGrpKey] || (zoneGrp[zoneGrpKey] = {
+      picker, sd:si.sd, sh:si.sh, zone, owner:zoneInfo.owner||'-', typePick:zoneInfo.typePick||'-',
+      pcs:0, q:0, n:0, mx:-1, mn:999999
+    });
+    zoneGroup.pcs += pVal; zoneGroup.q += qVal; zoneGroup.n++; if(si.sm > zoneGroup.mx) zoneGroup.mx = si.sm; if(si.sm < zoneGroup.mn) zoneGroup.mn = si.sm;
+
     // แยกกลุ่มเพื่อวัด Productivity ตาม Owner และ Type Pick โดยใช้กติกาเวลาเดียวกับรายคน
     const ownerTypeKey = picker+'|'+si.sd+'|'+si.sh+'|'+zoneInfo.owner+'|'+zoneInfo.typePick;
     const ownerType = ownerTypeGrp[ownerTypeKey] || (ownerTypeGrp[ownerTypeKey] = {
@@ -732,6 +750,8 @@ function aggregate(system, from, to, sf){
 
   const groups = Object.values(grp);
   groups.forEach(applyProductivityHours);
+  const zoneGroups = Object.values(zoneGrp);
+  zoneGroups.forEach(applyProductivityHours);
   const ownerTypeGroups = Object.values(ownerTypeGrp);
   ownerTypeGroups.forEach(applyProductivityHours);
   const affiliationGroups = Object.values(affiliationGrp);
@@ -802,16 +822,17 @@ function aggregate(system, from, to, sf){
     location:v.location, zone:v.zone, typePick:v.typePick, owner:v.owner, known:v.known,
     pcs:v.pcs, qty:v.qty, lines:v.lines, pickers:v.pk.size
   })).sort((a,b)=>b.qty-a.qty);
-  function buildBreakdown(keyName){
+  function buildBreakdown(sourceGroups, keyName){
     const map = {};
-    ownerTypeGroups.forEach(g => {
+    sourceGroups.forEach(g => {
       const key = String(g[keyName] || '-').trim() || '-';
       const out = map[key] || (map[key] = {
         name:key, pcs:0, qty:0, lines:0, hours:0, eligiblePcs:0, eligibleQty:0,
         productiveGroups:0, pickers:new Set(), productivePickers:new Set(), types:new Set(), owners:new Set(), avgValues:[], avgPcsValues:[]
       });
       out.pcs += g.pcs; out.qty += g.q; out.lines += g.n; out.pickers.add(g.picker);
-      out.types.add(g.typePick); out.owners.add(g.owner);
+      if (g.typePick) out.types.add(g.typePick);
+      if (g.owner) out.owners.add(g.owner);
       if(g.countable){
         out.hours += g.wh;
         out.eligiblePcs += g.pcs;
@@ -836,8 +857,12 @@ function aggregate(system, from, to, sf){
       return (aUnknown - bUnknown) || (b.avg_prod-a.avg_prod) || (b.qty-a.qty) || a.name.localeCompare(b.name);
     });
   }
-  const by_owner = buildBreakdown('owner');
-  const by_type_pick = buildBreakdown('typePick');
+  const by_zone_prod = buildBreakdown(zoneGroups, 'zone');
+  const by_owner = buildBreakdown(ownerTypeGroups, 'owner');
+  const by_type_pick = buildBreakdown(ownerTypeGroups, 'typePick');
+  const zone_prod_map = {};
+  by_zone_prod.forEach(z => zone_prod_map[z.name] = z);
+
   const affiliationMap = {};
   const affiliationDailyMap = {};
   affiliationGroups.forEach(g => {
@@ -907,7 +932,7 @@ function aggregate(system, from, to, sf){
       avg_prod: r1(mean(productiveGroups.map(g=>g.prod))),
       avg_pcs_prod: r1(mean(productiveGroups.map(g=>g.pcsProd)))
     },
-    daily, by_zone, by_location, by_picker, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all
+    daily, by_zone, by_location, by_picker, by_zone_prod, zone_prod_map, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all
   };
   aggregateCache.set(cacheKey, result);
   return result;
