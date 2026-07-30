@@ -1,7 +1,7 @@
 /*************************************************************
  *  BigQuery -> JSON  (Web App สำหรับ Pick Productivity Dashboard)
  *  ทำให้หน้าเว็บ (GitHub Pages) ดึงข้อมูลสดจาก BigQuery ได้เอง
- *  โครงสร้าง JSON ที่ส่งออก = เหมือน data.js ทุกอย่าง (RAW)
+ *  โครงสร้าง JSON ที่ส่งออก = payload สำหรับ Dashboard (RAW)
  *
  *  ── ตั้งค่าครั้งเดียว (ดู SETUP_dashboard_live_TH.md) ──
  *   1) Apps Script > เมนูซ้าย "Services" (+) > เพิ่ม "BigQuery API"
