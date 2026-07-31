@@ -529,9 +529,11 @@ function openZoneDetailModal(zoneCode) {
       if (shiftF !== 'all' && sh.sh !== shiftF) continue;
 
       const row = packedRowData(S, i);
-      const zInfo = getZoneInfo(row.zone);
-      const zCode = zInfo.zone || String(row.zone || '-').trim().toUpperCase();
-      if (zCode !== zoneCode && String(row.zone).trim().toUpperCase() !== zoneCode) continue;
+      const rawLoc = (S.locations && S.locations[row.zone]) ? S.locations[row.zone] : row.zone;
+      const zInfo = getZoneInfo(rawLoc);
+      const zCode = zInfo.zone || zInfo.location || String(rawLoc || '-').trim().toUpperCase();
+      const rawLocStr = String(rawLoc || '-').trim().toUpperCase();
+      if (zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode) continue;
 
       const sku = S.skus[row.skuIdx];
       if (isSkuExcluded(sku)) continue;
@@ -540,7 +542,7 @@ function openZoneDetailModal(zoneCode) {
       const pcs = row.pcs;
       const val = isPcs ? pcs : qty;
       const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
-      const itemInfo = getItemMasterInfo(sku);
+      const itemInfo = getItemInfo(sku);
 
       totalQty += qty;
       totalPcs += pcs;
