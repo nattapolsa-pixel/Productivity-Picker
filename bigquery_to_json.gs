@@ -49,6 +49,7 @@ const MASTER_STAGE_TABLE = 'dim_pick_master_stage';
 const MASTER_CURRENT_TABLE = 'dim_pick_master_current';
 const MASTER_SNAPSHOT_TABLE = 'dim_pick_master_snapshot';
 const MASTER_SYNC_TRIGGER_HANDLER = 'syncPickMastersDaily';
+const DASHBOARD_TABLE = 't_pick_dashboard'; // Materialized table for fast dashboard queries
 // =======================================================
 
 function doGet(e) {
@@ -810,6 +811,10 @@ function syncPickMasters_(source) {
     }
 
     const promoted = promotePickMasterStage_(snapshotDate);
+    // Refresh ตาราง Dashboard ให้ใช้ Master ใหม่ทันที
+    try { refreshPickDashboardTable_(); } catch (refreshErr) {
+      console.warn('Dashboard table refresh failed (non-fatal): ' + refreshErr);
+    }
     const previousRevision = getDataRevision_();
     clearCache_(previousRevision);
     bumpDataRevision_();
@@ -1281,18 +1286,14 @@ function buildDashboardData_(useQueryCache) {
   const pickerNames = pickerDirectory.names;
   const pickerAffiliations = pickerDirectory.affiliations;
   const zoneMaster = loadZoneMasterMap_();
+  // ดึงจาก t_pick_dashboard (Materialized Table) แทน v_pick_enriched (View ซ้อนกัน 3 ชั้น)
+  // ทำให้ Apps Script ตอบเร็วกว่าเดิมมาก
   const sql =
-    "SELECT UPPER(category) AS category, " +
+    "SELECT category, " +
     "FORMAT_DATE('%Y-%m-%d', pick_date) AS d, " +
-    "zone, picker_id AS picker, sku, " +
-    "EXTRACT(HOUR FROM pick_ts_local)*60 + EXTRACT(MINUTE FROM pick_ts_local) AS tmin, " +
-    "qty AS pcs, " +
-    // pick_qty ต้องมาจาก BigQuery หลัง join Owner+Item กับ master current แล้ว
-    // row payload ยัง 7 ค่าเดิม เพราะ owner ใช้สำหรับคำนวณใน BigQuery ไม่ต้องส่งให้ frontend ซ้ำ
-    "pick_qty AS pick_qty " +
-    "FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".v_pick_enriched` " +
-    "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY) " +
-    "AND UPPER(category) IN ('PTT','BPS')";
+    "zone, picker_id AS picker, sku, tmin, pcs, pick_qty " +
+    "FROM `" + BQ_PROJECT + "." + BQ_DATASET + "." + DASHBOARD_TABLE + "` " +
+    "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY)";
 
   const mk = () => ({ _d:{}, _p:{}, _s:{}, dates:[], pickers:[], skus:[], rows:[] });
   const sysd = { PTT: mk(), BPS: mk() };
@@ -1317,11 +1318,11 @@ function buildDashboardData_(useQueryCache) {
   ['PTT','BPS'].forEach(c => sortDates_(sysd[c]));
 
   return {
-    meta: { generated: new Date().toISOString(), source: 'BigQuery v_pick_enriched',
+    meta: { generated: new Date().toISOString(), source: 'BigQuery ' + DASHBOARD_TABLE,
             schema_version: DASHBOARD_SCHEMA_VERSION,
             unit_definition: {
-              pieces: 'qty',
-              source_pick_units: 'BigQuery v_pick_enriched.pick_qty',
+              pieces: 'pcs',
+              source_pick_units: 'BigQuery t_pick_dashboard.pick_qty',
               dashboard_pick_units: 'BigQuery Master_Item + Master_Pack (Owner+Item, Pick=D, Case=H, Blank=D then 1)'
             },
             picker_names: pickerNames,
@@ -1332,6 +1333,36 @@ function buildDashboardData_(useQueryCache) {
     PTT: { row_width: 7, dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
     BPS: { row_width: 7, dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }
   };
+}
+
+// -----------------------------------------------------------------------------
+// Refresh t_pick_dashboard — เรียกหลัง sync master สำเร็จ เพื่อให้ยอด pick_qty อัปเดต
+// -----------------------------------------------------------------------------
+function refreshPickDashboardTable_() {
+  const sql =
+    'CREATE OR REPLACE TABLE `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '` ' +
+    'PARTITION BY pick_date CLUSTER BY category, picker_id AS ' +
+    'SELECT ' +
+    '  UPPER(category)   AS category, ' +
+    '  DATE(pick_ts_local) AS pick_date, ' +
+    '  zone, ' +
+    '  picker_id, ' +
+    '  sku, ' +
+    '  CAST(EXTRACT(HOUR FROM pick_ts_local)*60 + EXTRACT(MINUTE FROM pick_ts_local) AS INT64) AS tmin, ' +
+    '  qty  AS pcs, ' +
+    '  pick_qty ' +
+    'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.v_pick_enriched` ' +
+    'WHERE pick_ts_local IS NOT NULL AND UPPER(category) IN (\'PTT\',\'BPS\')';
+  bqQueryEach_(sql, function() {}, JOB_DEADLINE_MS, false);
+  console.log('t_pick_dashboard refreshed successfully');
+}
+
+// เรียกจาก Editor เพื่อ Refresh ตาราง Dashboard ด้วยตนเอง
+function refreshDashboardTableNow() {
+  refreshPickDashboardTable_();
+  clearCache_(getDataRevision_());
+  bumpDataRevision_();
+  return { status: 'success', table: DASHBOARD_TABLE };
 }
 
 // เรียงวันที่ให้ต่อเนื่อง แล้ว remap index ของ rows ตามลำดับใหม่
