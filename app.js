@@ -1126,7 +1126,37 @@ function selectPickerDrilldown(pickerId){
   if(cardEl) cardEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+let selectedTypePickFilter = 'all';
+let selectedTypePickZoneFilter = 'all';
 let selectedTypePickPickerId = null;
+
+function resetTypePickDrilldown() {
+  selectedTypePickFilter = 'all';
+  selectedTypePickZoneFilter = 'all';
+  selectedTypePickPickerId = null;
+  if (builders.typebreak) builders.typebreak();
+}
+
+function selectTypePickFilter(typePickName) {
+  if (selectedTypePickFilter === typePickName) {
+    selectedTypePickFilter = 'all';
+  } else {
+    selectedTypePickFilter = typePickName;
+  }
+  selectedTypePickZoneFilter = 'all';
+  selectedTypePickPickerId = null;
+  if (builders.typebreak) builders.typebreak();
+}
+
+function selectTypePickZoneFilter(zoneCode) {
+  if (selectedTypePickZoneFilter === zoneCode) {
+    selectedTypePickZoneFilter = 'all';
+  } else {
+    selectedTypePickZoneFilter = zoneCode;
+  }
+  selectedTypePickPickerId = null;
+  if (builders.typebreak) builders.typebreak();
+}
 
 function renderTypeBreakdownPage(){
   try {
@@ -1139,7 +1169,8 @@ function renderTypeBreakdownPage(){
 
   const perPicker = new Map();
   const totalByType = {};
-  standardTypePicks.forEach(tp => { totalByType[tp] = { val: 0, lines: 0, pickers: new Set() }; });
+  const zonesInCurrentType = new Map();
+  standardTypePicks.forEach(tp => { totalByType[tp] = { val: 0, lines: 0, pickers: new Set(), zones: new Set() }; });
   let totalGrandVal = 0;
 
   for (let i = 0; i < count; i++) {
@@ -1157,6 +1188,31 @@ function renderTypeBreakdownPage(){
     const zoneCode = zoneInfo.zone || String(row.zone || '-').trim().toUpperCase();
     let typePick = String(zoneInfo.typePick || '-').trim();
     if (!typePick || typePick === '-') typePick = 'อื่นๆ / ไม่ระบุ';
+
+    // Global Type Totals
+    if (!totalByType[typePick]) {
+      totalByType[typePick] = { val: 0, lines: 0, pickers: new Set(), zones: new Set() };
+    }
+    totalByType[typePick].val += val;
+    totalByType[typePick].lines += 1;
+    totalByType[typePick].pickers.add(pickerId);
+    totalByType[typePick].zones.add(zoneCode);
+    totalGrandVal += val;
+
+    // Type Pick Filter check
+    if (selectedTypePickFilter !== 'all' && typePick !== selectedTypePickFilter) continue;
+
+    // Track zones for selected type pick
+    if (!zonesInCurrentType.has(zoneCode)) {
+      zonesInCurrentType.set(zoneCode, { zone: zoneCode, typePick, val: 0, lines: 0, pickers: new Set() });
+    }
+    const zRecord = zonesInCurrentType.get(zoneCode);
+    zRecord.val += val;
+    zRecord.lines += 1;
+    zRecord.pickers.add(pickerId);
+
+    // Zone Filter check
+    if (selectedTypePickZoneFilter !== 'all' && zoneCode !== selectedTypePickZoneFilter) continue;
 
     if (!perPicker.has(pickerId)) {
       perPicker.set(pickerId, {
@@ -1180,17 +1236,34 @@ function renderTypeBreakdownPage(){
     }
     pData.byZone[zoneCode].val += val;
     pData.byZone[zoneCode].lines += 1;
-
-    if (!totalByType[typePick]) {
-      totalByType[typePick] = { val: 0, lines: 0, pickers: new Set() };
-    }
-    totalByType[typePick].val += val;
-    totalByType[typePick].lines += 1;
-    totalByType[typePick].pickers.add(pickerId);
-    totalGrandVal += val;
   }
 
-  // 1. Render Summary KPI Cards
+  // 0. Render Breadcrumb Bar
+  const bcEl = document.getElementById('typepickBreadcrumb');
+  if (bcEl) {
+    let bcHtml = `<span onclick="resetTypePickDrilldown()" style="cursor:pointer; background:#eef2ff; color:#4338ca; padding:4px 10px; border-radius:8px; border:1px solid #c7d2fe;">🏷️ ทุกประเภท (All)</span>`;
+    
+    if (selectedTypePickFilter !== 'all') {
+      const typeColor = colorForLabel(ZONE_TYPE_COLORS, selectedTypePickFilter);
+      bcHtml += `<span style="color:#94a3b8;">➔</span>`;
+      bcHtml += `<span onclick="selectTypePickFilter('${escapeZoneHtml(selectedTypePickFilter)}')" style="cursor:pointer; background:${typeColor}18; color:${typeColor}; padding:4px 12px; border-radius:8px; border:1px solid ${typeColor}40; font-weight:700;">📌 Type: ${escapeZoneHtml(selectedTypePickFilter)} ✕</span>`;
+    }
+    
+    if (selectedTypePickZoneFilter !== 'all') {
+      bcHtml += `<span style="color:#94a3b8;">➔</span>`;
+      bcHtml += `<span onclick="selectTypePickZoneFilter('${escapeZoneHtml(selectedTypePickZoneFilter)}')" style="cursor:pointer; background:#0f172a; color:#fff; padding:4px 12px; border-radius:8px; font-weight:700;">📍 Zone: ${escapeZoneHtml(selectedTypePickZoneFilter)} ✕</span>`;
+    }
+
+    if (selectedTypePickPickerId) {
+      const pickerName = getPickerName(selectedTypePickPickerId);
+      bcHtml += `<span style="color:#94a3b8;">➔</span>`;
+      bcHtml += `<span style="background:#dcfce7; color:#15803d; padding:4px 12px; border-radius:8px; font-weight:700; border:1px solid #86efac;">👤 ${escapeZoneHtml(pickerName)}</span>`;
+    }
+
+    bcEl.innerHTML = bcHtml;
+  }
+
+  // 1. Render Summary KPI Cards (Level 1 Drill-down Cards)
   const kpiEl = document.getElementById('typepickKpis');
   if (kpiEl) {
     let kpiHtml = '';
@@ -1198,21 +1271,51 @@ function renderTypeBreakdownPage(){
     activeTypes.sort((a,b) => (totalByType[b]?.val || 0) - (totalByType[a]?.val || 0));
     
     activeTypes.forEach(tp => {
-      const data = totalByType[tp] || { val: 0, lines: 0, pickers: new Set() };
+      const data = totalByType[tp] || { val: 0, lines: 0, pickers: new Set(), zones: new Set() };
       const color = colorForLabel(ZONE_TYPE_COLORS, tp);
       const pct = totalGrandVal > 0 ? ((data.val / totalGrandVal) * 100).toFixed(1) : '0.0';
+      const isSelected = selectedTypePickFilter === tp;
+      const borderStyle = isSelected ? `border: 2px solid ${color}; transform:scale(1.02); box-shadow:0 10px 25px -8px ${color}60;` : `border-top: 4px solid ${color};`;
+      const cardBg = isSelected ? `background: linear-gradient(135deg, #ffffff 0%, ${color}0c 100%);` : '';
+
       kpiHtml += `
-        <div class="zone-stat" style="border-top: 4px solid ${color};">
+        <div class="zone-stat" onclick="selectTypePickFilter('${escapeZoneHtml(tp)}')" style="cursor:pointer; transition:all .2s; ${borderStyle} ${cardBg}">
           <div class="zone-stat-label" style="display:flex; justify-content:space-between; align-items:center;">
-            <span>${escapeZoneHtml(tp)}</span>
-            <span style="background:${color}18; color:${color}; font-weight:700; padding:1px 6px; border-radius:6px; font-size:10.5px;">${pct}%</span>
+            <span style="font-weight:700; color:${isSelected ? color : '#334155'};">${isSelected ? '📌 ' : ''}${escapeZoneHtml(tp)}</span>
+            <span style="background:${color}${isSelected ? '35' : '18'}; color:${color}; font-weight:700; padding:2px 7px; border-radius:6px; font-size:10.5px;">${pct}%</span>
           </div>
-          <div class="zone-stat-value" style="color:${color}; font-size:22px;">${fmt(Math.round(data.val))} <span style="font-size:11px; font-weight:400; color:#64748b;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></div>
-          <div class="zone-stat-detail">📦 ${fmt(data.lines)} บรรทัด · 👤 ${data.pickers.size} คน</div>
+          <div class="zone-stat-value" style="color:${color}; font-size:22px; margin-top:6px;">${fmt(Math.round(data.val))} <span style="font-size:11px; font-weight:400; color:#64748b;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></div>
+          <div class="zone-stat-detail">📦 ${fmt(data.lines)} บรรทัด · 📍 ${data.zones.size} Zone · 👤 ${data.pickers.size} คน</div>
         </div>
       `;
     });
     kpiEl.innerHTML = kpiHtml;
+  }
+
+  // 1.5 Zone Selector Pills (Level 2 Drill-down Pills)
+  if (selectedTypePickFilter !== 'all') {
+    const tableTitleEl = document.getElementById('typepickTableTitle');
+    if (tableTitleEl) {
+      const zoneList = [...zonesInCurrentType.values()].sort((a,b) => b.val - a.val);
+      let zonePillsHtml = `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; align-items:center;">
+        <span style="font-size:12px; color:#64748b; font-weight:600;">📍 เลือก Zone:</span>
+        <button onclick="selectTypePickZoneFilter('all')" style="border:0; padding:3px 10px; border-radius:999px; font-size:11.5px; font-weight:700; cursor:pointer; ${selectedTypePickZoneFilter === 'all' ? 'background:#0f172a; color:#fff;' : 'background:#f1f5f9; color:#64748b;'}">ทั้งหมด (${zoneList.length})</button>`;
+      
+      zoneList.forEach(z => {
+        const isSel = selectedTypePickZoneFilter === z.zone;
+        const color = colorForLabel(ZONE_TYPE_COLORS, selectedTypePickFilter);
+        const btnStyle = isSel
+          ? `background:${color}; color:#fff; font-weight:700; box-shadow:0 3px 8px ${color}50;`
+          : `background:${color}15; color:${color}; border:1px solid ${color}30; font-weight:600;`;
+        zonePillsHtml += `<button onclick="selectTypePickZoneFilter('${escapeZoneHtml(z.zone)}')" style="border:0; padding:3px 10px; border-radius:999px; font-size:11.5px; cursor:pointer; transition:.18s; ${btnStyle}">${escapeZoneHtml(z.zone)} (${fmt(Math.round(z.val))})</button>`;
+      });
+      zonePillsHtml += `</div>`;
+      
+      tableTitleEl.innerHTML = `🔥 พนักงานในประเภท ${escapeZoneHtml(selectedTypePickFilter)}${selectedTypePickZoneFilter !== 'all' ? ' ➔ Zone ' + escapeZoneHtml(selectedTypePickZoneFilter) : ''} ${zonePillsHtml}`;
+    }
+  } else {
+    const tableTitleEl = document.getElementById('typepickTableTitle');
+    if (tableTitleEl) tableTitleEl.textContent = `🔥 Heatmap สัดส่วนการหยิบตาม Type Pick`;
   }
 
   const pickerList = [...perPicker.values()].sort((a,b) => b.totalVal - a.totalVal);
@@ -1221,13 +1324,18 @@ function renderTypeBreakdownPage(){
     selectedTypePickPickerId = pickerList[0] ? pickerList[0].pickerId : null;
   }
 
-  // 2. Render Heatmap Table
+  // 2. Render Heatmap / Picker Table (Level 3)
   const table = document.getElementById('typepickHeatmapTable');
   if (table) {
-    const allTypes = [...standardTypePicks];
-    Object.keys(totalByType).forEach(tp => {
-      if (!allTypes.includes(tp) && totalByType[tp].val > 0) allTypes.push(tp);
-    });
+    const allTypes = selectedTypePickFilter !== 'all'
+      ? [selectedTypePickFilter]
+      : [...standardTypePicks];
+
+    if (selectedTypePickFilter === 'all') {
+      Object.keys(totalByType).forEach(tp => {
+        if (!allTypes.includes(tp) && totalByType[tp].val > 0) allTypes.push(tp);
+      });
+    }
 
     let th = '<thead><tr><th style="width:38px;">#</th><th>พนักงาน / สังกัด</th><th class="num">รวม</th>';
     allTypes.forEach(tp => {
@@ -1279,7 +1387,7 @@ function renderTypeBreakdownPage(){
     table.innerHTML = th;
   }
 
-  // 3. Render Detail Panel
+  // 3. Render Detail Panel (Radar & Zone Detail Table)
   renderTypePickDetail(selectedTypePickPickerId, perPicker, totalByType, totalGrandVal, standardTypePicks);
   } catch (err) {
     console.error('renderTypeBreakdownPage failed:', err);
