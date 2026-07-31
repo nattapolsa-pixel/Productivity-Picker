@@ -1185,7 +1185,7 @@ function renderTypeBreakdownPage(){
     dimPalette = ZONE_TYPE_COLORS;
     dimTitlePrefix = 'ชนิดการหยิบ (Type Pick)';
   } else if (currentMacroDimension === 'owner') {
-    standardCategories = ['MaxMart', 'Punthai', 'GFA', 'Lube'];
+    standardCategories = ['Max Mart', 'Punthai', 'GFA', 'Lube'];
     dimPalette = ZONE_OWNER_COLORS;
     dimTitlePrefix = 'เจ้าของสินค้า (Owner)';
   } else if (currentMacroDimension === 'affiliation') {
@@ -1219,7 +1219,12 @@ function renderTypeBreakdownPage(){
     if (currentMacroDimension === 'typePick') {
       categoryVal = String(zoneInfo.typePick || '-').trim();
     } else if (currentMacroDimension === 'owner') {
-      categoryVal = String(zoneInfo.owner || '-').trim();
+      let rawOwner = String(zoneInfo.owner || '-').trim();
+      if (rawOwner.replace(/\s+/g, '').toLowerCase() === 'maxmart') {
+        categoryVal = 'Max Mart';
+      } else {
+        categoryVal = rawOwner;
+      }
     } else if (currentMacroDimension === 'affiliation') {
       categoryVal = String(pickerAffiliation || '-').trim();
     }
@@ -1304,7 +1309,7 @@ function renderTypeBreakdownPage(){
   const kpiEl = document.getElementById('typepickKpis');
   if (kpiEl) {
     let kpiHtml = '';
-    const activeTypes = Object.keys(totalByType).filter(tp => totalByType[tp].val > 0 || standardCategories.includes(tp));
+    const activeTypes = Object.keys(totalByType).filter(tp => (totalByType[tp]?.val || 0) > 0);
     activeTypes.sort((a,b) => (totalByType[b]?.val || 0) - (totalByType[a]?.val || 0));
     
     activeTypes.forEach(tp => {
@@ -1364,9 +1369,9 @@ function renderTypeBreakdownPage(){
   // 2. Render Heatmap / Picker Table (Level 3)
   const table = document.getElementById('typepickHeatmapTable');
   if (table) {
-    const allTypes = selectedTypePickFilter !== 'all'
+    let allTypes = selectedTypePickFilter !== 'all'
       ? [selectedTypePickFilter]
-      : [...standardCategories];
+      : Object.keys(totalByType).filter(tp => (totalByType[tp]?.val || 0) > 0);
 
     if (selectedTypePickFilter === 'all') {
       Object.keys(totalByType).forEach(tp => {
