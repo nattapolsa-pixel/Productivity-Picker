@@ -461,7 +461,7 @@ function renderWarehouseMap(activeLocations, isPcs){
       `Picker: ${fmt(row.pickers || 0)} คน`
     ].join('\n');
     return `<div class="floor-loc ${extraClass || ''} ${active ? 'active' : 'inactive'}" data-location="${escapeZoneHtml(code)}"` +
-      ` style="--floor-bg:${color.background};--floor-border:${color.border};--floor-accent:${color.accent || color.border};--floor-fg:${color.color}" data-owner="${escapeZoneHtml(info.owner)}" data-type-pick="${escapeZoneHtml(info.typePick)}" title="${escapeZoneHtml(title)}">` +
+      ` onclick="openZoneDetailModal('${escapeZoneHtml(code)}')" style="cursor:pointer;--floor-bg:${color.background};--floor-border:${color.border};--floor-accent:${color.accent || color.border};--floor-fg:${color.color}" data-owner="${escapeZoneHtml(info.owner)}" data-type-pick="${escapeZoneHtml(info.typePick)}" title="${escapeZoneHtml(title)}">` +
       `<div class="floor-loc-code">${escapeZoneHtml(code)}</div>` +
       `<div class="floor-loc-metric"><strong>${formatMapValue(primary)}</strong><span>${escapeZoneHtml(mainUnit)}</span></div>` +
       `<div class="floor-loc-secondary">${formatMapValue(secondary)} ${escapeZoneHtml(secondaryUnit)}</div>` +
@@ -485,8 +485,8 @@ function renderWarehouseMap(activeLocations, isPcs){
   });
   root.innerHTML =
     `<div class="floor-map-legend"><div><span class="floor-legend-dot low"></span>น้อย</div><div><span class="floor-legend-bar ${isPcs ? 'pcs' : 'units'}"></span>มาก</div>` +
-    `<div class="floor-legend-unit">ตัวเลขหลัก = ${escapeZoneHtml(mainUnit)} · วางเมาส์เพื่อดูรายละเอียดครบ</div></div>` +
-    `<div class="floor-map-group-legends"><b>การอ่านสี:</b> ใช้สีเดียวทั้งแผนผัง · สีเข้ม = ยอดหยิบมาก · สีอ่อน = ยอดหยิบน้อย · Owner และ Type Pick ดูได้จาก Tooltip และตารางด้านล่าง</div>` +
+    `<div class="floor-legend-unit">ตัวเลขหลัก = ${escapeZoneHtml(mainUnit)} · 💡 คลิกกล่อง Zone เพื่อดูรายละเอียดเชิงลึก</div></div>` +
+    `<div class="floor-map-group-legends"><b>การอ่านสี:</b> ใช้สีเดียวทั้งแผนผัง · สีเข้ม = ยอดหยิบมาก · สีอ่อน = ยอดหยิบน้อย · 💡 <b>คลิกกล่อง Zone ใดก็ได้เพื่อเปิด Popup วิเคราะห์พนักงาน, สินค้า และชั่วโมงทำงาน</b></div>` +
     `<div class="warehouse-map-scroll"><div class="warehouse-floor">` +
       `<section class="floor-onfloor">` +
         `<div class="floor-section-title">On Floor</div><div class="floor-owner-strip maxmart">MAX MART</div>` +
@@ -509,6 +509,232 @@ function renderWarehouseMap(activeLocations, isPcs){
     `<div class="floor-outside-wrap"><div class="floor-outside-title">Location นอกแผนผัง (${outside.length})</div>` +
       `<div class="floor-outside">${outside.length ? outside.map(code=>card(code,'outside')).join('') : '<span class="floor-all-mapped">Location ทั้งหมดอยู่ในแผนผังแล้ว</span>'}</div>` +
     `</div>`;
+}
+
+function openZoneDetailModal(zoneCode) {
+  try {
+    const isPcs = unitMode === 'pcs';
+    const S = DATA[sys];
+    if (!S || !Array.isArray(S.rows)) return;
+    const count = packedRowCount(S);
+    const zoneInfo = getZoneInfo(zoneCode);
+
+    let totalQty = 0, totalPcs = 0, totalLines = 0;
+    const uniqueSkus = new Map();
+    const uniquePickers = new Map();
+
+    for (let i = 0; i < count; i++) {
+      const sh = S._sh ? S._sh[i] : null;
+      if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
+      if (shiftF !== 'all' && sh.sh !== shiftF) continue;
+
+      const row = packedRowData(S, i);
+      const zInfo = getZoneInfo(row.zone);
+      const zCode = zInfo.zone || String(row.zone || '-').trim().toUpperCase();
+      if (zCode !== zoneCode && String(row.zone).trim().toUpperCase() !== zoneCode) continue;
+
+      const sku = S.skus[row.skuIdx];
+      if (isSkuExcluded(sku)) continue;
+
+      const qty = row.pickQty;
+      const pcs = row.pcs;
+      const val = isPcs ? pcs : qty;
+      const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
+      const itemInfo = getItemMasterInfo(sku);
+
+      totalQty += qty;
+      totalPcs += pcs;
+      totalLines += 1;
+
+      // SKU aggregation
+      if (!uniqueSkus.has(sku)) {
+        uniqueSkus.set(sku, { sku, name: itemInfo.name || sku, owner: itemInfo.owner || zInfo.owner || '-', qty: 0, pcs: 0, lines: 0 });
+      }
+      const skuRec = uniqueSkus.get(sku);
+      skuRec.qty += qty;
+      skuRec.pcs += pcs;
+      skuRec.lines += 1;
+
+      // Picker aggregation
+      if (!uniquePickers.has(pickerId)) {
+        uniquePickers.set(pickerId, {
+          pickerId,
+          pickerName: getPickerName(pickerId),
+          affiliation: getPickerAffiliation(pickerId),
+          qty: 0,
+          pcs: 0,
+          lines: 0,
+          minSm: sh.sm,
+          maxSm: sh.sm
+        });
+      }
+      const pRec = uniquePickers.get(pickerId);
+      pRec.qty += qty;
+      pRec.pcs += pcs;
+      pRec.lines += 1;
+      if (sh.sm < pRec.minSm) pRec.minSm = sh.sm;
+      if (sh.sm > pRec.maxSm) pRec.maxSm = sh.sm;
+    }
+
+    let totalWorkHours = 0;
+    const pickerList = [...uniquePickers.values()].map(p => {
+      let spanMin = p.maxSm - p.minSm;
+      let wh = Math.max(spanMin / 60.0, 0.5);
+      if (wh >= 8.5 && wh <= 9.5) wh = 9.0;
+      wh = Math.round(wh * 10) / 10;
+      totalWorkHours += wh;
+      const pVal = isPcs ? p.pcs : p.qty;
+      const prod = wh > 0 ? (pVal / wh) : 0;
+      return { ...p, wh, prod };
+    });
+    pickerList.sort((a, b) => (isPcs ? b.pcs - a.pcs : b.qty - a.qty));
+
+    const skuList = [...uniqueSkus.values()].sort((a, b) => (isPcs ? b.pcs - a.pcs : b.qty - a.qty));
+
+    const overallVal = isPcs ? totalPcs : totalQty;
+    const overallProd = totalWorkHours > 0 ? (overallVal / totalWorkHours) : 0;
+
+    const titleEl = document.getElementById('zoneModalTitle');
+    const subEl = document.getElementById('zoneModalSub');
+    if (titleEl) titleEl.innerHTML = `📍 รายละเอียดและผลงานใน Zone: <span style="color:#fbbf24; font-weight:800; font-size:20px; text-decoration:underline;">${escapeZoneHtml(zoneCode)}</span>`;
+    if (subEl) subEl.textContent = `ชนิดการจัดเก็บ: ${zoneInfo.typePick || '-'} · เจ้าของสินค้า: ${zoneInfo.owner || '-'} · ช่วงวันที่: ${dfrom} ถึง ${dto}`;
+
+    const bodyEl = document.getElementById('zoneModalBody');
+    if (bodyEl) {
+      let bodyHtml = `
+        <!-- 4 Strategic KPI Cards -->
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px;">
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #4338ca; padding:12px 14px; border-radius:10px;">
+            <div style="font-size:11px; color:#64748b; font-weight:600;">📦 ยอดหยิบรวม</div>
+            <div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:2px;">${fmt(Math.ceil(overallVal))} <span style="font-size:11px; font-weight:400;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></div>
+            <div style="font-size:10px; color:#64748b; margin-top:2px;">${isPcs ? fmt(Math.ceil(totalQty)) + ' หน่วยหยิบ' : fmt(totalPcs) + ' ชิ้น'}</div>
+          </div>
+
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #0284c7; padding:12px 14px; border-radius:10px;">
+            <div style="font-size:11px; color:#64748b; font-weight:600;">📋 รายการหยิบ (Lines)</div>
+            <div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:2px;">${fmt(totalLines)} <span style="font-size:11px; font-weight:400;">บรรทัด</span></div>
+            <div style="font-size:10px; color:#64748b; margin-top:2px;">จาก ${skuList.length} รายการ SKU</div>
+          </div>
+
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #d97706; padding:12px 14px; border-radius:10px;">
+            <div style="font-size:11px; color:#64748b; font-weight:600;">⏱️ ชั่วโมงทำงานใน Zone</div>
+            <div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:2px;">${fmt(Math.round(totalWorkHours * 10) / 10)} <span style="font-size:11px; font-weight:400;">ชม.</span></div>
+            <div style="font-size:10px; color:#64748b; margin-top:2px;">พนักงานปฏิบัติงาน ${pickerList.length} คน</div>
+          </div>
+
+          <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #16a34a; padding:12px 14px; border-radius:10px;">
+            <div style="font-size:11px; color:#64748b; font-weight:600;">⚡ Productivity เฉลี่ย</div>
+            <div style="font-size:20px; font-weight:800; color:#16a34a; margin-top:2px;">${fmt(Math.ceil(overallProd))} <span style="font-size:11px; font-weight:400;">${isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.'}</span></div>
+            <div style="font-size:10px; color:#64748b; margin-top:2px;">ผลรวมงาน ÷ ชั่วโมงกะ</div>
+          </div>
+        </div>
+
+        <!-- 👥 1. Picker List Table in Zone -->
+        <div>
+          <h4 style="font-size:14.5px; font-weight:700; color:#0f172a; margin:0 0 8px 0; display:flex; justify-content:space-between; align-items:center;">
+            <span>👥 รายชื่อพนักงานปฏิบัติงานใน Zone ${escapeZoneHtml(zoneCode)} (${pickerList.length} คน)</span>
+          </h4>
+          <div style="overflow-x:auto; max-height:220px; border:1px solid #e2e8f0; border-radius:8px;">
+            <table style="width:100%; border-collapse:collapse; font-size:12px;">
+              <thead>
+                <tr style="background:#f1f5f9; color:#475569; text-align:left;">
+                  <th style="padding:8px 10px;">#</th>
+                  <th style="padding:8px 10px;">ชื่อพนักงาน / ID</th>
+                  <th style="padding:8px 10px;">สังกัด</th>
+                  <th style="padding:8px 10px;" class="num">ปริมาณหยิบ</th>
+                  <th style="padding:8px 10px;" class="num">บรรทัด</th>
+                  <th style="padding:8px 10px;" class="num">ชั่วโมง</th>
+                  <th style="padding:8px 10px;" class="num">Productivity</th>
+                </tr>
+              </thead>
+              <tbody>`;
+
+      if (pickerList.length === 0) {
+        bodyHtml += `<tr><td colspan="7" class="empty-cell" style="text-align:center; padding:16px; color:#94a3b8;">ไม่มีการหยิบสินค้าใน Zone นี้ช่วงวันที่เลือก</td></tr>`;
+      } else {
+        pickerList.forEach((p, idx) => {
+          const val = isPcs ? p.pcs : p.qty;
+          bodyHtml += `
+            <tr style="border-bottom:1px solid #f1f5f9;">
+              <td style="padding:6px 10px; font-weight:600; color:#64748b;">${idx + 1}</td>
+              <td style="padding:6px 10px;">
+                <div style="font-weight:700; color:#0f172a;">${escapeZoneHtml(p.pickerName)}</div>
+                <div style="font-size:10px; color:#64748b;">ID: ${escapeZoneHtml(p.pickerId)}</div>
+              </td>
+              <td style="padding:6px 10px;"><span class="pill" style="background:#f1f5f9; color:#334155; font-size:11px;">${escapeZoneHtml(p.affiliation)}</span></td>
+              <td style="padding:6px 10px; font-weight:700; color:#4338ca;" class="num">${fmt(Math.ceil(val))} ${isPcs ? 'ชิ้น' : 'หน่วย'}</td>
+              <td style="padding:6px 10px;" class="num">${fmt(p.lines)}</td>
+              <td style="padding:6px 10px;" class="num">${p.wh} ชม.</td>
+              <td style="padding:6px 10px; font-weight:700; color:#16a34a;" class="num">${fmt(Math.ceil(p.prod))} ${isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.'}</td>
+            </tr>`;
+        });
+      }
+
+      bodyHtml += `
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 📦 2. Top Items / SKUs Table in Zone -->
+        <div>
+          <h4 style="font-size:14.5px; font-weight:700; color:#0f172a; margin:0 0 8px 0;">
+            📦 รายการสินค้าที่มีการหยิบใน Zone ${escapeZoneHtml(zoneCode)} (Top 10 SKUs)
+          </h4>
+          <div style="overflow-x:auto; max-height:220px; border:1px solid #e2e8f0; border-radius:8px;">
+            <table style="width:100%; border-collapse:collapse; font-size:12px;">
+              <thead>
+                <tr style="background:#f1f5f9; color:#475569; text-align:left;">
+                  <th style="padding:8px 10px;">#</th>
+                  <th style="padding:8px 10px;">SKU Code</th>
+                  <th style="padding:8px 10px;">ชื่อสินค้า</th>
+                  <th style="padding:8px 10px;">Owner</th>
+                  <th style="padding:8px 10px;" class="num">ปริมาณหยิบรวม</th>
+                  <th style="padding:8px 10px;" class="num">บรรทัด</th>
+                  <th style="padding:8px 10px;" class="num">สัดส่วน %</th>
+                </tr>
+              </thead>
+              <tbody>`;
+
+      if (skuList.length === 0) {
+        bodyHtml += `<tr><td colspan="7" class="empty-cell" style="text-align:center; padding:16px; color:#94a3b8;">ไม่มีรายการสินค้าใน Zone นี้ช่วงวันที่เลือก</td></tr>`;
+      } else {
+        skuList.slice(0, 10).forEach((item, idx) => {
+          const val = isPcs ? item.pcs : item.qty;
+          const sharePct = overallVal > 0 ? ((val / overallVal) * 100).toFixed(1) : '0.0';
+          bodyHtml += `
+            <tr style="border-bottom:1px solid #f1f5f9;">
+              <td style="padding:6px 10px; font-weight:600; color:#64748b;">${idx + 1}</td>
+              <td style="padding:6px 10px; font-weight:700; color:#0f172a;">${escapeZoneHtml(item.sku)}</td>
+              <td style="padding:6px 10px; max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeZoneHtml(item.name)}</td>
+              <td style="padding:6px 10px;"><span class="pill" style="background:#eef2ff; color:#4338ca; font-size:10.5px;">${escapeZoneHtml(item.owner)}</span></td>
+              <td style="padding:6px 10px; font-weight:700; color:#0f172a;" class="num">${fmt(Math.ceil(val))} ${isPcs ? 'ชิ้น' : 'หน่วย'}</td>
+              <td style="padding:6px 10px;" class="num">${fmt(item.lines)}</td>
+              <td style="padding:6px 10px; font-weight:700; color:#4338ca;" class="num">${sharePct}%</td>
+            </tr>`;
+        });
+      }
+
+      bodyHtml += `
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `;
+
+      bodyEl.innerHTML = bodyHtml;
+    }
+
+    const modalEl = document.getElementById('zoneDetailModal');
+    if (modalEl) modalEl.style.display = 'flex';
+  } catch (err) {
+    console.error('openZoneDetailModal failed:', err);
+  }
+}
+
+function closeZoneDetailModal() {
+  const modalEl = document.getElementById('zoneDetailModal');
+  if (modalEl) modalEl.style.display = 'none';
 }
 
 function renderZoneProductivityBreakdown(){
