@@ -39,7 +39,7 @@ const ZONE_TYPE_COLORS = Object.freeze({
   'on floor':'#475569',
   '-':'#94a3b8'
 });
-const TITLES = {overview:'ภาพรวม',prod:'Productivity',zones:'โซน & ผังคลัง',pickers:'พนักงาน (Picker)',time:'ช่วงเวลา',items:'สินค้า (Items)'};
+const TITLES = {overview:'ภาพรวม',prod:'Productivity',zones:'โซน & ผังคลัง',typebreak:'Activity by Type Pick',pickers:'พนักงาน (Picker)',time:'ช่วงเวลา',items:'สินค้า (Items)'};
 const SHIFT_LABEL = {morning:'🌅 เช้า', night:'🌙 ดึก', '-':'-'};
 
 Chart.register(ChartDataLabels);
@@ -1126,6 +1126,264 @@ function selectPickerDrilldown(pickerId){
   if(cardEl) cardEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+let selectedTypePickPickerId = null;
+
+function renderTypeBreakdownPage(){
+  const isPcs = unitMode === 'pcs';
+  const S = DATA[sys];
+  if (!S || !Array.isArray(S.rows)) return;
+  const count = packedRowCount(S);
+
+  const standardTypePicks = ['Full Rack', 'Half Rack', 'Mezzanine', 'Micro Rack', 'Pick to Sort', 'On Floor'];
+
+  const perPicker = new Map();
+  const totalByType = {};
+  standardTypePicks.forEach(tp => { totalByType[tp] = { val: 0, lines: 0, pickers: new Set() }; });
+  let totalGrandVal = 0;
+
+  for (let i = 0; i < count; i++) {
+    const sh = S._sh ? S._sh[i] : null;
+    if (!sh || !dateInRange(sh.sd, dfrom, dto)) continue;
+    if (shiftF !== 'all' && sh.sh !== shiftF) continue;
+
+    const row = packedRowData(S, i);
+    const sku = S.skus[row.skuIdx];
+    if (excludedSkus.has(sku)) continue;
+
+    const val = isPcs ? row.pcs : row.pickQty;
+    const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
+    const zoneCode = String(row.zone || '-').trim().toUpperCase();
+    const zoneInfo = (ZONE_MASTER && (ZONE_MASTER[zoneCode] || ZONE_MASTER[row.zone])) || {};
+    let typePick = String(zoneInfo.typePick || '-').trim();
+    if (!typePick || typePick === '-') typePick = 'อื่นๆ / ไม่ระบุ';
+
+    if (!perPicker.has(pickerId)) {
+      perPicker.set(pickerId, {
+        pickerId,
+        pickerName: getPickerName(pickerId),
+        affiliation: getPickerAffiliation(pickerId),
+        totalVal: 0,
+        totalLines: 0,
+        byType: {},
+        byZone: {}
+      });
+    }
+
+    const pData = perPicker.get(pickerId);
+    pData.totalVal += val;
+    pData.totalLines += 1;
+    pData.byType[typePick] = (pData.byType[typePick] || 0) + val;
+
+    if (!pData.byZone[zoneCode]) {
+      pData.byZone[zoneCode] = { zone: zoneCode, typePick, val: 0, lines: 0 };
+    }
+    pData.byZone[zoneCode].val += val;
+    pData.byZone[zoneCode].lines += 1;
+
+    if (!totalByType[typePick]) {
+      totalByType[typePick] = { val: 0, lines: 0, pickers: new Set() };
+    }
+    totalByType[typePick].val += val;
+    totalByType[typePick].lines += 1;
+    totalByType[typePick].pickers.add(pickerId);
+    totalGrandVal += val;
+  }
+
+  // 1. Render Summary KPI Cards
+  const kpiEl = document.getElementById('typepickKpis');
+  if (kpiEl) {
+    let kpiHtml = '';
+    const activeTypes = Object.keys(totalByType).filter(tp => totalByType[tp].val > 0 || standardTypePicks.includes(tp));
+    activeTypes.sort((a,b) => (totalByType[b]?.val || 0) - (totalByType[a]?.val || 0));
+    
+    activeTypes.forEach(tp => {
+      const data = totalByType[tp] || { val: 0, lines: 0, pickers: new Set() };
+      const color = colorForLabel(ZONE_TYPE_COLORS, tp);
+      const pct = totalGrandVal > 0 ? ((data.val / totalGrandVal) * 100).toFixed(1) : '0.0';
+      kpiHtml += `
+        <div class="zone-stat" style="border-top: 4px solid ${color};">
+          <div class="zone-stat-label" style="display:flex; justify-content:space-between; align-items:center;">
+            <span>${escapeZoneHtml(tp)}</span>
+            <span style="background:${color}18; color:${color}; font-weight:700; padding:1px 6px; border-radius:6px; font-size:10.5px;">${pct}%</span>
+          </div>
+          <div class="zone-stat-value" style="color:${color}; font-size:22px;">${fmt(Math.round(data.val))} <span style="font-size:11px; font-weight:400; color:#64748b;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></div>
+          <div class="zone-stat-detail">📦 ${fmt(data.lines)} บรรทัด · 👤 ${data.pickers.size} คน</div>
+        </div>
+      `;
+    });
+    kpiEl.innerHTML = kpiHtml;
+  }
+
+  const pickerList = [...perPicker.values()].sort((a,b) => b.totalVal - a.totalVal);
+
+  if (!selectedTypePickPickerId || !perPicker.has(selectedTypePickPickerId)) {
+    selectedTypePickPickerId = pickerList[0] ? pickerList[0].pickerId : null;
+  }
+
+  // 2. Render Heatmap Table
+  const table = document.getElementById('typepickHeatmapTable');
+  if (table) {
+    const allTypes = [...standardTypePicks];
+    Object.keys(totalByType).forEach(tp => {
+      if (!allTypes.includes(tp) && totalByType[tp].val > 0) allTypes.push(tp);
+    });
+
+    let th = '<thead><tr><th style="width:38px;">#</th><th>พนักงาน / สังกัด</th><th class="num">รวม</th>';
+    allTypes.forEach(tp => {
+      const color = colorForLabel(ZONE_TYPE_COLORS, tp);
+      th += `<th class="num" style="border-bottom:2px solid ${color};">${escapeZoneHtml(tp)}</th>`;
+    });
+    th += '</tr></thead><tbody>';
+
+    if (pickerList.length === 0) {
+      th += `<tr><td colspan="${allTypes.length + 3}" class="empty-cell">ไม่พบข้อมูลตามเงื่อนไขที่เลือก</td></tr>`;
+    } else {
+      pickerList.forEach((p, idx) => {
+        const isSelected = p.pickerId === selectedTypePickPickerId;
+        const rowStyle = isSelected ? 'background:#eef2ff; font-weight:600;' : '';
+        
+        th += `<tr style="cursor:pointer; ${rowStyle}" onclick="selectTypePickPicker('${escapeZoneHtml(p.pickerId)}')">`;
+        th += `<td><span class="rank">${idx + 1}</span></td>`;
+        th += `<td>
+          <div style="font-weight:700; color:#0f172a;">${escapeZoneHtml(p.pickerName)}</div>
+          <div style="font-size:10.5px; color:#64748b;">ID: ${escapeZoneHtml(p.pickerId)} · ${escapeZoneHtml(p.affiliation)}</div>
+        </td>`;
+        th += `<td class="num" style="font-weight:700; color:#4338ca;">${fmt(Math.round(p.totalVal))}</td>`;
+
+        allTypes.forEach(tp => {
+          const val = p.byType[tp] || 0;
+          const share = p.totalVal > 0 ? (val / p.totalVal) : 0;
+          const color = colorForLabel(ZONE_TYPE_COLORS, tp);
+
+          let cellStyle = '';
+          if (val > 0) {
+            const opacity = (0.12 + 0.78 * Math.pow(share, 0.5)).toFixed(2);
+            cellStyle = `background: ${color}${Math.round(opacity * 255).toString(16).padStart(2,'0')}; color: ${share > 0.4 ? '#0f172a' : '#334155'}; font-weight:${share > 0.3 ? '700' : '500'};`;
+          }
+
+          th += `<td class="num" style="${cellStyle}">`;
+          if (val > 0) {
+            th += `<div>${fmt(Math.round(val))}</div>`;
+            th += `<div style="font-size:9.5px; opacity:0.85;">${(share * 100).toFixed(0)}%</div>`;
+          } else {
+            th += `<span style="color:#cbd5e1;">-</span>`;
+          }
+          th += `</td>`;
+        });
+
+        th += `</tr>`;
+      });
+    }
+    th += '</tbody>';
+    table.innerHTML = th;
+  }
+
+  // 3. Render Detail Panel
+  renderTypePickDetail(selectedTypePickPickerId, perPicker, totalByType, totalGrandVal, standardTypePicks);
+}
+
+function selectTypePickPicker(id) {
+  selectedTypePickPickerId = id;
+  if (builders.typebreak) builders.typebreak();
+}
+
+function renderTypePickDetail(pickerId, perPickerMap, totalByType, totalGrandVal, standardTypePicks) {
+  const pData = perPickerMap.get(pickerId);
+  const badge = document.getElementById('typepickPickerBadge');
+  const title = document.getElementById('typepickDetailTitle');
+  const isPcs = unitMode === 'pcs';
+
+  if (!pData) {
+    if (badge) badge.textContent = 'กรุณาคลิกเลือกพนักงาน';
+    return;
+  }
+
+  if (badge) badge.textContent = `${pData.pickerName} (${pData.pickerId})`;
+  if (title) title.textContent = `🕸️ โปรไฟล์ความถนัด: ${pData.pickerName}`;
+
+  const labels = standardTypePicks;
+  const pickerShare = labels.map(tp => pData.totalVal > 0 ? Math.round(((pData.byType[tp] || 0) / pData.totalVal) * 100) : 0);
+  const teamAvgShare = labels.map(tp => totalGrandVal > 0 ? Math.round(((totalByType[tp]?.val || 0) / totalGrandVal) * 100) : 0);
+
+  const canvas = document.getElementById('typepickRadar');
+  if (canvas) {
+    const existingChart = Chart.getChart(canvas.id);
+    if (existingChart) existingChart.destroy();
+
+    new Chart(canvas.getContext('2d'), {
+      type: 'radar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: `${pData.pickerName} (%)`,
+            data: pickerShare,
+            borderColor: '#6366f1',
+            backgroundColor: 'rgba(99,102,241,0.25)',
+            borderWidth: 2.5,
+            pointBackgroundColor: '#6366f1',
+            pointRadius: 4
+          },
+          {
+            label: 'เฉลี่ยรวมทีม (%)',
+            data: teamAvgShare,
+            borderColor: '#94a3b8',
+            backgroundColor: 'rgba(148,163,184,0.1)',
+            borderWidth: 1.5,
+            borderDash: [4, 4],
+            pointRadius: 2
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          r: {
+            angleLines: { color: '#e2e8f0' },
+            grid: { color: '#f1f5f9' },
+            pointLabels: { font: { family: "'Prompt',sans-serif", size: 11, weight: '600' }, color: '#334155' },
+            ticks: { display: false, maxTicksLimit: 5 }
+          }
+        },
+        plugins: {
+          legend: { position: 'bottom', labels: { font: { family: "'Prompt',sans-serif", size: 11 } } },
+          datalabels: {
+            formatter: (v) => v > 0 ? `${v}%` : '',
+            color: '#4338ca',
+            font: { family: "'Prompt',sans-serif", size: 10, weight: '700' }
+          }
+        }
+      }
+    });
+  }
+
+  const zTable = document.getElementById('typepickZoneTable');
+  if (zTable) {
+    const zoneList = Object.values(pData.byZone).sort((a,b) => b.val - a.val);
+    let zh = '<thead><tr><th>Zone</th><th>Type Pick</th><th class="num">ปริมาณ</th><th class="num">บรรทัด</th><th class="num">สัดส่วน</th></tr></thead><tbody>';
+
+    if (zoneList.length === 0) {
+      zh += '<tr><td colspan="5" class="empty-cell">ไม่มีข้อมูล Zone</td></tr>';
+    } else {
+      zoneList.forEach(z => {
+        const sharePct = pData.totalVal > 0 ? ((z.val / pData.totalVal) * 100).toFixed(1) : '0.0';
+        const color = colorForLabel(ZONE_TYPE_COLORS, z.typePick);
+
+        zh += `<tr>`;
+        zh += `<td><span class="pill" style="background:#f1f5f9; color:#0f172a; font-weight:700;">${escapeZoneHtml(z.zone)}</span></td>`;
+        zh += `<td><span class="zone-tags" style="margin:0;"><span style="background:${color}18; color:${color}; border-color:${color}40; font-weight:600;">${escapeZoneHtml(z.typePick)}</span></span></td>`;
+        zh += `<td class="num" style="font-weight:700;">${fmt(Math.round(z.val))} <span style="font-size:10px; font-weight:400; color:#64748b;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></td>`;
+        zh += `<td class="num">${fmt(z.lines)}</td>`;
+        zh += `<td class="num" style="font-weight:700; color:#4338ca;">${sharePct}%</td>`;
+        zh += `</tr>`;
+      });
+    }
+    zh += '</tbody>';
+    zTable.innerHTML = zh;
+  }
+}
+
 function renderPickerDrilldown(){
   const searchInputEl = document.getElementById('pickerSearchInput');
   const selectEl = document.getElementById('pickerSelect');
@@ -1763,6 +2021,9 @@ const builders = {
       table.innerHTML = h;
     }
   },
+  typebreak(){
+    renderTypeBreakdownPage();
+  },
   pickers(){
     renderPickerDrilldown();
 
@@ -2010,7 +2271,7 @@ function renderExcludedBadges() {
   badgeContainer.innerHTML = h;
 }
 
-function destroyCharts(){ ['trend','cat','picker','zone','slot','item'].forEach(id => { const c = Chart.getChart(id); if(c) c.destroy(); }); }
+function destroyCharts(){ ['trend','cat','picker','zone','slot','item','typepickRadar'].forEach(id => { const c = Chart.getChart(id); if(c) c.destroy(); }); }
 
 function show(page){
   if(!hasLiveData) return;
