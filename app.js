@@ -1097,7 +1097,7 @@ function countUp(){
     let c = 0;
     const step = t / 45;
     if(t <= 0){
-      el.textContent = dec ? t.toFixed(1) : fmt(Math.round(t));
+      el.textContent = fmt(dec ? Math.round(t * 10) / 10 : Math.round(t));
       return;
     }
     el._countUpTimer = setInterval(() => {
@@ -1107,7 +1107,7 @@ function countUp(){
         clearInterval(el._countUpTimer);
         el._countUpTimer = null;
       }
-      el.textContent = dec ? c.toFixed(1) : fmt(Math.round(c));
+      el.textContent = fmt(dec ? Math.round(c * 10) / 10 : Math.round(c));
     }, 18);
   });
 }
