@@ -255,6 +255,10 @@ function uploadToBigQuery_(rows, fmt, meta) {
       );
     }
     mergeCounts = mergeStage_(stageTable);
+    // Refresh ตาราง Dashboard ให้มีข้อมูลใหม่ทันที ไม่ต้องรอ Trigger กลางคืน
+    try { refreshPickDashboardTable_(); } catch (refreshErr) {
+      console.warn('Dashboard table refresh after upload failed (non-fatal): ' + refreshErr);
+    }
     const previousRevision = getDashboardRevisionToken_(getDataRevision_());
     bumpDataRevision_();
     clearCache_(previousRevision);
