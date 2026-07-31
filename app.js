@@ -1450,64 +1450,7 @@ function renderTypePickDetail(pickerId, perPickerMap, totalByType, totalGrandVal
   }
 
   if (badge) badge.textContent = `${pData.pickerName} (${pData.pickerId})`;
-  if (title) title.textContent = `🕸️ โปรไฟล์ความถนัด: ${pData.pickerName}`;
-
-  const labels = standardTypePicks;
-  const pickerShare = labels.map(tp => pData.totalVal > 0 ? Math.round(((pData.byType[tp] || 0) / pData.totalVal) * 100) : 0);
-  const teamAvgShare = labels.map(tp => totalGrandVal > 0 ? Math.round(((totalByType[tp]?.val || 0) / totalGrandVal) * 100) : 0);
-
-  const canvas = document.getElementById('typepickRadar');
-  if (canvas) {
-    const existingChart = Chart.getChart(canvas.id);
-    if (existingChart) existingChart.destroy();
-
-    new Chart(canvas.getContext('2d'), {
-      type: 'radar',
-      data: {
-        labels: labels,
-        datasets: [
-          {
-            label: `${pData.pickerName} (%)`,
-            data: pickerShare,
-            borderColor: '#6366f1',
-            backgroundColor: 'rgba(99,102,241,0.25)',
-            borderWidth: 2.5,
-            pointBackgroundColor: '#6366f1',
-            pointRadius: 4
-          },
-          {
-            label: 'เฉลี่ยรวมทีม (%)',
-            data: teamAvgShare,
-            borderColor: '#94a3b8',
-            backgroundColor: 'rgba(148,163,184,0.1)',
-            borderWidth: 1.5,
-            borderDash: [4, 4],
-            pointRadius: 2
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-          r: {
-            angleLines: { color: '#e2e8f0' },
-            grid: { color: '#f1f5f9' },
-            pointLabels: { font: { family: "'Prompt',sans-serif", size: 11, weight: '600' }, color: '#334155' },
-            ticks: { display: false, maxTicksLimit: 5 }
-          }
-        },
-        plugins: {
-          legend: { position: 'bottom', labels: { font: { family: "'Prompt',sans-serif", size: 11 } } },
-          datalabels: {
-            formatter: (v) => v > 0 ? `${v}%` : '',
-            color: '#4338ca',
-            font: { family: "'Prompt',sans-serif", size: 10, weight: '700' }
-          }
-        }
-      }
-    });
-  }
+  if (title) title.textContent = `📍 รายการ Zone & ผลงาน: ${pData.pickerName}`;
 
   const zTable = document.getElementById('typepickZoneTable');
   if (zTable) {
