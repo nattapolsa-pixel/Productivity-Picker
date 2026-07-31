@@ -1129,6 +1129,7 @@ function selectPickerDrilldown(pickerId){
 let selectedTypePickPickerId = null;
 
 function renderTypeBreakdownPage(){
+  try {
   const isPcs = unitMode === 'pcs';
   const S = DATA[sys];
   if (!S || !Array.isArray(S.rows)) return;
@@ -1280,6 +1281,11 @@ function renderTypeBreakdownPage(){
 
   // 3. Render Detail Panel
   renderTypePickDetail(selectedTypePickPickerId, perPicker, totalByType, totalGrandVal, standardTypePicks);
+  } catch (err) {
+    console.error('renderTypeBreakdownPage failed:', err);
+    const table = document.getElementById('typepickHeatmapTable');
+    if (table) table.innerHTML = '<tbody><tr><td class="empty-cell" style="color:#ef4444;">เกิดข้อผิดพลาดในการคำนวณ: ' + escapeZoneHtml(err.message) + '</td></tr></tbody>';
+  }
 }
 
 function selectTypePickPicker(id) {
