@@ -448,7 +448,7 @@ function renderWarehouseMap(activeLocations, isPcs){
     const zProdMap = A && A.zone_prod_map;
     const zProd = zProdMap ? (zProdMap[info.zone] || zProdMap[code]) : null;
     const prodVal = zProd ? (isPcs ? Number(zProd.avg_pcs_prod || 0) : Number(zProd.avg_prod || 0)) : 0;
-    const prodText = prodVal > 0 ? fmt(prodVal) : '-';
+    const prodText = prodVal > 0 ? (prodVal >= 10000 ? formatMapValue(prodVal) : fmt(Math.ceil(prodVal))) : '-';
 
     const title = [
       `Location: ${code}`,
@@ -457,7 +457,7 @@ function renderWarehouseMap(activeLocations, isPcs){
       `Owner: ${info.owner}`,
       `จำนวนชิ้น: ${fmt(row.pcs || 0)} ชิ้น`,
       `หน่วยหยิบ: ${fmt(row.qty || 0)} หน่วย`,
-      `Productivity: ${prodText} ${isPcs ? 'ชิ้น/ชม.' : 'หน่วย/ชม.'}`,
+      `Productivity: ${fmt(prodVal > 0 ? Math.ceil(prodVal) : 0)} ${isPcs ? 'ชิ้น/ชม.' : 'หน่วย/ชม.'}`,
       `Picker: ${fmt(row.pickers || 0)} คน`
     ].join('\n');
     return `<div class="floor-loc ${extraClass || ''} ${active ? 'active' : 'inactive'}" data-location="${escapeZoneHtml(code)}"` +
@@ -465,7 +465,7 @@ function renderWarehouseMap(activeLocations, isPcs){
       `<div class="floor-loc-code">${escapeZoneHtml(code)}</div>` +
       `<div class="floor-loc-metric"><strong>${formatMapValue(primary)}</strong><span>${escapeZoneHtml(mainUnit)}</span></div>` +
       `<div class="floor-loc-secondary">${formatMapValue(secondary)} ${escapeZoneHtml(secondaryUnit)}</div>` +
-      `<div class="floor-loc-prod">⚡ Prod ${escapeZoneHtml(prodText)}</div>` +
+      `<div class="floor-loc-prod">⚡ ${escapeZoneHtml(prodText)}</div>` +
       `<div class="floor-loc-pickers">👤 ${fmt(row.pickers || 0)} คน</div>` +
       `</div>`;
   }
