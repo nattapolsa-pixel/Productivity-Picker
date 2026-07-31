@@ -1143,17 +1143,17 @@ function renderTypeBreakdownPage(){
 
   for (let i = 0; i < count; i++) {
     const sh = S._sh ? S._sh[i] : null;
-    if (!sh || !dateInRange(sh.sd, dfrom, dto)) continue;
+    if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
     if (shiftF !== 'all' && sh.sh !== shiftF) continue;
 
     const row = packedRowData(S, i);
     const sku = S.skus[row.skuIdx];
-    if (excludedSkus.has(sku)) continue;
+    if (isSkuExcluded(sku)) continue;
 
     const val = isPcs ? row.pcs : row.pickQty;
     const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
-    const zoneCode = String(row.zone || '-').trim().toUpperCase();
-    const zoneInfo = (ZONE_MASTER && (ZONE_MASTER[zoneCode] || ZONE_MASTER[row.zone])) || {};
+    const zoneInfo = getZoneInfo(row.zone);
+    const zoneCode = zoneInfo.zone || String(row.zone || '-').trim().toUpperCase();
     let typePick = String(zoneInfo.typePick || '-').trim();
     if (!typePick || typePick === '-') typePick = 'อื่นๆ / ไม่ระบุ';
 
