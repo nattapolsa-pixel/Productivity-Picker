@@ -198,25 +198,35 @@
     </section>
 
     <section class="page" data-page="typebreak">
-      <!-- 🎛️ Interactive Multi-level Drill-down Bar (Level 1 -> 2 -> 3) -->
-      <div class="card wide" style="margin-bottom:18px; padding:14px 18px; border-left: 5px solid var(--indigo);">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+      <!-- 🎛️ Interactive Multi-level Drill-down Bar & Dimension Switcher -->
+      <div class="card wide" style="margin-bottom:18px; padding:16px 20px; border-left: 5px solid var(--indigo); background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
           <div>
-            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0; display:flex; align-items:center; gap:8px;">
-              <span>🔍 เจาะลึกการทำงานตามประเภท (Type Pick Drill-down)</span>
+            <h3 style="font-size:16.5px; font-weight:700; color:#0f172a; margin:0 0 4px 0; display:flex; align-items:center; gap:8px;">
+              <span>📊 วิเคราะห์เจาะลึก 3 มิติหลัก (Macro Dimensions Drill-down)</span>
             </h3>
-            <div class="sub" style="margin-top:2px;">คลิกเลือกประเภทด้านล่างเพื่อเจาะลึกลงไปทีละระดับ: Type Pick ➔ Zone ➔ Picker ➔ สินค้า</div>
+            <div class="sub">เลือกมิติหลักในการวิเคราะห์: ชนิดการหยิบ (Type Pick) · เจ้าของสินค้า (Owner) · สังกัดพนักงาน (Affiliation)</div>
           </div>
-          <button id="btnResetTypePickFilter" onclick="resetTypePickDrilldown()" style="border:0; background:#eef2ff; color:#4338ca; padding:7px 14px; border-radius:10px; font-size:12.5px; font-weight:600; cursor:pointer; transition:.2s; display:flex; align-items:center; gap:6px;">
-            🧹 แสดงทุกประเภท (Reset)
+          <button id="btnResetTypePickFilter" onclick="resetTypePickDrilldown()" style="border:0; background:#eef2ff; color:#4338ca; padding:8px 16px; border-radius:10px; font-size:12.5px; font-weight:600; cursor:pointer; transition:.2s; display:flex; align-items:center; gap:6px; box-shadow:0 2px 6px rgba(99,102,241,0.12);">
+            🧹 แสดงข้อมูลรวมทั้งหมด (Reset)
           </button>
         </div>
 
+        <!-- 🔘 3 Primary Macro Dimension Buttons -->
+        <div style="margin-top:14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+          <span style="font-size:12.5px; font-weight:700; color:#475569;">มิติหลัก:</span>
+          <div class="seg" id="macroDimSeg" style="display:inline-flex; background:#e2e8f0; padding:3px; border-radius:12px;">
+            <button data-dim="typePick" class="active" onclick="switchMacroDimension('typePick')" style="padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:9px; border:0; cursor:pointer; transition:.2s;">🏷️ ชนิดการหยิบ (Type Pick)</button>
+            <button data-dim="owner" onclick="switchMacroDimension('owner')" style="padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:9px; border:0; cursor:pointer; transition:.2s;">🏢 เจ้าของสินค้า (Owner)</button>
+            <button data-dim="affiliation" onclick="switchMacroDimension('affiliation')" style="padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:9px; border:0; cursor:pointer; transition:.2s;">👥 สังกัดพนักงาน (Affiliation)</button>
+          </div>
+        </div>
+
         <!-- Breadcrumb / Status Indicator -->
-        <div id="typepickBreadcrumb" style="margin-top:12px; font-size:13px; font-weight:600; color:#4338ca; display:flex; align-items:center; gap:8px; flex-wrap:wrap;"></div>
+        <div id="typepickBreadcrumb" style="margin-top:14px; font-size:13px; font-weight:600; color:#4338ca; display:flex; align-items:center; gap:8px; flex-wrap:wrap; border-top:1px dashed #cbd5e1; padding-top:10px;"></div>
       </div>
 
-      <!-- 📊 Level 1: Type Pick Master Cards (คลิกเพื่อเลือก) -->
+      <!-- 📊 Level 1: Master Category KPI Cards (คลิกเพื่อเลือก) -->
       <div class="zone-summary" id="typepickKpis" style="margin-bottom:20px;"></div>
 
       <!-- 📍 Level 2 & 3: Interactive Drill-down Grid -->
@@ -377,6 +387,6 @@
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260731-typebreak-v6"></script>
+<script src="app.js?v=20260731-typebreak-v7"></script>
 </body>
 </html>
