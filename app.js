@@ -1089,15 +1089,15 @@ function renderKPIs(){
 function countUp(){
   document.querySelectorAll('#kpis .num[data-t]').forEach(el => {
     if(el.dataset.done) return;
-    const t = Number(el.dataset.t);
-    if(!Number.isFinite(t)) return;
+    const rawT = Number(el.dataset.t);
+    if(!Number.isFinite(rawT)) return;
     el.dataset.done = '1';
     if(el._countUpTimer) clearInterval(el._countUpTimer);
-    const dec = t % 1 !== 0;
+    const t = Math.ceil(rawT);
     let c = 0;
     const step = t / 45;
     if(t <= 0){
-      el.textContent = fmt(dec ? Math.round(t * 10) / 10 : Math.round(t));
+      el.textContent = fmt(Math.ceil(rawT));
       return;
     }
     el._countUpTimer = setInterval(() => {
@@ -1107,7 +1107,7 @@ function countUp(){
         clearInterval(el._countUpTimer);
         el._countUpTimer = null;
       }
-      el.textContent = fmt(dec ? Math.round(c * 10) / 10 : Math.round(c));
+      el.textContent = fmt(Math.ceil(c));
     }, 18);
   });
 }
@@ -1284,7 +1284,7 @@ function renderTypeBreakdownPage(){
             <span style="font-weight:700; color:${isSelected ? color : '#334155'};">${isSelected ? '📌 ' : ''}${escapeZoneHtml(tp)}</span>
             <span style="background:${color}${isSelected ? '35' : '18'}; color:${color}; font-weight:700; padding:2px 7px; border-radius:6px; font-size:10.5px;">${pct}%</span>
           </div>
-          <div class="zone-stat-value" style="color:${color}; font-size:22px; margin-top:6px;">${fmt(Math.round(data.val))} <span style="font-size:11px; font-weight:400; color:#64748b;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></div>
+          <div class="zone-stat-value" style="color:${color}; font-size:22px; margin-top:6px;">${fmt(Math.ceil(data.val))} <span style="font-size:11px; font-weight:400; color:#64748b;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></div>
           <div class="zone-stat-detail">📦 ${fmt(data.lines)} บรรทัด · 📍 ${data.zones.size} Zone · 👤 ${data.pickers.size} คน</div>
         </div>
       `;
@@ -1307,7 +1307,7 @@ function renderTypeBreakdownPage(){
         const btnStyle = isSel
           ? `background:${color}; color:#fff; font-weight:700; box-shadow:0 3px 8px ${color}50;`
           : `background:${color}15; color:${color}; border:1px solid ${color}30; font-weight:600;`;
-        zonePillsHtml += `<button onclick="selectTypePickZoneFilter('${escapeZoneHtml(z.zone)}')" style="border:0; padding:3px 10px; border-radius:999px; font-size:11.5px; cursor:pointer; transition:.18s; ${btnStyle}">${escapeZoneHtml(z.zone)} (${fmt(Math.round(z.val))})</button>`;
+        zonePillsHtml += `<button onclick="selectTypePickZoneFilter('${escapeZoneHtml(z.zone)}')" style="border:0; padding:3px 10px; border-radius:999px; font-size:11.5px; cursor:pointer; transition:.18s; ${btnStyle}">${escapeZoneHtml(z.zone)} (${fmt(Math.ceil(z.val))})</button>`;
       });
       zonePillsHtml += `</div>`;
       
@@ -1357,7 +1357,7 @@ function renderTypeBreakdownPage(){
           <div style="font-weight:700; color:#0f172a;">${escapeZoneHtml(p.pickerName)}</div>
           <div style="font-size:10.5px; color:#64748b;">ID: ${escapeZoneHtml(p.pickerId)} · ${escapeZoneHtml(p.affiliation)}</div>
         </td>`;
-        th += `<td class="num" style="font-weight:700; color:#4338ca;">${fmt(Math.round(p.totalVal))}</td>`;
+        th += `<td class="num" style="font-weight:700; color:#4338ca;">${fmt(Math.ceil(p.totalVal))}</td>`;
 
         allTypes.forEach(tp => {
           const val = p.byType[tp] || 0;
@@ -1372,7 +1372,7 @@ function renderTypeBreakdownPage(){
 
           th += `<td class="num" style="${cellStyle}">`;
           if (val > 0) {
-            th += `<div>${fmt(Math.round(val))}</div>`;
+            th += `<div>${fmt(Math.ceil(val))}</div>`;
             th += `<div style="font-size:9.5px; opacity:0.85;">${(share * 100).toFixed(0)}%</div>`;
           } else {
             th += `<span style="color:#cbd5e1;">-</span>`;
@@ -1487,7 +1487,7 @@ function renderTypePickDetail(pickerId, perPickerMap, totalByType, totalGrandVal
         zh += `<tr>`;
         zh += `<td><span class="pill" style="background:#f1f5f9; color:#0f172a; font-weight:700;">${escapeZoneHtml(z.zone)}</span></td>`;
         zh += `<td><span class="zone-tags" style="margin:0;"><span style="background:${color}18; color:${color}; border-color:${color}40; font-weight:600;">${escapeZoneHtml(z.typePick)}</span></span></td>`;
-        zh += `<td class="num" style="font-weight:700;">${fmt(Math.round(z.val))} <span style="font-size:10px; font-weight:400; color:#64748b;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></td>`;
+        zh += `<td class="num" style="font-weight:700;">${fmt(Math.ceil(z.val))} <span style="font-size:10px; font-weight:400; color:#64748b;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></td>`;
         zh += `<td class="num">${fmt(z.lines)}</td>`;
         zh += `<td class="num" style="font-weight:700; color:#4338ca;">${sharePct}%</td>`;
         zh += `</tr>`;
