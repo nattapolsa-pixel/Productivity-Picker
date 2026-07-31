@@ -6,9 +6,8 @@
 <title>Pick Productivity Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<link rel="preload" href="pack_size_master.js?v=20260727-picker-name-v11" as="script">
 <link rel="preload" href="item_master.js?v=20260724-itemlist1" as="script">
-<link rel="preload" href="app.js?v=20260730-speed-v1" as="script">
+<link rel="preload" href="app.js?v=20260731-bq-uom-v1" as="script">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
 <style>
@@ -144,7 +143,7 @@
       <div class="grid">
         <div class="card wide">
           <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
-          <div class="sub">แท่ง = ปริมาณตามหน่วยที่เลือก (ซ้าย) · เส้น = Productivity เฉลี่ยตามหน่วยที่เลือก (ขวา) · หน่วยหยิบคำนวณรายแถวจาก Pack Size ที่ใหญ่ที่สุดซึ่งหารลงตัว</div>
+          <div class="sub">แท่ง = ปริมาณตามหน่วยที่เลือก (ซ้าย) · เส้น = Productivity เฉลี่ยตามหน่วยที่เลือก (ขวา) · หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ</div>
           <div class="controls"><div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button data-mode="week">รายสัปดาห์</button><button data-mode="month">รายเดือน</button></div></div>
           <div class="chartbox"><canvas id="trend"></canvas></div>
         </div>
@@ -160,7 +159,7 @@
         <h3>Productivity รายคน — Top 12</h3>
         <div class="sub">Productivity = ปริมาณตามหน่วยที่เลือก ÷ (ชั่วโมงกะ + OT) · แยกกะเช้า/ดึก · ไม่นับงานที่ต่ำกว่า 3 ชั่วโมง</div>
         <div class="chartbox tall"><canvas id="picker"></canvas></div>
-        <div class="note">หน่วยหยิบคำนวณจากจำนวนชิ้นของแต่ละ Pick Detail ÷ Pack Size ที่ใหญ่ที่สุดซึ่งหารลงตัว (ไม่รวม PAL) แล้วจึงนำมารวม · ชั่วโมงทำงาน: กะเช้า 07:00–16:00 (OT 16:30–19:00) · กะดึก 19:00–04:00 (OT 04:30–07:00) — ตัวหาร Productivity = 9 ชม. + OT (นับบล็อกละ 30 นาที) และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
+        <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง แล้วจึงนำมารวม · ชั่วโมงทำงาน: กะเช้า 07:00–16:00 (OT 16:30–19:00) · กะดึก 19:00–04:00 (OT 04:30–07:00) — ตัวหาร Productivity = 9 ชม. + OT (นับบล็อกละ 30 นาที) และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
       </div>
       <div class="card wide affiliation-breakdown-card">
         <h3>Productivity แยกตามสังกัด</h3>
@@ -311,12 +310,11 @@
   </div>
 </div>
 
-<script src="pack_size_master.js?v=20260727-picker-name-v11"></script>
 <script src="picker_names_fallback.js?v=20260727-picker-fallback-v1"></script>
 <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260730-speed-v1"></script>
+<script src="app.js?v=20260731-bq-uom-v1"></script>
 </body>
 </html>

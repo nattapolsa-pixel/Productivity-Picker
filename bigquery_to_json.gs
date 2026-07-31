@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v3';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v4';
 const MAX_UPLOAD_ROWS = 50000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const JOB_DEADLINE_MS = 240000;
@@ -34,6 +34,22 @@ const PICKER_NAME_TAB = 'บันทึกเวลาทำงาน';
 const PICKER_NAME_START_ROW = 26;
 const ZONE_MASTER_SHEET_ID = '1PMnlyYHswnV0nE73Alxh-ocIFtTipB9LMzACdNM9GFs';
 const ZONE_MASTER_TAB = 'Zone_V2';
+
+// ====== Master สำหรับคำนวณหน่วยหยิบใน BigQuery ======
+// Master_Item / Data: B=Owner, C=Item, D=Description, E=Pack, JL=Pick Type
+// Master_Pack / Data: B=Pack, D=Pick Pack, H=Case Pack
+const MASTER_ITEM_SHEET_ID = '1Nw8Y9XiCjbDHfBb8sQEkSTG0lrbcAyILZzGVNBANOfk';
+const MASTER_ITEM_TAB = 'Data';
+const MASTER_ITEM_FIRST_DATA_ROW = 3;
+const MASTER_PACK_SHEET_ID = '16KsbwbbaqwPDAax-un7kqnabjmRtXhtMPHyu4wPyQJc';
+const MASTER_PACK_TAB = 'Data';
+const MASTER_PACK_FIRST_DATA_ROW = 3;
+const MASTER_SYNC_TIMEZONE = 'Asia/Bangkok';
+const MASTER_STAGE_TABLE = 'dim_pick_master_stage';
+const MASTER_CURRENT_TABLE = 'dim_pick_master_current';
+const MASTER_SNAPSHOT_TABLE = 'dim_pick_master_snapshot';
+const MASTER_SYNC_TRIGGER_HANDLER = 'syncPickMastersDaily';
+// =======================================================
 
 function doGet(e) {
   try {
@@ -711,6 +727,554 @@ function loadZoneMasterMap_() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Master_Item + Master_Pack -> BigQuery
+//
+// ตาราง current เป็น master ที่ v_pick_clean ใช้คำนวณจริง ส่วน stage ใช้ตรวจสอบ
+// ก่อน promote และ snapshot เก็บ master ล่าสุดของแต่ละวัน (เวลา Asia/Bangkok)
+// ห้ามใช้ Column E แทน Column C จนกว่าจะยืนยันว่า Column C หา Master_Pack ไม่เจอ
+// ---------------------------------------------------------------------------
+
+function syncPickMastersDaily() {
+  return syncPickMasters_('daily-trigger');
+}
+
+// เรียกจาก Apps Script editor เมื่อต้องการ sync ทันที โดยไม่ต้องรอ trigger รายวัน
+function syncPickMastersNow() {
+  return syncPickMasters_('manual');
+}
+
+// สร้าง trigger รายวันใกล้ 02:00 ตาม timezone ของ Apps Script project
+// ตั้ง timezone ของ Script project เป็น Asia/Bangkok ก่อนเรียกครั้งแรก
+function installPickMasterDailySync() {
+  ScriptApp.getProjectTriggers().forEach(function(trigger) {
+    if (trigger.getHandlerFunction() === MASTER_SYNC_TRIGGER_HANDLER) {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  ScriptApp.newTrigger(MASTER_SYNC_TRIGGER_HANDLER)
+    .timeBased()
+    .atHour(2)
+    .everyDays(1)
+    .create();
+  return { status: 'success', handler: MASTER_SYNC_TRIGGER_HANDLER, hour: 2 };
+}
+
+function removePickMasterDailySync() {
+  let removed = 0;
+  ScriptApp.getProjectTriggers().forEach(function(trigger) {
+    if (trigger.getHandlerFunction() === MASTER_SYNC_TRIGGER_HANDLER) {
+      ScriptApp.deleteTrigger(trigger);
+      removed++;
+    }
+  });
+  return { status: 'success', removed: removed };
+}
+
+function syncPickMasters_(source) {
+  if (typeof BigQuery === 'undefined' || !BigQuery.Jobs || !BigQuery.Tables) {
+    throw uploadError_('BIGQUERY_API_DISABLED', 'ต้อง Enable BigQuery API ใน Apps Script ก่อน sync Master');
+  }
+
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    throw uploadError_('MASTER_SYNC_IN_PROGRESS', 'มีการ sync Master อีกงานหนึ่งกำลังทำงานอยู่');
+  }
+
+  try {
+    const now = new Date();
+    const syncId = 'master_' + Utilities.formatDate(now, 'UTC', 'yyyyMMdd_HHmmss_SSS') + '_' +
+      Math.floor(Math.random() * 1000000);
+    const snapshotDate = Utilities.formatDate(now, MASTER_SYNC_TIMEZONE, 'yyyy-MM-dd');
+    const loaded = loadPickMasterRows_(syncId, now);
+    if (!loaded.rows.length) {
+      throw uploadError_('MASTER_EMPTY', 'ไม่พบรายการ Master_Item ที่พร้อมใช้งาน จึงไม่แทนที่ master เดิม');
+    }
+
+    ensurePickMasterTables_();
+    loadPickMasterStage_(loaded.rows, syncId);
+    const validation = validatePickMasterStage_();
+    // Gate เข้มงวด: stage ผิด/หา Master_Pack ไม่เจอ/Type ไม่รองรับ ต้องไม่แทนที่ current
+    if (validation.stage_rows !== loaded.rows.length || validation.duplicate_keys || validation.invalid_divisors ||
+        validation.missing_master_pack_rows || validation.invalid_rule_rows ||
+        loaded.summary.unknown_pick_type_rows) {
+      throw uploadError_(
+        'MASTER_STAGE_INVALID',
+        'ตรวจสอบ stage ไม่ผ่าน: rows=' + validation.stage_rows +
+          ', duplicate_keys=' + validation.duplicate_keys +
+          ', invalid_divisors=' + validation.invalid_divisors +
+          ', missing_master_pack_rows=' + validation.missing_master_pack_rows +
+          ', invalid_rule_rows=' + validation.invalid_rule_rows +
+          ', unknown_pick_type_rows=' + loaded.summary.unknown_pick_type_rows
+      );
+    }
+
+    const promoted = promotePickMasterStage_(snapshotDate);
+    const previousRevision = getDataRevision_();
+    clearCache_(previousRevision);
+    bumpDataRevision_();
+
+    const result = {
+      status: 'success',
+      source: source || 'manual',
+      sync_id: syncId,
+      snapshot_date: snapshotDate,
+      rows: validation.stage_rows,
+      current_rows: promoted.current_rows,
+      snapshot_rows: promoted.snapshot_rows,
+      fallback_to_column_e_rows: loaded.summary.fallback_to_column_e_rows,
+      fallback_skipped_collision_rows: loaded.summary.fallback_skipped_collision_rows,
+      missing_master_pack_rows: validation.missing_master_pack_rows,
+      invalid_rule_rows: validation.invalid_rule_rows,
+      rule_counts: loaded.summary.rule_counts,
+      unknown_pick_type_rows: loaded.summary.unknown_pick_type_rows
+    };
+    console.log('Pick master sync completed: ' + JSON.stringify(result));
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Safe preview สำหรับตรวจผล mapping โดยไม่เขียน BigQuery
+function previewPickMasterSync() {
+  const now = new Date();
+  const loaded = loadPickMasterRows_('preview', now);
+  return {
+    status: 'success',
+    rows: loaded.rows.length,
+    fallback_to_column_e_rows: loaded.summary.fallback_to_column_e_rows,
+    fallback_skipped_collision_rows: loaded.summary.fallback_skipped_collision_rows,
+    missing_master_pack_rows: loaded.summary.missing_master_pack_rows,
+    rule_counts: loaded.summary.rule_counts,
+    unknown_pick_type_rows: loaded.summary.unknown_pick_type_rows,
+    sample_fallback_rows: loaded.summary.sample_fallback_rows,
+    sample_skipped_fallback_collision_rows: loaded.summary.sample_skipped_fallback_collision_rows
+  };
+}
+
+function loadPickMasterRows_(syncId, syncedAt) {
+  const itemSs = SpreadsheetApp.openById(MASTER_ITEM_SHEET_ID);
+  const itemSheet = itemSs.getSheetByName(MASTER_ITEM_TAB);
+  if (!itemSheet) throw uploadError_('MASTER_ITEM_TAB_NOT_FOUND', 'ไม่พบ Sheet ' + MASTER_ITEM_TAB + ' ใน Master_Item');
+  const packSs = SpreadsheetApp.openById(MASTER_PACK_SHEET_ID);
+  const packSheet = packSs.getSheetByName(MASTER_PACK_TAB);
+  if (!packSheet) throw uploadError_('MASTER_PACK_TAB_NOT_FOUND', 'ไม่พบ Sheet ' + MASTER_PACK_TAB + ' ใน Master_Pack');
+
+  const packMap = buildMasterPackMap_(packSheet);
+  const lastItemRow = itemSheet.getLastRow();
+  if (lastItemRow < MASTER_ITEM_FIRST_DATA_ROW) {
+    throw uploadError_('MASTER_ITEM_EMPTY', 'Master_Item ไม่มีข้อมูลหลัง header');
+  }
+
+  const count = lastItemRow - MASTER_ITEM_FIRST_DATA_ROW + 1;
+  // อ่านเฉพาะ B:E และ JL เพื่อไม่โหลดทั้ง 272 คอลัมน์เข้า memory ของ Apps Script
+  const itemBase = itemSheet.getRange(MASTER_ITEM_FIRST_DATA_ROW, 2, count, 4).getDisplayValues();
+  const itemPickType = itemSheet.getRange(MASTER_ITEM_FIRST_DATA_ROW, 272, count, 1).getDisplayValues();
+  const candidates = [];
+  const primaryCanonicalKeys = {};
+  const invalidRows = [];
+  const summary = {
+    fallback_to_column_e_rows: 0,
+    fallback_skipped_collision_rows: 0,
+    missing_master_pack_rows: 0,
+    unknown_pick_type_rows: 0,
+    rule_counts: {},
+    sample_fallback_rows: [],
+    sample_skipped_fallback_collision_rows: []
+  };
+  const syncedAtText = syncedAt.toISOString();
+
+  // First reserve every valid C-primary key. This pass makes the precedence
+  // deterministic even when an E-fallback source row appears before its C row.
+  itemBase.forEach(function(raw, index) {
+    const sheetRow = MASTER_ITEM_FIRST_DATA_ROW + index;
+    const owner = normalizeMasterKey_(raw[0]);       // B
+    const sourceItem = normalizeMasterKey_(raw[1]);  // C: primary Item from Master_Item
+    const description = normalizeMasterText_(raw[2]); // D
+    const itemPack = normalizeMasterKey_(raw[3]);    // E: fallback Pack only when C has no match
+    const pickType = normalizePickType_(itemPickType[index][0]); // JL
+    const hasAnyValue = !!(owner || sourceItem || description || itemPack || pickType);
+    if (!hasAnyValue) return;
+    if (!owner || !sourceItem) {
+      invalidRows.push('row ' + sheetRow + ' ต้องมี Owner (B) และ Item (C)');
+      return;
+    }
+
+    const primaryPack = packMap.by_pack[sourceItem] || null;
+    const primaryKey = owner + '\u0001' + sourceItem;
+    if (primaryPack && primaryCanonicalKeys[primaryKey]) {
+      invalidRows.push(
+        'C-primary Owner+Item ซ้ำ: ' + owner + ' / ' + sourceItem +
+        ' (rows ' + primaryCanonicalKeys[primaryKey] + ' และ ' + sheetRow + ')'
+      );
+      return;
+    }
+    if (primaryPack) primaryCanonicalKeys[primaryKey] = sheetRow;
+    candidates.push({
+      owner: owner,
+      source_item: sourceItem,
+      description: description,
+      item_pack: itemPack,
+      pick_type: pickType,
+      master_item_row: sheetRow,
+      primary_pack: primaryPack
+    });
+  });
+
+  if (invalidRows.length) {
+    throw uploadError_(
+      'MASTER_ITEM_INVALID',
+      'Master_Item มีข้อมูลที่ไม่ปลอดภัยสำหรับแทนที่ current: ' + invalidRows.slice(0, 10).join(' | ')
+    );
+  }
+
+  const rows = [];
+  const fallbackCanonicalKeys = {};
+  const unmappedCanonicalKeys = {};
+  candidates.forEach(function(candidate) {
+    let item = candidate.source_item;
+    let masterPack = candidate.primary_pack;
+    let packSource = masterPack ? 'ITEM_C' : 'MISSING';
+
+    if (!masterPack && candidate.item_pack && packMap.by_pack[candidate.item_pack]) {
+      item = candidate.item_pack; // E is canonical only after C has no Master_Pack match
+      masterPack = packMap.by_pack[item];
+      packSource = 'PACK_E_FALLBACK';
+      const fallbackKey = candidate.owner + '\u0001' + item;
+
+      // A duplicate fallback source is still unsafe even when both rows would
+      // be skipped because a C-primary mapping exists.
+      if (fallbackCanonicalKeys[fallbackKey]) {
+        invalidRows.push(
+          'E-fallback Owner+Item ซ้ำ: ' + candidate.owner + ' / ' + item +
+          ' (rows ' + fallbackCanonicalKeys[fallbackKey] + ' และ ' + candidate.master_item_row + ')'
+        );
+        return;
+      }
+      fallbackCanonicalKeys[fallbackKey] = candidate.master_item_row;
+
+      // A C-primary entry always wins. The fallback remains visible in sync audit,
+      // but does not create a second mapping or block the daily sync.
+      if (primaryCanonicalKeys[fallbackKey]) {
+        summary.fallback_skipped_collision_rows++;
+        if (summary.sample_skipped_fallback_collision_rows.length < 10) {
+          summary.sample_skipped_fallback_collision_rows.push({
+            owner: candidate.owner,
+            source_item: candidate.source_item,
+            item: item,
+            row: candidate.master_item_row,
+            primary_row: primaryCanonicalKeys[fallbackKey]
+          });
+        }
+        return;
+      }
+      summary.fallback_to_column_e_rows++;
+      if (summary.sample_fallback_rows.length < 10) {
+        summary.sample_fallback_rows.push({
+          owner: candidate.owner,
+          source_item: candidate.source_item,
+          item: item,
+          row: candidate.master_item_row
+        });
+      }
+    }
+
+    // Missing Master_Pack will be rejected by the strict stage gate. Keep a
+    // source row in stage for diagnosis, and still reject duplicate source keys.
+    if (!masterPack) {
+      const unmappedKey = candidate.owner + '\u0001' + item;
+      if (unmappedCanonicalKeys[unmappedKey]) {
+        invalidRows.push(
+          'Owner+Item ที่ไม่มี Master_Pack ซ้ำ: ' + candidate.owner + ' / ' + item +
+          ' (rows ' + unmappedCanonicalKeys[unmappedKey] + ' และ ' + candidate.master_item_row + ')'
+        );
+        return;
+      }
+      unmappedCanonicalKeys[unmappedKey] = candidate.master_item_row;
+      summary.missing_master_pack_rows++;
+    }
+
+    const divisor = choosePickDivisor_(candidate.pick_type, masterPack);
+    if (candidate.pick_type && candidate.pick_type !== 'PICK' && candidate.pick_type !== 'CASE') {
+      summary.unknown_pick_type_rows++;
+    }
+    summary.rule_counts[divisor.rule_code] = (summary.rule_counts[divisor.rule_code] || 0) + 1;
+
+    rows.push({
+      owner: candidate.owner,
+      item: item,
+      source_item: candidate.source_item,
+      description: candidate.description || null,
+      item_pack: candidate.item_pack || null,
+      pick_type: candidate.pick_type || null,
+      pack_key: masterPack ? masterPack.pack_key : null,
+      pack_source: packSource,
+      pick_pack_size: masterPack ? masterPack.pick_pack_size : null,
+      case_pack_size: masterPack ? masterPack.case_pack_size : null,
+      uom_divisor: divisor.value,
+      rule_code: divisor.rule_code,
+      match_status: masterPack ? 'MATCHED' : 'MISSING_MASTER_PACK',
+      master_item_row: candidate.master_item_row,
+      master_pack_row: masterPack ? masterPack.master_pack_row : null,
+      sync_id: syncId,
+      synced_at: syncedAtText
+    });
+  });
+
+  if (invalidRows.length) {
+    throw uploadError_(
+      'MASTER_ITEM_INVALID',
+      'Master_Item มีข้อมูลที่ไม่ปลอดภัยสำหรับแทนที่ current: ' + invalidRows.slice(0, 10).join(' | ')
+    );
+  }
+  return { rows: rows, summary: summary };
+}
+
+function buildMasterPackMap_(packSheet) {
+  const lastRow = packSheet.getLastRow();
+  if (lastRow < MASTER_PACK_FIRST_DATA_ROW) {
+    throw uploadError_('MASTER_PACK_EMPTY', 'Master_Pack ไม่มีข้อมูลหลัง header');
+  }
+  const count = lastRow - MASTER_PACK_FIRST_DATA_ROW + 1;
+  // B:H เพื่ออ่าน B=Pack, D=Pick Pack และ H=Case Pack ใน call เดียว
+  const values = packSheet.getRange(MASTER_PACK_FIRST_DATA_ROW, 2, count, 7).getDisplayValues();
+  const byPack = {};
+  const conflicts = [];
+
+  values.forEach(function(raw, index) {
+    const sheetRow = MASTER_PACK_FIRST_DATA_ROW + index;
+    const packKey = normalizeMasterKey_(raw[0]); // B
+    const pickPackSize = parsePositiveMasterNumber_(raw[2]); // D
+    const casePackSize = parsePositiveMasterNumber_(raw[6]); // H
+    const hasAnyValue = !!(packKey || raw[2] || raw[6]);
+    if (!hasAnyValue) return;
+    if (!packKey) {
+      conflicts.push('row ' + sheetRow + ' มี D/H แต่ไม่มี Pack (B)');
+      return;
+    }
+    const record = {
+      pack_key: packKey,
+      pick_pack_size: pickPackSize,
+      case_pack_size: casePackSize,
+      master_pack_row: sheetRow
+    };
+    const existing = byPack[packKey];
+    if (existing &&
+        (existing.pick_pack_size !== record.pick_pack_size || existing.case_pack_size !== record.case_pack_size)) {
+      conflicts.push('Pack ซ้ำค่าไม่ตรงกัน: ' + packKey + ' (rows ' + existing.master_pack_row + ' และ ' + sheetRow + ')');
+      return;
+    }
+    if (!existing) byPack[packKey] = record;
+  });
+
+  if (conflicts.length) {
+    throw uploadError_('MASTER_PACK_INVALID', 'Master_Pack มี key ซ้ำ/ไม่ครบ: ' + conflicts.slice(0, 10).join(' | '));
+  }
+  return { by_pack: byPack };
+}
+
+function choosePickDivisor_(pickType, masterPack) {
+  if (!masterPack) return { value: 1, rule_code: 'MASTER_PACK_MISSING_FALLBACK_1' };
+  const d = Number(masterPack.pick_pack_size) || 0;
+  const h = Number(masterPack.case_pack_size) || 0;
+  if (pickType === 'PICK') {
+    return d > 0 ? { value: d, rule_code: 'PICK_D' } : { value: 1, rule_code: 'PICK_D_FALLBACK_1' };
+  }
+  if (pickType === 'CASE') {
+    return h > 0 ? { value: h, rule_code: 'CASE_H' } : { value: 1, rule_code: 'CASE_H_FALLBACK_1' };
+  }
+  if (!pickType) {
+    return d > 0 ? { value: d, rule_code: 'BLANK_D' } : { value: 1, rule_code: 'BLANK_FALLBACK_1' };
+  }
+  // ไม่ปล่อยให้หารศูนย์ หากมี Pick Type นอกเหนือจาก Pick/Case ให้ตรวจจาก rule_code ได้
+  return { value: 1, rule_code: 'UNKNOWN_PICK_TYPE_FALLBACK_1' };
+}
+
+function normalizeMasterKey_(value) {
+  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim().toUpperCase();
+}
+
+function normalizeMasterText_(value) {
+  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+}
+
+function normalizePickType_(value) {
+  const type = normalizeMasterKey_(value);
+  if (type === 'PICK' || type === 'CASE') return type;
+  return type;
+}
+
+function parsePositiveMasterNumber_(value) {
+  const raw = String(value == null ? '' : value).replace(/,/g, '').trim();
+  if (!raw) return null;
+  const number = Number(raw);
+  return isFinite(number) && number > 0 ? number : null;
+}
+
+function pickMasterSchema_(includeSnapshotDate) {
+  const fields = [];
+  if (includeSnapshotDate) fields.push({ name: 'snapshot_date', type: 'DATE', mode: 'REQUIRED' });
+  return fields.concat([
+    { name: 'owner', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'item', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'source_item', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'description', type: 'STRING' },
+    { name: 'item_pack', type: 'STRING' },
+    { name: 'pick_type', type: 'STRING' },
+    { name: 'pack_key', type: 'STRING' },
+    { name: 'pack_source', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'pick_pack_size', type: 'NUMERIC' },
+    { name: 'case_pack_size', type: 'NUMERIC' },
+    { name: 'uom_divisor', type: 'NUMERIC', mode: 'REQUIRED' },
+    { name: 'rule_code', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'match_status', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'master_item_row', type: 'INT64', mode: 'REQUIRED' },
+    { name: 'master_pack_row', type: 'INT64' },
+    { name: 'sync_id', type: 'STRING', mode: 'REQUIRED' },
+    { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+  ]);
+}
+
+function pickMasterDataColumns_() {
+  return pickMasterSchema_(false).map(function(field) { return field.name; });
+}
+
+function bqTableSql_(tableId) {
+  return '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + tableId + '`';
+}
+
+function ensurePickMasterTables_() {
+  ensurePickMasterTable_(MASTER_STAGE_TABLE, false);
+  ensurePickMasterTable_(MASTER_CURRENT_TABLE, false);
+  ensurePickMasterTable_(MASTER_SNAPSHOT_TABLE, true);
+}
+
+function ensurePickMasterTable_(tableId, isSnapshot) {
+  let table;
+  try {
+    table = BigQuery.Tables.get(BQ_PROJECT, BQ_DATASET, tableId);
+  } catch (err) {
+    if (!isBigQueryNotFound_(err)) throw err;
+  }
+  const expectedFields = pickMasterSchema_(isSnapshot);
+  if (table) {
+    const actual = ((table.schema || {}).fields || []).reduce(function(map, field) {
+      map[field.name] = field.type;
+      return map;
+    }, {});
+    const missing = expectedFields.filter(function(field) {
+      const actType = actual[field.name];
+      if (!actType) return true;
+      if (actType === field.type) return false;
+      if ((field.type === 'INT64' || field.type === 'INTEGER') && (actType === 'INT64' || actType === 'INTEGER')) return false;
+      return true;
+    }).map(function(field) { return field.name + ':' + field.type; });
+    if (missing.length) {
+      throw uploadError_('MASTER_TABLE_SCHEMA_MISMATCH', tableId + ' schema ไม่ตรง: ' + missing.join(', '));
+    }
+    return;
+  }
+
+  const resource = {
+    tableReference: { projectId: BQ_PROJECT, datasetId: BQ_DATASET, tableId: tableId },
+    schema: { fields: expectedFields },
+    clustering: { fields: ['owner', 'item'] }
+  };
+  if (isSnapshot) resource.timePartitioning = { type: 'DAY', field: 'snapshot_date' };
+  BigQuery.Tables.insert(resource, BQ_PROJECT, BQ_DATASET);
+}
+
+function isBigQueryNotFound_(err) {
+  return /not found|404/i.test(String(err && err.message || err));
+}
+
+function loadPickMasterStage_(rows, syncId) {
+  const jobId = 'pick_master_' + syncId.replace(/[^A-Za-z0-9_]/g, '_');
+  const blob = Utilities.newBlob(
+    rows.map(function(row) { return JSON.stringify(row); }).join('\n'),
+    'application/x-ndjson'
+  );
+  const job = {
+    jobReference: { projectId: BQ_PROJECT, jobId: jobId, location: BQ_LOCATION },
+    configuration: {
+      load: {
+        destinationTable: { projectId: BQ_PROJECT, datasetId: BQ_DATASET, tableId: MASTER_STAGE_TABLE },
+        sourceFormat: 'NEWLINE_DELIMITED_JSON',
+        createDisposition: 'CREATE_IF_NEEDED',
+        writeDisposition: 'WRITE_TRUNCATE',
+        maxBadRecords: 0,
+        ignoreUnknownValues: false,
+        schema: { fields: pickMasterSchema_(false) }
+      }
+    }
+  };
+  let current = BigQuery.Jobs.insert(job, BQ_PROJECT, blob);
+  const started = Date.now();
+  let waitMs = 500;
+  while (!current.status || current.status.state !== 'DONE') {
+    if (Date.now() - started > JOB_DEADLINE_MS) {
+      throw uploadError_('MASTER_LOAD_TIMEOUT', 'BigQuery ใช้เวลาโหลด Master นานเกินกำหนด');
+    }
+    Utilities.sleep(waitMs);
+    current = BigQuery.Jobs.get(BQ_PROJECT, jobId, { location: BQ_LOCATION });
+    waitMs = Math.min(waitMs * 2, 5000);
+  }
+  if (current.status.errorResult) {
+    throw uploadError_('MASTER_LOAD_FAILED', formatJobErrors_(current));
+  }
+}
+
+function validatePickMasterStage_() {
+  const stage = bqTableSql_(MASTER_STAGE_TABLE);
+  const sql = [
+    'SELECT',
+    '  COUNT(*) AS stage_rows,',
+    '  COUNT(*) - COUNT(DISTINCT TO_JSON_STRING(STRUCT(owner, item))) AS duplicate_keys,',
+    '  COUNTIF(uom_divisor IS NULL OR uom_divisor <= 0) AS invalid_divisors,',
+    "  COUNTIF(match_status = 'MISSING_MASTER_PACK') AS missing_master_pack_rows,",
+    "  COUNTIF(rule_code IN ('PICK_D_FALLBACK_1', 'CASE_H_FALLBACK_1', 'UNKNOWN_PICK_TYPE_FALLBACK_1', 'MASTER_PACK_MISSING_FALLBACK_1')) AS invalid_rule_rows",
+    'FROM ' + stage
+  ].join('\n');
+  const result = bqQueryAll_(sql, JOB_DEADLINE_MS);
+  if (!result.length) throw uploadError_('MASTER_STAGE_VALIDATION_MISSING', 'BigQuery ไม่ส่งผลตรวจ Master stage');
+  return {
+    stage_rows: Number(result[0][0] || 0),
+    duplicate_keys: Number(result[0][1] || 0),
+    invalid_divisors: Number(result[0][2] || 0),
+    missing_master_pack_rows: Number(result[0][3] || 0),
+    invalid_rule_rows: Number(result[0][4] || 0)
+  };
+}
+
+function promotePickMasterStage_(snapshotDate) {
+  const stage = bqTableSql_(MASTER_STAGE_TABLE);
+  const current = bqTableSql_(MASTER_CURRENT_TABLE);
+  const snapshot = bqTableSql_(MASTER_SNAPSHOT_TABLE);
+  const columns = pickMasterDataColumns_();
+  const columnList = columns.join(', ');
+  const snapshotDateLiteral = "DATE '" + snapshotDate + "'";
+  const sql = [
+    'BEGIN TRANSACTION;',
+    'DELETE FROM ' + current + ' WHERE TRUE;',
+    'INSERT INTO ' + current + ' (' + columnList + ')',
+    'SELECT ' + columnList + ' FROM ' + stage + ';',
+    'DELETE FROM ' + snapshot + ' WHERE snapshot_date = ' + snapshotDateLiteral + ';',
+    'INSERT INTO ' + snapshot + ' (snapshot_date, ' + columnList + ')',
+    'SELECT ' + snapshotDateLiteral + ', ' + columnList + ' FROM ' + stage + ';',
+    'COMMIT TRANSACTION;',
+    'SELECT',
+    '  (SELECT COUNT(*) FROM ' + current + ') AS current_rows,',
+    '  (SELECT COUNT(*) FROM ' + snapshot + ' WHERE snapshot_date = ' + snapshotDateLiteral + ') AS snapshot_rows;'
+  ].join('\n');
+  const result = bqQueryAll_(sql, JOB_DEADLINE_MS);
+  if (!result.length) throw uploadError_('MASTER_PROMOTE_RESULT_MISSING', 'BigQuery ไม่ส่งผลหลัง promote Master');
+  return {
+    current_rows: Number(result[0][0] || 0),
+    snapshot_rows: Number(result[0][1] || 0)
+  };
+}
+
 function buildDashboardData_(useQueryCache) {
   const currentDate = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
   const pickerDirectory = loadPickerDirectory_();
@@ -723,7 +1287,9 @@ function buildDashboardData_(useQueryCache) {
     "zone, picker_id AS picker, sku, " +
     "EXTRACT(HOUR FROM pick_ts_local)*60 + EXTRACT(MINUTE FROM pick_ts_local) AS tmin, " +
     "qty AS pcs, " +
-    "uom_qty AS pick_qty " +
+    // pick_qty ต้องมาจาก BigQuery หลัง join Owner+Item กับ master current แล้ว
+    // row payload ยัง 7 ค่าเดิม เพราะ owner ใช้สำหรับคำนวณใน BigQuery ไม่ต้องส่งให้ frontend ซ้ำ
+    "pick_qty AS pick_qty " +
     "FROM `" + BQ_PROJECT + "." + BQ_DATASET + ".v_pick_enriched` " +
     "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY) " +
     "AND UPPER(category) IN ('PTT','BPS')";
@@ -755,8 +1321,8 @@ function buildDashboardData_(useQueryCache) {
             schema_version: DASHBOARD_SCHEMA_VERSION,
             unit_definition: {
               pieces: 'qty',
-              source_pick_units: 'uom_qty',
-              dashboard_pick_units: 'frontend Pack Size master (largest exact divisor, excludes PAL)'
+              source_pick_units: 'BigQuery v_pick_enriched.pick_qty',
+              dashboard_pick_units: 'BigQuery Master_Item + Master_Pack (Owner+Item, Pick=D, Case=H, Blank=D then 1)'
             },
             picker_names: pickerNames,
             picker_affiliations: pickerAffiliations,

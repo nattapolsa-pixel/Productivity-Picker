@@ -76,53 +76,57 @@ CLUSTER BY category, picker_id;
 -- =============================================================================
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_pick_clean` AS
 SELECT
-  pickdetailkey,
-  lpn,
-  qty,
-  sku,
-  owner,
-  uom_qty,
-  -- Infor WMS: QTY = จำนวนชิ้นฐาน, UOMQTY = จำนวนหน่วย UOM ที่หยิบจริง
-  -- QTY / UOMQTY คือ pack factor (ชิ้นต่อหน่วย) จึงห้ามนำมา SUM เป็นยอดหน่วยหยิบ
-  uom_qty AS pick_qty,
-  UPPER(category) AS category,
-  picker_id,
-  location,
-  SUBSTR(location, 1, 2) AS zone,                       -- Zone = 2 ตัวหน้าของ Location
-  pick_ts_source,
+  d.pickdetailkey,
+  d.lpn,
+  d.qty,
+  d.sku,
+  d.owner,
+  d.uom_qty,
+  -- คำนวณหน่วยหยิบใหม่ (pick_qty): ดึง pack_size จากตาราง dim_pack_size มาหาร
+  CASE
+    WHEN m.pack_size > 1 AND MOD(d.qty, CAST(m.pack_size AS INT64)) = 0 
+      THEN CAST(d.qty / m.pack_size AS INT64)
+    ELSE d.qty
+  END AS pick_qty,
+  UPPER(d.category) AS category,
+  d.picker_id,
+  d.location,
+  SUBSTR(d.location, 1, 2) AS zone,                       -- Zone = 2 ตัวหน้าของ Location
+  d.pick_ts_source,
   -- เวลาที่ parse จากข้อความ (รองรับทั้ง DD/MM/YYYY HH:mm และ US Format M/D/YY h:mm AM/PM)
   COALESCE(
-    SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', pick_ts_source),
-    SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M:%S', pick_ts_source),
-    SAFE.PARSE_DATETIME('%m/%d/%y %I:%M %p', pick_ts_source),
-    SAFE.PARSE_DATETIME('%m/%d/%Y %I:%M %p', pick_ts_source),
-    SAFE.PARSE_DATETIME('%m/%d/%y %H:%M', pick_ts_source),
-    SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M:%S', pick_ts_source)
+    SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', d.pick_ts_source),
+    SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M:%S', d.pick_ts_source),
+    SAFE.PARSE_DATETIME('%m/%d/%y %I:%M %p', d.pick_ts_source),
+    SAFE.PARSE_DATETIME('%m/%d/%Y %I:%M %p', d.pick_ts_source),
+    SAFE.PARSE_DATETIME('%m/%d/%y %H:%M', d.pick_ts_source),
+    SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M:%S', d.pick_ts_source)
   ) AS pick_ts,
   -- กติกา: PTT -> ลบ 7 ชั่วโมง, BPS -> เท่าเดิม
   CASE
-    WHEN UPPER(category) = 'PTT'
+    WHEN UPPER(d.category) = 'PTT'
       THEN DATETIME_SUB(
         COALESCE(
-          SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', pick_ts_source),
-          SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M:%S', pick_ts_source),
-          SAFE.PARSE_DATETIME('%m/%d/%y %I:%M %p', pick_ts_source),
-          SAFE.PARSE_DATETIME('%m/%d/%Y %I:%M %p', pick_ts_source),
-          SAFE.PARSE_DATETIME('%m/%d/%y %H:%M', pick_ts_source),
-          SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M:%S', pick_ts_source)
+          SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', d.pick_ts_source),
+          SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M:%S', d.pick_ts_source),
+          SAFE.PARSE_DATETIME('%m/%d/%y %I:%M %p', d.pick_ts_source),
+          SAFE.PARSE_DATETIME('%m/%d/%Y %I:%M %p', d.pick_ts_source),
+          SAFE.PARSE_DATETIME('%m/%d/%y %H:%M', d.pick_ts_source),
+          SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M:%S', d.pick_ts_source)
         ), INTERVAL 7 HOUR
       )
     ELSE
       COALESCE(
-        SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', pick_ts_source),
-        SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M:%S', pick_ts_source),
-        SAFE.PARSE_DATETIME('%m/%d/%y %I:%M %p', pick_ts_source),
-        SAFE.PARSE_DATETIME('%m/%d/%Y %I:%M %p', pick_ts_source),
-        SAFE.PARSE_DATETIME('%m/%d/%y %H:%M', pick_ts_source),
-        SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M:%S', pick_ts_source)
+        SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M', d.pick_ts_source),
+        SAFE.PARSE_DATETIME('%d/%m/%Y %H:%M:%S', d.pick_ts_source),
+        SAFE.PARSE_DATETIME('%m/%d/%y %I:%M %p', d.pick_ts_source),
+        SAFE.PARSE_DATETIME('%m/%d/%Y %I:%M %p', d.pick_ts_source),
+        SAFE.PARSE_DATETIME('%m/%d/%y %H:%M', d.pick_ts_source),
+        SAFE.PARSE_DATETIME('%Y-%m-%d %H:%M:%S', d.pick_ts_source)
       )
   END AS pick_ts_local
-FROM `productivity-pick.pick_analytics.pick_detail`;
+FROM `productivity-pick.pick_analytics.pick_detail` d
+LEFT JOIN `productivity-pick.pick_analytics.dim_pack_size` m ON d.sku = m.sku;
 
 
 -- VIEW เสริม: เพิ่ม วันที่ / ชั่วโมง / Time Slot / สัปดาห์ / เดือน

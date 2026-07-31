@@ -5,8 +5,9 @@
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v3';
-const DASHBOARD_SCHEMA_VERSION_PREV = 'pick-units-v2';
+// v4 is the first payload whose pick_qty is final UOM from BigQuery.  Do not
+// accept an older payload: its pick_qty has the retired Pack Size semantics.
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v4';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -54,7 +55,7 @@ const emptyData = () => ({
 let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
 let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
-let unitMode = 'units'; // เปิดหน้าเริ่มต้นเป็นหน่วยหยิบ (Units / Pack Size)
+let unitMode = 'units'; // เปิดหน้าเริ่มต้นเป็นหน่วยหยิบ (UOM ที่ BigQuery คำนวณแล้ว)
 let trendMode = 'day';
 let datePresetMode = 'all';
 let excludedSkus = new Set();
@@ -73,7 +74,8 @@ const DASHBOARD_TIMEOUT_MS = 180000;
 const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
 const DASHBOARD_CACHE_DB = 'pick_dashboard_cache_v1';
 const DASHBOARD_CACHE_STORE = 'responses';
-const DASHBOARD_CACHE_KEY = DASHBOARD_SCHEMA_VERSION + ':latest';
+// แยก cache ออกจากข้อมูลรุ่นที่เคยคำนวณ Pack Size ใน browser เพื่อไม่ให้ใช้ยอดเก่า
+const DASHBOARD_CACHE_KEY = DASHBOARD_SCHEMA_VERSION + ':bq-pick-qty:latest';
 const DASHBOARD_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 function normalizeSkuKey(sku){
@@ -195,58 +197,11 @@ function packedRowCount(S){
   const width = Number(S && S.row_width) || 0;
   return S && Array.isArray(S.rows) ? (width ? Math.floor(S.rows.length / width) : S.rows.length) : 0;
 }
-function validatePackSizeCoverage(payload){
-  if(!globalThis.PACK_SIZE_MASTER) {
-    throw new Error('โหลด Pack Size master ไม่สำเร็จ กรุณารีเฟรชหน้าเว็บ');
-  }
-  const missing = new Set();
-  ['PTT','BPS'].forEach(name => {
-    const source = payload && payload[name];
-    if(!source || !Array.isArray(source.skus)) return;
-    source.skus.forEach(sku => {
-      const key = String(sku || '').trim();
-      if(key && !globalThis.PACK_SIZE_MASTER[key]) missing.add(key);
-    });
-  });
-  if(missing.size > 0) {
-    const examples = [...missing].slice(0, 10).join(', ');
-    throw new Error(`ไม่พบ Pack Size สำหรับ ${fmt(missing.size)} SKU (${examples}) กรุณาอัปเดตไฟล์ Pack Size master`);
-  }
-}
-
-function calculatePickUnitsDetail(pieces, sku, fallbackPickQty){
-  const qty = Number(pieces);
-  if (!Number.isFinite(qty) || qty <= 0) {
-    return { units: 0, packSize: null, source: 'invalid-pieces' };
-  }
-
-  const master = globalThis.PACK_SIZE_MASTER;
-  const sizes = master ? master[String(sku || '').trim()] : null;
-  if (!Array.isArray(sizes) || sizes.length === 0) {
-    const fallback = Number(fallbackPickQty);
-    return {
-      units: Number.isFinite(fallback) && fallback > 0 ? fallback : qty,
-      packSize: null,
-      source: 'missing-pack-size'
-    };
-  }
-
-  const EPSILON = 1e-9;
-  for (const rawSize of sizes) {
-    const size = Number(rawSize);
-    if (!Number.isFinite(size) || size <= 0 || size > qty + EPSILON) continue;
-    const quotient = qty / size;
-    const rounded = Math.round(quotient);
-    if (Math.abs(quotient - rounded) <= EPSILON) {
-      return { units: rounded, packSize: size, source: 'pack-size' };
-    }
-  }
-
-  return { units: qty, packSize: 1, source: 'base-unit-fallback' };
-}
-
-function calculatePickUnits(pieces, sku, fallbackPickQty){
-  return calculatePickUnitsDetail(pieces, sku, fallbackPickQty).units;
+// ช่องที่ 6 ของ payload คือ pick_qty ที่ BigQuery คำนวณและตรวจสอบแล้ว
+// ห้าม fallback เป็นจำนวนชิ้น เพราะจะทำให้ SKU ที่ยังไม่มี master ถูกนับผิดโดยไม่รู้ตัว
+function readBigQueryPickQty(value){
+  const qty = Number(value);
+  return Number.isFinite(qty) ? qty : 0;
 }
 
 function packedRowData(S, i){
@@ -255,8 +210,7 @@ function packedRowData(S, i){
   }
   const skuIdx = S.rows[i*7+3];
   const pcs = Number(S.rows[i*7+4]) || 0;
-  const sourcePickQty = Number(S.rows[i*7+5]) || 0;
-  const sku = S.skus[skuIdx];
+  const bqPickQty = readBigQueryPickQty(S.rows[i*7+5]);
   const cachedPickQty = S._pickQty && Number(S._pickQty[i]);
   return {
     dateIdx: S.rows[i*7],
@@ -266,13 +220,12 @@ function packedRowData(S, i){
     pcs,
     pickQty: Number.isFinite(cachedPickQty)
       ? cachedPickQty
-      : calculatePickUnits(pcs, sku, sourcePickQty),
-    sourcePickQty,
+      : bqPickQty,
     tmin: S.rows[i*7+6]
   };
 }
 
-// precompute ข้อมูลกะต่อแถว "ครั้งเดียว" หลังโหลดข้อมูล -> re-render (เปลี่ยน filter) เร็วขึ้นมาก
+// precompute ข้อมูลกะและ UOM จาก BigQuery ต่อแถว "ครั้งเดียว" หลังโหลดข้อมูล -> re-render (เปลี่ยน filter) เร็วขึ้นมาก
 function prepShifts(){
   ['PTT','BPS'].forEach(n => {
     const S = DATA[n];
@@ -283,11 +236,8 @@ function prepShifts(){
     for(let i=0;i<count;i++) {
       const offset = i * 7;
       const dateIdx = S.rows[offset];
-      const skuIdx = S.rows[offset + 3];
-      const pcs = Number(S.rows[offset + 4]) || 0;
-      const sourcePickQty = Number(S.rows[offset + 5]) || 0;
       const tmin = Number(S.rows[offset + 6]) || 0;
-      S._pickQty[i] = calculatePickUnits(pcs, S.skus[skuIdx], sourcePickQty);
+      S._pickQty[i] = readBigQueryPickQty(S.rows[offset + 5]);
       S._sh[i] = shiftOf(S.dates[dateIdx], tmin);
     }
   });
@@ -655,7 +605,7 @@ function renderAffiliationBreakdown(){
 }
 
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
-// row width 7 = [dateIdx, zone, pickerIdx, skuIdx, pcs, pick_qty, minOfDay]
+// row width 7 = [dateIdx, zone, pickerIdx, skuIdx, pcs, pick_qty จาก BigQuery, minOfDay]
 function aggregate(system, from, to, sf){
   const cacheKey = [system, from, to, sf, excludedSkuRevision].join('|');
   if(aggregateCache.has(cacheKey)) return aggregateCache.get(cacheKey);
@@ -1114,7 +1064,7 @@ function renderKPIs(){
       grad: isPcs ? 'linear-gradient(90deg,#14b8a6,#0ea5e9)' : 'linear-gradient(90deg,#94a3b8,#cbd5e1)'
     },
     {
-      lbl: !isPcs ? 'หน่วยหยิบรวม (Pack Size) ★' : 'หน่วยหยิบรวม (Pack Size)',
+      lbl: !isPcs ? 'หน่วยหยิบรวม (BigQuery) ★' : 'หน่วยหยิบรวม (BigQuery)',
       val: k.qty,
       unit: 'หน่วยหยิบ',
       grad: !isPcs ? 'linear-gradient(90deg,#3b82f6,#6366f1)' : 'linear-gradient(90deg,#94a3b8,#cbd5e1)'
@@ -1359,7 +1309,7 @@ function renderPickerDrilldown(){
         <div style="font-size:18px; font-weight:700; color:#0284c7; margin-top:2px;">${fmt(totalPcs)} <span style="font-size:11px; font-weight:400;">ชิ้น</span></div>
       </div>
       <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
-        <div style="font-size:11px; color:#64748b; font-weight:600;">หน่วยหยิบ (Pack)</div>
+        <div style="font-size:11px; color:#64748b; font-weight:600;">หน่วยหยิบ (BigQuery)</div>
         <div style="font-size:18px; font-weight:700; color:#4338ca; margin-top:2px;">${fmt(totalQty)} <span style="font-size:11px; font-weight:400;">หน่วย</span></div>
       </div>
       <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
@@ -1464,7 +1414,7 @@ function renderPickerDrilldown(){
             <th style="padding:8px 10px;">ชื่อสินค้า</th>
             <th style="padding:8px 10px;">Owner</th>
             <th style="padding:8px 10px;" class="num">ชิ้น (QTY)</th>
-            <th style="padding:8px 10px;" class="num">หน่วยหยิบ (Pack)</th>
+            <th style="padding:8px 10px;" class="num">หน่วยหยิบ (BigQuery)</th>
             <th style="padding:8px 10px;" class="num">จำนวน Lines</th>
           </tr>
         </thead>
@@ -1824,7 +1774,7 @@ const builders = {
     const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
     const prodHeaderLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
 
-    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>ชื่อพนักงาน</th><th>สังกัด</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Pack Size) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th><th style="text-align:center;">เจาะลึก</th></tr></thead><tbody>`;
+    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>ชื่อพนักงาน</th><th>สังกัด</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (BigQuery) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th><th style="text-align:center;">เจาะลึก</th></tr></thead><tbody>`;
     if(!list.length) h += '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
     list.forEach((p,i) => {
       const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
@@ -1961,7 +1911,7 @@ const builders = {
       const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
       const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
 
-      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (Pack Size) ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
+      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (BigQuery) ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
       if (!displayItems.length) {
         h += '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
       } else {
@@ -1971,7 +1921,7 @@ const builders = {
           const nameStyle = isEx ? 'style="text-decoration:line-through;color:#94a3b8;"' : '';
           const statusBadge = isEx 
             ? '<span style="background:#fee2e2;color:#991b1b;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">🚫 ยกเว้นอยู่</span>'
-            : '<span style="background:#dcfce7;color:#166534;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">✅ คำนวณปกติ</span>';
+            : '<span style="background:#dcfce7;color:#166534;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">✅ UOM จาก BigQuery</span>';
 
           const btnAction = isEx
             ? `<button onclick="toggleExcludeSku('${x.sku}')" style="border:0;background:#dcfce7;color:#15803d;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">✅ นำกลับมาคำนวณ</button>`
@@ -2265,10 +2215,8 @@ function dashboardPayloadRowCount(payload){
     source && Number(source.row_width) === 7 &&
     Array.isArray(source.dates) && Array.isArray(source.pickers) && Array.isArray(source.skus) &&
     Array.isArray(source.rows) && source.rows.length % 7 === 0;
-  const validSchema = payload && payload.meta && (
-    payload.meta.schema_version === DASHBOARD_SCHEMA_VERSION ||
-    payload.meta.schema_version === DASHBOARD_SCHEMA_VERSION_PREV
-  );
+  const validSchema = payload && payload.meta &&
+    payload.meta.schema_version === DASHBOARD_SCHEMA_VERSION;
   if(!validSchema || !validSource(payload.PTT) || !validSource(payload.BPS)) {
     throw new Error('รูปแบบข้อมูล BigQuery เป็นคนละรุ่นกับหน้าเว็บ กรุณากดรีเฟรชอีกครั้ง');
   }
@@ -2277,19 +2225,18 @@ function dashboardPayloadRowCount(payload){
 }
 
 function setDashboardSourceBadge(totalRows, source){
-  const packCount = globalThis.PACK_SIZE_META ? fmt(globalThis.PACK_SIZE_META.skuCount) : '-';
   const updated = formatThaiDateTime(lastFetchTime) || '-';
   if(source === 'cache') {
     setSideBadge(
       'ข้อมูลจากเครื่อง ' + fmt(totalRows) + ' แถว\n' +
-      'Pack Size ' + packCount + ' SKU\n' +
+      'UOM จาก BigQuery\n' +
       'ข้อมูล ณ ' + updated + '\nกำลังตรวจ BigQuery…'
     );
     return;
   }
   setSideBadge(
     'BigQuery ล่าสุด ' + fmt(totalRows) + ' แถว\n' +
-    'Pack Size ' + packCount + ' SKU\n' +
+    'UOM จาก BigQuery\n' +
     'อัปเดต ' + updated
   );
 }
@@ -2298,7 +2245,6 @@ function applyDashboardPayload(payload, previous, source){
   const totalRows = dashboardPayloadRowCount(payload);
   if(totalRows === 0) return 0;
 
-  validatePackSizeCoverage(payload);
   DATA = payload;
   aggregateCache.clear();
   prepareZoneMaster();
