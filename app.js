@@ -2141,56 +2141,111 @@ const builders = {
     const donutUnitTxt = isPcs ? 'ชิ้น' : 'หยิบ';
     const donutTotal = catData.reduce((a,b)=>a+b,0) || 1;
     const donutPct = v => (Number(v) || 0) / donutTotal * 100;
-    const isSmallDonutSlice = ctx => donutPct(ctx.dataset.data[ctx.dataIndex]) < 8;
 
+    // Update Stats Panel for BPS vs PTT
+    const totalVol = catData.reduce((a, b) => a + b, 0);
+    const pttPctVal = totalVol > 0 ? ((catData[0] / totalVol) * 100).toFixed(1) : '0.0';
+    const bpsPctVal = totalVol > 0 ? ((catData[1] / totalVol) * 100).toFixed(1) : '0.0';
+
+    const catBadgeEl = document.getElementById('catTotalBadge');
+    if (catBadgeEl) catBadgeEl.textContent = `รวม ${fmt(Math.ceil(totalVol))} ${unitTxt}`;
+
+    const pttPctEl = document.getElementById('pttSharePct');
+    if (pttPctEl) pttPctEl.textContent = `${pttPctVal}%`;
+    const pttValEl = document.getElementById('pttVal');
+    if (pttValEl) pttValEl.textContent = `${fmt(Math.ceil(catData[0]))} ${unitTxt}`;
+    const pttSubEl = document.getElementById('pttSubText');
+    if (pttSubEl) pttSubEl.textContent = `${fmt(pttTotals.pcs)} ชิ้น · ${fmt(pttTotals.lines)} Lines`;
+
+    const bpsPctEl = document.getElementById('bpsSharePct');
+    if (bpsPctEl) bpsPctEl.textContent = `${bpsPctVal}%`;
+    const bpsValEl = document.getElementById('bpsVal');
+    if (bpsValEl) bpsValEl.textContent = `${fmt(Math.ceil(catData[1]))} ${unitTxt}`;
+    const bpsSubEl = document.getElementById('bpsSubText');
+    if (bpsSubEl) bpsSubEl.textContent = `${fmt(bpsTotals.pcs)} ชิ้น · ${fmt(bpsTotals.lines)} Lines`;
+
+    // Re-render Cat Donut Chart with clean layout
+    const exCat = Chart.getChart('cat'); if (exCat) exCat.destroy();
     new Chart(document.getElementById('cat'), {
-      type:'doughnut',
-      data:{labels:['Pick (PTT)','Pick to Sort (BPS)'], datasets:[{data:catData, backgroundColor:['#6366f1','#f59e0b'], borderWidth:4, borderColor:'#fff'}]},
-      options:{
-        maintainAspectRatio:false,
-        layout:{padding:{top:28,right:58,bottom:22,left:58}},
-        cutout:'60%',
-        plugins:{
-          legend:{position:'bottom', labels:{usePointStyle:true, boxWidth:8}},
-          datalabels:{
-            display:(ctx)=>Number(ctx.dataset.data[ctx.dataIndex] || 0) > 0,
-            anchor:(ctx)=>isSmallDonutSlice(ctx) ? 'end' : 'center',
-            align:(ctx)=>isSmallDonutSlice(ctx) ? 'end' : 'center',
-            offset:(ctx)=>isSmallDonutSlice(ctx) ? 14 : 0,
-            clamp:true,
-            clip:false,
-            color:(ctx)=>isSmallDonutSlice(ctx) ? '#92400e' : '#fff',
-            backgroundColor:(ctx)=>isSmallDonutSlice(ctx) ? 'rgba(255,255,255,.96)' : 'rgba(15,23,42,.14)',
-            borderColor:(ctx)=>isSmallDonutSlice(ctx) ? 'rgba(245,158,11,.45)' : 'transparent',
-            borderWidth:(ctx)=>isSmallDonutSlice(ctx) ? 1 : 0,
-            borderRadius:5,
-            padding:{top:3,right:6,bottom:3,left:6},
-            font:{size:12, weight:'700'},
-            textAlign:'center',
-            formatter:(v)=>{
-              const pct = Math.round(donutPct(v));
-              if(pct < 8) return fmt(v)+' '+donutUnitTxt+'\n'+pct+'%';
-              return fmt(v)+' '+unitTxt+'\n('+pct+'%)';
-            }
+      type: 'doughnut',
+      data: {
+        labels: ['Pick (PTT)', 'Pick to Sort (BPS)'],
+        datasets: [{ data: catData, backgroundColor: ['#6366f1', '#f59e0b'], borderWidth: 3, borderColor: '#fff' }]
+      },
+      options: {
+        maintainAspectRatio: false,
+        layout: { padding: 10 },
+        cutout: '68%',
+        plugins: {
+          legend: { display: false },
+          datalabels: {
+            display: (ctx) => Number(ctx.dataset.data[ctx.dataIndex] || 0) > 0,
+            color: '#fff',
+            font: { size: 11, weight: '700' },
+            formatter: (v) => Math.round(donutPct(v)) + '%'
           },
-          tooltip:{
-            callbacks:{
-              label:(ctx)=>{
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
                 const idx = ctx.dataIndex;
                 const sysName = ctx.label;
                 const pVal = idx === 0 ? pttTotals.pcs : bpsTotals.pcs;
                 const qVal = idx === 0 ? pttTotals.qty : bpsTotals.qty;
-                return [
-                  ` ${sysName}`,
-                  ` จำนวนชิ้น: ${fmt(pVal)} ชิ้น`,
-                  ` หน่วยหยิบ: ${fmt(qVal)} หน่วย`
-                ];
+                return [` ${sysName}`, ` จำนวนชิ้น: ${fmt(pVal)} ชิ้น`, ` หน่วยหยิบ: ${fmt(qVal)} หน่วย`];
               }
             }
           }
         }
       }
     });
+
+    // Calculate Storage Type Breakdown (On Floor, Selective Rack, Micro Rack)
+    let typeOnFloor = 0, typeSelective = 0, typeMicro = 0;
+    (A.by_location || []).forEach(loc => {
+      const zInfo = getZoneInfo(loc.location);
+      const val = isPcs ? Number(loc.pcs || 0) : Number(loc.qty || 0);
+      const t = String(zInfo.typePick || '').trim();
+      if (t.includes('On Floor')) typeOnFloor += val;
+      else if (t.includes('Micro Rack')) typeMicro += val;
+      else typeSelective += val;
+    });
+
+    const exStorage = Chart.getChart('storageTypeChart'); if (exStorage) exStorage.destroy();
+    const storageEl = document.getElementById('storageTypeChart');
+    if (storageEl) {
+      new Chart(storageEl, {
+        type: 'bar',
+        data: {
+          labels: ['On Floor', 'Selective Rack', 'Micro Rack'],
+          datasets: [{
+            label: unitTxt,
+            data: [typeOnFloor, typeSelective, typeMicro],
+            backgroundColor: ['#10b981', '#3b82f6', '#8b5cf6'],
+            borderRadius: 6,
+            barThickness: 22
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          maintainAspectRatio: false,
+          layout: { padding: { top: 8, right: 45, bottom: 8, left: 10 } },
+          plugins: {
+            legend: { display: false },
+            datalabels: {
+              anchor: 'end',
+              align: 'end',
+              color: '#334155',
+              font: { weight: '700', size: 11 },
+              formatter: (v) => fmt(Math.ceil(v))
+            }
+          },
+          scales: {
+            x: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } },
+            y: { grid: { display: false }, ticks: { font: { weight: '600' } } }
+          }
+        }
+      });
+    }
   },
   prod(){
     const isPcs = unitMode === 'pcs';
