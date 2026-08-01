@@ -228,6 +228,45 @@
           </div>
         </div>
       </div>
+
+      <!-- 🕒 FULL-WIDTH CARD: Peak Hourly Pick Volume Timeline -->
+      <div class="card wide" style="margin-top:16px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">🕒 ปริมาณการหยิบสินค้าแยกตามช่วงเวลารายชั่วโมง (Hourly Activity Timeline)</h3>
+          <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700;">24 ชั่วโมง</span>
+        </div>
+        <div class="sub" style="margin-bottom:12px;">วิเคราะห์ช่วงเวลาพีค (Peak Hours) ของการปฏิบัติงานหยิบสินค้าตลอดวัน (00:00 - 23:00)</div>
+        <div style="height:210px; position:relative;">
+          <canvas id="hourlyPeakChart"></canvas>
+        </div>
+      </div>
+
+      <!-- 🏢 2-COLUMN GRID: Owner Volume Share & Shift Performance Comparison -->
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; margin-top: 16px;">
+        <!-- Owner Share Chart -->
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">🏢 สัดส่วนงานแยกตามเจ้าของสินค้า (Owner Share)</h3>
+            <span class="pill" style="background:#fef3c7; color:#b45309; font-weight:700;">Max Mart / Punthai / GFA</span>
+          </div>
+          <div class="sub" style="margin-bottom:12px;">ปริมาณการหยิบสินค้าจำแนกตาม Owner หลักในคลัง</div>
+          <div style="height:190px; position:relative; flex:1;">
+            <canvas id="ownerShareChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Shift Compare Chart -->
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">☀️🌙 เปรียบเทียบผลงาน (กะเช้า vs กะดึก)</h3>
+            <span class="pill" style="background:#f3e8ff; color:#7e22ce; font-weight:700;">Shift Comparison</span>
+          </div>
+          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบปริมาณงานและ Productivity ระหว่างกะวัน (07:00-16:00) และกะดึก (19:00-04:00)</div>
+          <div style="height:190px; position:relative; flex:1;">
+            <canvas id="shiftCompareChart"></canvas>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="page" data-page="prod">
@@ -476,6 +515,6 @@
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260801-typebreak-v15"></script>
+<script src="app.js?v=20260801-typebreak-v16"></script>
 </body>
 </html>

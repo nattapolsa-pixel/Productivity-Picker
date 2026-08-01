@@ -2239,9 +2239,184 @@ const builders = {
               formatter: (v) => fmt(Math.ceil(v))
             }
           },
-          scales: {
+      scales: {
             x: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } },
             y: { grid: { display: false }, ticks: { font: { weight: '600' } } }
+          }
+        }
+      });
+    }
+
+    // 1. Hourly Peak Activity Timeline (00:00 - 23:00)
+    const hourlyVol = new Array(24).fill(0);
+    ['PTT', 'BPS'].forEach(sName => {
+      const S = DATA[sName];
+      if (!S || !Array.isArray(S.rows)) return;
+      const count = packedRowCount(S);
+      for (let i = 0; i < count; i++) {
+        const sh = S._sh ? S._sh[i] : null;
+        if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
+        if (shiftF !== 'all' && sh.sh !== shiftF) continue;
+        const row = packedRowData(S, i);
+        const sku = S.skus[row.skuIdx];
+        if (isSkuExcluded(sku)) continue;
+
+        const hr = Math.floor((sh.sm || 0) / 60) % 24;
+        const val = isPcs ? row.pcs : row.pickQty;
+        hourlyVol[hr] += val;
+      }
+    });
+
+    const hourlyLabels = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0') + ':00');
+    const exHourly = Chart.getChart('hourlyPeakChart'); if (exHourly) exHourly.destroy();
+    const hourlyEl = document.getElementById('hourlyPeakChart');
+    if (hourlyEl) {
+      new Chart(hourlyEl, {
+        type: 'line',
+        data: {
+          labels: hourlyLabels,
+          datasets: [{
+            label: `ปริมาณการหยิบ (${unitTxt})`,
+            data: hourlyVol,
+            borderColor: '#2563eb',
+            backgroundColor: 'rgba(37,99,235,0.12)',
+            fill: true,
+            tension: 0.35,
+            borderWidth: 2.5,
+            pointRadius: 3,
+            pointBackgroundColor: '#2563eb'
+          }]
+        },
+        options: {
+          maintainAspectRatio: false,
+          layout: { padding: { top: 18, right: 14, bottom: 4, left: 4 } },
+          plugins: {
+            legend: { display: false },
+            datalabels: {
+              display: (ctx) => {
+                const val = ctx.dataset.data[ctx.dataIndex];
+                const max = Math.max(...ctx.dataset.data);
+                return val > 0 && val >= max * 0.45;
+              },
+              anchor: 'top',
+              align: 'top',
+              offset: 4,
+              color: '#1e40af',
+              font: { weight: '700', size: 10 },
+              formatter: (v) => fmt(Math.ceil(v))
+            }
+          },
+          scales: {
+            x: { grid: { color: '#f1f5f9' }, ticks: { font: { size: 10.5 } } },
+            y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+          }
+        }
+      });
+    }
+
+    // 2. Owner Volume Share Chart
+    const ownerMap = new Map();
+    (A.by_location || []).forEach(loc => {
+      const zInfo = getZoneInfo(loc.location);
+      const owner = zInfo.owner && zInfo.owner !== '-' ? zInfo.owner : 'อื่นๆ';
+      const val = isPcs ? Number(loc.pcs || 0) : Number(loc.qty || 0);
+      ownerMap.set(owner, (ownerMap.get(owner) || 0) + val);
+    });
+
+    const sortedOwners = [...ownerMap.entries()].sort((a, b) => b[1] - a[1]);
+    const ownerLabels = sortedOwners.map(x => x[0]);
+    const ownerValues = sortedOwners.map(x => x[1]);
+    const ownerColors = ['#f59e0b', '#10b981', '#6366f1', '#ec4899', '#8b5cf6', '#64748b'];
+
+    const exOwner = Chart.getChart('ownerShareChart'); if (exOwner) exOwner.destroy();
+    const ownerEl = document.getElementById('ownerShareChart');
+    if (ownerEl) {
+      new Chart(ownerEl, {
+        type: 'bar',
+        data: {
+          labels: ownerLabels,
+          datasets: [{
+            label: unitTxt,
+            data: ownerValues,
+            backgroundColor: ownerColors.slice(0, ownerLabels.length),
+            borderRadius: 6,
+            barThickness: 24
+          }]
+        },
+        options: {
+          maintainAspectRatio: false,
+          layout: { padding: { top: 18, right: 12, bottom: 4, left: 4 } },
+          plugins: {
+            legend: { display: false },
+            datalabels: {
+              anchor: 'end',
+              align: 'end',
+              offset: 2,
+              color: '#334155',
+              font: { weight: '700', size: 10.5 },
+              formatter: (v) => fmt(Math.ceil(v))
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { weight: '600', size: 11 } } },
+            y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+          }
+        }
+      });
+    }
+
+    // 3. Shift Performance Comparison (Day Shift vs Night Shift)
+    let dayVol = 0, nightVol = 0;
+    ['PTT', 'BPS'].forEach(sName => {
+      const S = DATA[sName];
+      if (!S || !Array.isArray(S.rows)) return;
+      const count = packedRowCount(S);
+      for (let i = 0; i < count; i++) {
+        const sh = S._sh ? S._sh[i] : null;
+        if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
+        if (shiftF !== 'all' && sh.sh !== shiftF) continue;
+        const row = packedRowData(S, i);
+        const sku = S.skus[row.skuIdx];
+        if (isSkuExcluded(sku)) continue;
+
+        const val = isPcs ? row.pcs : row.pickQty;
+        if (sh.sh === 'night') nightVol += val;
+        else dayVol += val;
+      }
+    });
+
+    const exShift = Chart.getChart('shiftCompareChart'); if (exShift) exShift.destroy();
+    const shiftEl = document.getElementById('shiftCompareChart');
+    if (shiftEl) {
+      new Chart(shiftEl, {
+        type: 'bar',
+        data: {
+          labels: ['☀️ กะวัน (07:00–16:00)', '🌙 กะดึก (19:00–04:00)'],
+          datasets: [{
+            label: unitTxt,
+            data: [dayVol, nightVol],
+            backgroundColor: ['#f59e0b', '#6366f1'],
+            borderRadius: 8,
+            barThickness: 32
+          }]
+        },
+        options: {
+          maintainAspectRatio: false,
+          layout: { padding: { top: 22, right: 12, bottom: 4, left: 4 } },
+          plugins: {
+            legend: { display: false },
+            datalabels: {
+              anchor: 'end',
+              align: 'end',
+              offset: 3,
+              color: '#0f172a',
+              font: { weight: '800', size: 12 },
+              formatter: (v) => fmt(Math.ceil(v)) + ' ' + unitTxt
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { weight: '700', size: 11.5 } } },
+            y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
           }
         }
       });
