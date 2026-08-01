@@ -135,8 +135,21 @@
     #dataState{min-height:340px;padding:32px 16px}#dataState h2{font-size:19px}#dataState p{font-size:12px}
     #uploadModal>div{width:calc(100% - 24px)!important;max-height:calc(100vh - 24px);overflow:auto;padding:18px!important;border-radius:16px!important}#uploadModal h2{font-size:17px!important}#uploadModal p{font-size:12px!important}#dropZone{padding:26px 14px!important}
   }
-  @media(max-width:420px){
-    .sidebar{padding:8px}.nav{padding:9px 10px;font-size:12px;gap:7px}.nav svg{width:16px;height:16px}.content{padding-left:10px;padding-right:10px}.kpi .val{font-size:18px}.kpi .unit{display:block;margin:5px 0 0}.chartbox{height:230px}.chartbox.tall{height:300px}.sysbar .systog button{font-size:10.5px}
+  @media print {
+    body { background: #fff !important; color: #000 !important; font-size: 11pt !important; }
+    .sidebar, .sysbar, .upload-btn, .sidebadge, #btnUploadModal, #uploadModal, #dataState, .datepreset, .refreshbtn, button, .zone-breakdown-switch, #excludedBar, #excludedZonesBar { display: none !important; }
+    .layout { display: block !important; }
+    .content { padding: 0 !important; overflow: visible !important; }
+    .print-header { display: flex !important; margin-bottom: 20px !important; border-bottom: 2px solid #0f172a !important; padding-bottom: 12px !important; }
+    .pagehead { margin-bottom: 12px !important; }
+    .page { display: block !important; opacity: 1 !important; transform: none !important; }
+    .card { box-shadow: none !important; border: 1px solid #cbd5e1 !important; break-inside: avoid; margin-bottom: 16px !important; }
+    .grid { display: block !important; }
+    .kpis { display: grid !important; grid-template-columns: repeat(5, 1fr) !important; gap: 8px !important; page-break-after: avoid; }
+    .kpi { border: 1px solid #cbd5e1 !important; box-shadow: none !important; padding: 10px !important; }
+    .kpi .val { font-size: 18px !important; }
+    .chartbox { height: 260px !important; }
+    .chartbox.tall { height: 320px !important; }
   }
 </style>
 </head>
@@ -156,6 +169,17 @@
   </nav>
 
   <main class="content">
+    <!-- 📄 Executive PDF Print Header -->
+    <div class="print-header" style="display:none;">
+      <div style="display:flex; align-items:center; gap:14px;">
+        <img src="pt_dcwn_logo.png" style="height:44px; object-fit:contain;" alt="Logo" />
+        <div>
+          <div style="font-size:18px; font-weight:800; color:#0f172a; margin:0;">รายงานสรุปผลงานและการปฏิบัติงานจัดเก็บและหยิบสินค้า (Executive Picking Productivity Report)</div>
+          <div style="font-size:12px; color:#475569; margin-top:2px;">คลังสินค้า BPS / PTT · พิมพ์รายงาน ณ <span id="printTimestamp"></span></div>
+        </div>
+      </div>
+    </div>
+
     <div class="pagehead"><h1 id="ptitle">ภาพรวม</h1><div class="daterange" id="daterange"></div></div>
     <div class="data-state" id="dataState" hidden>
       <div class="data-state-icon" id="dataStateIcon">⏳</div>
@@ -285,6 +309,16 @@
     </section>
 
     <section class="page" data-page="prod">
+      <!-- 📈 Chart 0: Target vs Actual Productivity Chart (Full Width) -->
+      <div class="card wide" style="margin-bottom:18px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
+          <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📈 เปรียบเทียบ Productivity จริง vs เป้าหมาย (Target vs Actual)</h3>
+          <span class="pill" id="targetVsActualBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">เป้าหมาย: <span id="targetBadgeVal">10</span></span>
+        </div>
+        <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ Productivity จริงในแต่ละวันกับเป้าหมายที่ตั้งไว้ (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)</div>
+        <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
+      </div>
+
       <div class="card wide">
         <h3>Productivity รายคน — Top 12</h3>
         <div class="sub">Productivity = ปริมาณตามหน่วยที่เลือก ÷ (ชั่วโมงกะ + OT) · แยกกะเช้า/ดึก · ไม่นับงานที่ต่ำกว่า 3 ชั่วโมง</div>
@@ -543,6 +577,6 @@
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260801-typebreak-v24"></script>
+<script src="app.js?v=20260801-exec-v25"></script>
 </body>
 </html>

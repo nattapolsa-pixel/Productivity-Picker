@@ -142,6 +142,27 @@ function saveExcludedSkusToStorage(){
   }catch(_){}
 }
 
+// ===== Productivity Target State & Functions =====
+let prodTarget = 10;
+const PROD_TARGET_STORAGE_KEY = 'pick_dashboard_prod_target_v1';
+
+function loadProdTargetFromStorage(){
+  try {
+    const saved = localStorage.getItem(PROD_TARGET_STORAGE_KEY);
+    if (saved !== null) {
+      const val = Number(saved);
+      if (Number.isFinite(val) && val > 0) prodTarget = val;
+    }
+  } catch(e){}
+}
+
+function saveProdTargetToStorage(val){
+  try {
+    prodTarget = val;
+    localStorage.setItem(PROD_TARGET_STORAGE_KEY, String(val));
+  } catch(e){}
+}
+
 // ===== Excluded Zones State & Functions =====
 let excludedZones = new Set();
 let excludedZonesSavedAt = null;
@@ -1320,6 +1341,7 @@ function buildControls(){
   const old = document.querySelector('.sysbar'); if(old) old.remove();
   const presetBtns = ALL_DATES.map(d=>`<button data-d="${d}">${d.slice(8)+'/'+d.slice(5,7)}</button>`).join('');
   const bar = document.createElement('div'); bar.className = 'sysbar';
+  const targetUnitTxt = unitMode === 'pcs' ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
   bar.innerHTML =
     '<span class="lab">ระบบ:</span>'
     + '<div class="systog"><button data-sys="PTT">Pick (PTT)</button><button data-sys="BPS">Pick to Sort (BPS)</button></div>'
@@ -1327,12 +1349,33 @@ function buildControls(){
     + '<div class="systog unittog"><button data-unit="units">📦 หน่วยหยิบ (Units)</button><button data-unit="pcs">🧩 จำนวนชิ้น (Pcs)</button></div>'
     + '<span class="lab">กะ:</span>'
     + '<div class="systog shiftog"><button data-sh="all">ทุกกะ</button><button data-sh="morning">🌅 เช้า</button><button data-sh="night">🌙 ดึก</button></div>'
+    + '<span class="lab">🎯 เป้า Productivity:</span>'
+    + `<div class="datebar" style="padding:4px 8px;"><input type="number" id="prodTargetInput" value="${prodTarget}" min="1" max="500" style="width:58px; font-weight:700; text-align:center;"><span style="font-size:11px; color:#64748b; font-weight:600; margin-left:4px;">${targetUnitTxt}</span></div>`
     + '<span class="lab">วันที่:</span>'
     + `<div class="datebar"><input type="date" id="dfrom" min="${DMIN}" max="${DMAX}" value="${dfrom}"><span class="sep">→</span><input type="date" id="dto" min="${DMIN}" max="${DMAX}" value="${dto}"></div>`
     + `<div class="datepreset"><button data-all="1">ทั้งหมด</button><button data-range="week">Weekly</button><button data-range="month">Monthly</button>${presetBtns}</div>`
     + '<button class="refreshbtn" id="refreshBtn">↻ รีเฟรช</button>'
+    + '<button class="refreshbtn" id="exportPdfBtn" style="color:#4338ca; border-color:#c7d2fe; background:#eef2ff;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> 📄 Export PDF</button>'
     + '<span class="freshtxt" id="freshTxt"></span>';
   document.querySelector('.pagehead').insertAdjacentElement('afterend', bar);
+
+  const targetInp = bar.querySelector('#prodTargetInput');
+  if (targetInp) {
+    targetInp.onchange = () => {
+      const val = Number(targetInp.value);
+      if (Number.isFinite(val) && val > 0) {
+        saveProdTargetToStorage(val);
+        render();
+      }
+    };
+  }
+
+  const btnPdf = bar.querySelector('#exportPdfBtn');
+  if (btnPdf) {
+    btnPdf.onclick = () => {
+      exportPDF();
+    };
+  }
 
   bar.querySelectorAll('.systog:not(.shiftog):not(.unittog) button').forEach(b => { b.classList.toggle('active', b.dataset.sys===sys); b.onclick = () => {
     if(b.dataset.sys === sys) return; sys = b.dataset.sys;
@@ -1438,6 +1481,63 @@ function renderKPIs(){
     kw.appendChild(e);
   });
   countUp();
+  renderTargetAlertBanner();
+}
+
+function renderTargetAlertBanner(){
+  let alertBox = document.getElementById('prodTargetAlertBanner');
+  if (!alertBox) {
+    alertBox = document.createElement('div');
+    alertBox.id = 'prodTargetAlertBanner';
+    const kw = document.getElementById('kpis');
+    if (kw && kw.parentNode) {
+      kw.parentNode.insertBefore(alertBox, kw.nextSibling);
+    }
+  }
+
+  const isPcs = unitMode === 'pcs';
+  const currentProd = isPcs ? (A.kpis.avg_pcs_prod || 0) : (A.kpis.avg_prod || 0);
+  const unitTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+  const isBelow = currentProd < prodTarget;
+
+  if (isBelow) {
+    const diff = (prodTarget - currentProd).toFixed(1);
+    alertBox.className = 'card wide';
+    alertBox.style.cssText = 'margin-top:14px; margin-bottom:18px; background:#fff5f5; border:1px solid #fecaca; border-left:6px solid #ef4444; padding:14px 18px; box-shadow:0 4px 14px rgba(239,68,68,0.12); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;';
+    alertBox.innerHTML = `
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span style="font-size:26px;">🚨</span>
+        <div>
+          <div style="font-weight:700; color:#991b1b; font-size:15px; display:flex; align-items:center; gap:8px;">
+            <span>แจ้งเตือน: Productivity เฉลี่ยต่ำกว่าเป้าหมาย!</span>
+            <span style="background:#ef4444; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; font-weight:700;">ต่ำกว่าเป้า ${diff} ${unitTxt}</span>
+          </div>
+          <div style="font-size:12.5px; color:#b91c1c; margin-top:3px;">
+            ค่าปัจจุบัน: <b style="font-size:14px;">${currentProd}</b> ${unitTxt} · เป้าหมายที่ตั้งไว้: <b>${prodTarget}</b> ${unitTxt}
+          </div>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="background:#fee2e2; color:#991b1b; padding:6px 12px; border-radius:8px; font-size:12px; font-weight:700; border:1px solid #fca5a5;">⚠️ ต้องการการปรับปรุงกระบวนการหยิบ</span>
+      </div>`;
+  } else {
+    alertBox.className = 'card wide';
+    alertBox.style.cssText = 'margin-top:14px; margin-bottom:18px; background:#f0fdf4; border:1px solid #bbf7d0; border-left:6px solid #16a34a; padding:12px 18px; box-shadow:0 4px 14px rgba(22,163,74,0.08); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;';
+    alertBox.innerHTML = `
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span style="font-size:24px;">🎯</span>
+        <div>
+          <div style="font-weight:700; color:#15803d; font-size:14.5px; display:flex; align-items:center; gap:8px;">
+            <span>Productivity เฉลี่ยบรรลุตามเป้าหมาย!</span>
+            <span style="background:#16a34a; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; font-weight:700;">ผ่านเกณฑ์</span>
+          </div>
+          <div style="font-size:12px; color:#166534; margin-top:2px;">
+            ค่าปัจจุบัน: <b style="font-size:13.5px;">${currentProd}</b> ${unitTxt} · เป้าหมายที่ตั้งไว้: <b>${prodTarget}</b> ${unitTxt}
+          </div>
+        </div>
+      </div>
+      <div style="background:#dcfce7; color:#15803d; padding:5px 12px; border-radius:8px; font-size:12px; font-weight:700;">✅ การปฏิบัติงานได้ตามมาตรฐาน</div>`;
+  }
 }
 function countUp(){
   document.querySelectorAll('#kpis .num[data-t]').forEach(el => {
@@ -2792,6 +2892,8 @@ const builders = {
     }
   },
   prod(){
+    renderTargetVsActualChart();
+
     const isPcs = unitMode === 'pcs';
     let p = [...A.by_picker];
     p.sort((a, b) => isPcs ? (b.avg_pcs_prod - a.avg_pcs_prod) : (b.avg_prod - a.avg_prod));
@@ -2800,6 +2902,7 @@ const builders = {
     const mainProd = isPcs ? p.map(x => x.avg_pcs_prod) : p.map(x => x.avg_prod);
     const unitLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
 
+    const exPicker = Chart.getChart('picker'); if (exPicker) exPicker.destroy();
     new Chart(document.getElementById('picker'), {
       type:'bar',
       data:{labels:p.map(x=>x.picker+' ('+x.location+')'), datasets:[{data:mainProd, backgroundColor:p.map((x,i)=>PALETTE[i%PALETTE.length]), borderRadius:6}]},
@@ -2973,12 +3076,16 @@ const builders = {
     if(!list.length) h += '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
     list.forEach((p,i) => {
       const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
-      const qtyCellStyle = !isPcs ? 'background:#eef2ff;font-weight:700;color:#4338ca;' : 'color:#4338ca;font-weight:600;';
-      const prodValue = isPcs ? p.avg_pcs_prod : p.avg_prod;
+      const prodValue = isPcs ? (p.avg_pcs_prod || 0) : (p.avg_prod || 0);
       const pickerName = p.name || getPickerName(p.picker);
       const pickerNameText = pickerName && pickerName !== p.picker ? pickerName : '-';
+      const isLow = prodValue < prodTarget;
+      const prodBadge = isLow
+        ? `<span style="background:#fee2e2; color:#991b1b; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;">⚠️ ต่ำกว่าเป้า</span>`
+        : `<span style="background:#dcfce7; color:#15803d; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;">✓ ผ่าน</span>`;
+      const prodColor = isLow ? '#dc2626' : '#16a34a';
 
-      h += `<tr style="cursor:pointer;" onclick="selectPickerDrilldown('${p.picker}')" title="คลิกเพื่อดูรายงานเจาะลึกของ ${escapeZoneHtml(p.picker)}">
+      h += `<tr style="cursor:pointer; ${isLow ? 'background:#fff5f5;' : ''}" onclick="selectPickerDrilldown('${p.picker}')" title="คลิกเพื่อดูรายงานเจาะลึกของ ${escapeZoneHtml(p.picker)}">
         <td><span class="rank">${i + 1}</span></td>
         <td><b>${p.picker}</b></td>
         <td style="line-height:1.35;"><div style="font-weight:600;">${pickerNameText}</div>${pickerNameText !== '-' ? `<div style="font-size:11px;color:#94a3b8;">${p.picker}</div>` : ''}</td>
@@ -2988,7 +3095,7 @@ const builders = {
         <td class="num" style="${pcsCellStyle}">${fmt(p.pcs)}</td>
         <td class="num" style="${qtyCellStyle}">${fmt(p.qty)}</td>
         <td class="num">${p.ot > 0 ? fmt(p.ot) : '-'}</td>
-        <td class="num" style="font-weight:700;color:#e11d48;">${fmt(prodValue)}</td>
+        <td class="num" style="font-weight:700;color:${prodColor};">${fmt(prodValue)} ${prodBadge}</td>
         <td style="text-align:center;"><button style="border:0; background:#e0e7ff; color:#4338ca; padding:4px 10px; border-radius:6px; font-size:11.5px; font-weight:600; cursor:pointer;">🔍 ดูเจาะลึก</button></td>
       </tr>`;
     });
@@ -3606,6 +3713,7 @@ async function loadDataOnce(force){
 // init
 loadExcludedSkusFromStorage();
 loadExcludedZonesFromStorage();
+loadProdTargetFromStorage();
 bindDataStateActions();
 updateExcludedZonesBar();
 document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
