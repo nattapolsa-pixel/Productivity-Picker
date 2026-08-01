@@ -359,6 +359,14 @@ function escapeZoneHtml(value){
     .replace(/'/g, '&#039;');
 }
 
+function formatRankBadge(index) {
+  const rank = index + 1;
+  if (rank === 1) return `<span class="rank rank-1">🥇 1</span>`;
+  if (rank === 2) return `<span class="rank rank-2">🥈 2</span>`;
+  if (rank === 3) return `<span class="rank rank-3">🥉 3</span>`;
+  return `<span class="rank">${rank}</span>`;
+}
+
 function formatMapValue(value){
   const n = Number(value) || 0;
   if(n < 100000) return fmt(n);
@@ -1622,7 +1630,7 @@ function renderTypeBreakdownPage(){
         const rowStyle = isSelected ? 'background:#eef2ff; font-weight:600;' : '';
         
         th += `<tr style="cursor:pointer; ${rowStyle}" onclick="selectTypePickPicker('${escapeZoneHtml(p.pickerId)}')">`;
-        th += `<td><span class="rank">${idx + 1}</span></td>`;
+        th += `<td>${formatRankBadge(idx)}</td>`;
         th += `<td>
           <div style="font-weight:700; color:#0f172a;">${escapeZoneHtml(p.pickerName)}</div>
           <div style="font-size:10.5px; color:#64748b;">ID: ${escapeZoneHtml(p.pickerId)} · ${escapeZoneHtml(p.affiliation)}</div>
