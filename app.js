@@ -3247,9 +3247,84 @@ const builders = {
       elTable.innerHTML = h;
     }
 
-    renderItemTable();
   }
 };
+
+function renderTargetVsActualChart() {
+  const el = document.getElementById('targetVsActualChart');
+  if (!el || !A || !A.daily) return;
+
+  const exChart = Chart.getChart('targetVsActualChart');
+  if (exChart) exChart.destroy();
+
+  const isPcs = unitMode === 'pcs';
+  const unitLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+
+  const badgeVal = document.getElementById('targetBadgeVal');
+  if (badgeVal) badgeVal.textContent = prodTarget + ' ' + unitLabel;
+
+  const labels = A.daily.map(d => d.date.length > 5 ? d.date.slice(5) : d.date);
+  const actualValues = A.daily.map(d => isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0));
+  const targetValues = A.daily.map(() => prodTarget);
+  const barColors = actualValues.map(v => v >= prodTarget ? '#10b981' : '#ef4444');
+
+  new Chart(el, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          type: 'line',
+          label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
+          data: targetValues,
+          borderColor: '#6366f1',
+          borderWidth: 2.5,
+          borderDash: [6, 6],
+          pointRadius: 4,
+          pointBackgroundColor: '#6366f1',
+          fill: false,
+          order: 1
+        },
+        {
+          type: 'bar',
+          label: `Productivity จริง (${unitLabel})`,
+          data: actualValues,
+          backgroundColor: barColors,
+          borderRadius: 6,
+          barThickness: 24,
+          order: 2
+        }
+      ]
+    },
+    options: {
+      maintainAspectRatio: false,
+      layout: { padding: { top: 20, right: 10, bottom: 0, left: 10 } },
+      plugins: {
+        legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
+        datalabels: {
+          anchor: 'end',
+          align: 'end',
+          color: '#334155',
+          font: { weight: '700', size: 11 },
+          formatter: (v, ctx) => ctx.datasetIndex === 1 ? (fmt(v) + ' ' + unitLabel) : ''
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
+        y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+      }
+    }
+  });
+}
+
+function exportPDF() {
+  const tsEl = document.getElementById('printTimestamp');
+  if (tsEl) {
+    const now = new Date();
+    tsEl.textContent = now.toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' });
+  }
+  window.print();
+}
 
 window.toggleExcludeSku = function(sku) {
   const key = normalizeSkuKey(sku);
