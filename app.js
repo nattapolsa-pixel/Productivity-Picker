@@ -2369,16 +2369,19 @@ const builders = {
       }
     });
 
-    // Calculate Storage Type Breakdown (On Floor, Selective Rack, Micro Rack)
-    let typeOnFloor = 0, typeSelective = 0, typeMicro = 0;
+    // Calculate Full Dynamic Type Pick Breakdown (All Type Pick Categories)
+    const typePickMap = new Map();
     (A.by_location || []).forEach(loc => {
       const zInfo = getZoneInfo(loc.location);
       const val = isPcs ? Number(loc.pcs || 0) : Number(loc.qty || 0);
-      const t = String(zInfo.typePick || '').trim();
-      if (t.includes('On Floor')) typeOnFloor += val;
-      else if (t.includes('Micro Rack')) typeMicro += val;
-      else typeSelective += val;
+      const t = String(zInfo.typePick || 'อื่นๆ').trim() || 'อื่นๆ';
+      typePickMap.set(t, (typePickMap.get(t) || 0) + val);
     });
+
+    const sortedTypePicks = [...typePickMap.entries()].sort((a, b) => b[1] - a[1]);
+    const typePickLabels = sortedTypePicks.map(x => x[0]);
+    const typePickValues = sortedTypePicks.map(x => x[1]);
+    const typePickColors = typePickLabels.map(lbl => colorForLabel(ZONE_TYPE_COLORS, lbl));
 
     const exStorage = Chart.getChart('storageTypeChart'); if (exStorage) exStorage.destroy();
     const storageEl = document.getElementById('storageTypeChart');
@@ -2386,13 +2389,13 @@ const builders = {
       new Chart(storageEl, {
         type: 'bar',
         data: {
-          labels: ['On Floor', 'Selective Rack', 'Micro Rack'],
+          labels: typePickLabels,
           datasets: [{
             label: unitTxt,
-            data: [typeOnFloor, typeSelective, typeMicro],
-            backgroundColor: ['#10b981', '#3b82f6', '#8b5cf6'],
+            data: typePickValues,
+            backgroundColor: typePickColors,
             borderRadius: 6,
-            barThickness: 22
+            barThickness: 18
           }]
         },
         options: {
@@ -2405,13 +2408,13 @@ const builders = {
               anchor: 'end',
               align: 'end',
               color: '#334155',
-              font: { weight: '700', size: 11 },
+              font: { weight: '700', size: 10.5 },
               formatter: (v) => fmt(Math.ceil(v))
             }
           },
-      scales: {
+          scales: {
             x: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } },
-            y: { grid: { display: false }, ticks: { font: { weight: '600' } } }
+            y: { grid: { display: false }, ticks: { font: { weight: '600', size: 11 } } }
           }
         }
       });
