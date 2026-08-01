@@ -2534,6 +2534,80 @@ const builders = {
       });
     }
 
+    // Affiliation Performance Chart for Overview
+    const affMap = new Map();
+    ['PTT', 'BPS'].forEach(sName => {
+      const S = DATA[sName];
+      if (!S || !Array.isArray(S.rows)) return;
+      const count = packedRowCount(S);
+      for (let i = 0; i < count; i++) {
+        const sh = S._sh ? S._sh[i] : null;
+        if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
+        if (shiftF !== 'all' && sh.sh !== shiftF) continue;
+        const row = packedRowData(S, i);
+        const sku = S.skus[row.skuIdx];
+        if (isSkuExcluded(sku)) continue;
+
+        const val = isPcs ? row.pcs : row.pickQty;
+        const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
+        const aff = getPickerAffiliation(pickerId);
+        if (!affMap.has(aff)) affMap.set(aff, { val: 0, pickers: new Set() });
+        const affRec = affMap.get(aff);
+        affRec.val += val;
+        affRec.pickers.add(pickerId);
+      }
+    });
+
+    const exAffChart = Chart.getChart('macroAffiliationChart'); if (exAffChart) exAffChart.destroy();
+    const affChartEl = document.getElementById('macroAffiliationChart');
+    if (affChartEl) {
+      const sortedAff = [...affMap.entries()].sort((a, b) => b[1].val - a[1].val);
+      const affLabels = sortedAff.map(x => x[0]);
+      const affValues = sortedAff.map(x => x[1].val);
+      const affPickers = sortedAff.map(x => x[1].pickers.size);
+
+      new Chart(affChartEl, {
+        type: 'bar',
+        data: {
+          labels: affLabels,
+          datasets: [
+            {
+              label: `ปริมาณหยิบ (${unitTxt})`,
+              data: affValues,
+              backgroundColor: '#0f766e',
+              borderRadius: 6,
+              yAxisID: 'y'
+            },
+            {
+              label: 'จำนวนพนักงาน (คน)',
+              data: affPickers,
+              backgroundColor: '#f59e0b',
+              borderRadius: 6,
+              yAxisID: 'y1'
+            }
+          ]
+        },
+        options: {
+          maintainAspectRatio: false,
+          layout: { padding: { top: 18, right: 12, bottom: 4, left: 4 } },
+          plugins: {
+            legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 8, font: { size: 10.5 } } },
+            datalabels: {
+              anchor: 'end',
+              align: 'end',
+              font: { weight: '700', size: 10 },
+              formatter: (v) => fmt(Math.ceil(v))
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { weight: '600', size: 11 } } },
+            y: { position: 'left', grid: { color: '#f1f5f9' }, ticks: { callback: fmt } },
+            y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: fmt } }
+          }
+        }
+      });
+    }
+
     // 3. Shift Performance Comparison (Day Shift vs Night Shift)
     let dayVol = 0, nightVol = 0;
     ['PTT', 'BPS'].forEach(sName => {

@@ -177,7 +177,7 @@
           <div class="chartbox"><canvas id="trend"></canvas></div>
       </div>
 
-      <!-- 📊 2-COLUMN ANALYTICS GRID: BPS vs PTT & Storage Type Distribution -->
+      <!-- 📊 ROW 1 ANALYTICS GRID: BPS vs PTT & Storage Type Distribution -->
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; margin-top: 16px;">
         <!-- Left Card: BPS vs PTT Share & Stats Panel -->
         <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; justify-space-between;">
@@ -219,7 +219,7 @@
         <!-- Right Card: Storage Type Distribution Chart -->
         <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">🏭 สัดส่วนตามรูปแบบการจัดเก็บ (Storage Type)</h3>
+            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">🏭 สัดส่วนตามรูปแบบการจัดเก็บ (Type Pick Share)</h3>
             <span class="pill" style="background:#ecfeff; color:#0891b2; font-weight:700;">On Floor / Rack</span>
           </div>
           <div class="sub" style="margin-bottom:12px;">กระจายตัวของปริมาณงานบน On Floor, Selective Rack และ Micro Rack</div>
@@ -229,19 +229,7 @@
         </div>
       </div>
 
-      <!-- 🕒 FULL-WIDTH CARD: Peak Hourly Pick Volume Timeline -->
-      <div class="card wide" style="margin-top:16px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-          <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">🕒 ปริมาณการหยิบสินค้าแยกตามช่วงเวลารายชั่วโมง (Hourly Activity Timeline)</h3>
-          <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700;">24 ชั่วโมง</span>
-        </div>
-        <div class="sub" style="margin-bottom:12px;">วิเคราะห์ช่วงเวลาพีค (Peak Hours) ของการปฏิบัติงานหยิบสินค้าตลอดวัน (00:00 - 23:00)</div>
-        <div style="height:210px; position:relative;">
-          <canvas id="hourlyPeakChart"></canvas>
-        </div>
-      </div>
-
-      <!-- 🏢 2-COLUMN GRID: Owner Volume Share & Shift Performance Comparison -->
+      <!-- 🏢 ROW 2 ANALYTICS GRID: Owner Share & Affiliation Performance -->
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; margin-top: 16px;">
         <!-- Owner Share Chart -->
         <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
@@ -255,15 +243,42 @@
           </div>
         </div>
 
+        <!-- Affiliation Chart -->
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">👥 ปริมาณงานและพนักงาน แยกตามสังกัด (Affiliation)</h3>
+            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700;">ประจำ / Outsource</span>
+          </div>
+          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบผลงานและจำนวนพนักงานระหว่าง ประจำ และ Outsource</div>
+          <div style="height:190px; position:relative; flex:1;">
+            <canvas id="macroAffiliationChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- 🕒 ROW 3 ANALYTICS GRID: Shift Compare & Peak Hourly Pick Volume Timeline -->
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; margin-top: 16px;">
         <!-- Shift Compare Chart -->
         <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
             <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">☀️🌙 เปรียบเทียบผลงาน (กะเช้า vs กะดึก)</h3>
             <span class="pill" style="background:#f3e8ff; color:#7e22ce; font-weight:700;">Shift Comparison</span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบปริมาณงานและ Productivity ระหว่างกะวัน (07:00-16:00) และกะดึก (19:00-04:00)</div>
+          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบปริมาณงานระหว่างกะวัน (07:00-16:00) และกะดึก (19:00-04:00)</div>
           <div style="height:190px; position:relative; flex:1;">
             <canvas id="shiftCompareChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Hourly Activity Chart -->
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">🕒 ปริมาณงานรายชั่วโมง (Hourly Activity)</h3>
+            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700;">24 ชั่วโมง</span>
+          </div>
+          <div class="sub" style="margin-bottom:12px;">วิเคราะห์ช่วงเวลาพีค (Peak Hours) ของการหยิบตลอดวัน</div>
+          <div style="height:190px; position:relative; flex:1;">
+            <canvas id="hourlyPeakChart"></canvas>
           </div>
         </div>
       </div>
@@ -343,45 +358,6 @@
 
       <!-- 📊 Level 1: Master Category KPI Cards (คลิกเพื่อเลือก) -->
       <div class="zone-summary" id="typepickKpis" style="margin-bottom:20px;"></div>
-
-      <!-- 📊 3 MACRO DIMENSIONS VISUAL CHARTS (Type Pick, Owner, Affiliation) -->
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 16px; margin-bottom: 20px;">
-        <!-- Chart 1: Type Pick Breakdown -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15px; font-weight:700; color:#0f172a; margin:0;">🏷️ ปริมาณงานแยกตาม ชนิดการหยิบ (Type Pick)</h3>
-            <span class="pill" style="background:#eef2ff; color:#4338ca; font-weight:700;">Type Pick</span>
-          </div>
-          <div class="sub" style="margin-bottom:10px;">เปรียบเทียบ Full Rack, Half Rack, Mezzanine, Micro Rack, On Floor</div>
-          <div style="height:195px; position:relative; flex:1;">
-            <canvas id="macroTypePickChart"></canvas>
-          </div>
-        </div>
-
-        <!-- Chart 2: Owner Volume Share -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15px; font-weight:700; color:#0f172a; margin:0;">🏢 ปริมาณงานแยกตาม เจ้าของสินค้า (Owner)</h3>
-            <span class="pill" style="background:#fef3c7; color:#b45309; font-weight:700;">Owner Share</span>
-          </div>
-          <div class="sub" style="margin-bottom:10px;">สัดส่วน Max Mart, Punthai, GFA, Lube และอื่นๆ</div>
-          <div style="height:195px; position:relative; flex:1;">
-            <canvas id="macroOwnerChart"></canvas>
-          </div>
-        </div>
-
-        <!-- Chart 3: Affiliation Performance -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15px; font-weight:700; color:#0f172a; margin:0;">👥 ปริมาณงานและพนักงาน แยกตามสังกัด (Affiliation)</h3>
-            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700;">สังกัด</span>
-          </div>
-          <div class="sub" style="margin-bottom:10px;">เปรียบเทียบผลงานระหว่าง พนักงานประจำ และ Outsource</div>
-          <div style="height:195px; position:relative; flex:1;">
-            <canvas id="macroAffiliationChart"></canvas>
-          </div>
-        </div>
-      </div>
 
       <!-- 📍 Level 2 & 3: Interactive Drill-down Grid -->
       <div class="grid">
@@ -554,6 +530,6 @@
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260801-typebreak-v17"></script>
+<script src="app.js?v=20260801-typebreak-v18"></script>
 </body>
 </html>
