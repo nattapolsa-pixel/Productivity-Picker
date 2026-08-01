@@ -344,6 +344,45 @@
       <!-- 📊 Level 1: Master Category KPI Cards (คลิกเพื่อเลือก) -->
       <div class="zone-summary" id="typepickKpis" style="margin-bottom:20px;"></div>
 
+      <!-- 📊 3 MACRO DIMENSIONS VISUAL CHARTS (Type Pick, Owner, Affiliation) -->
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 16px; margin-bottom: 20px;">
+        <!-- Chart 1: Type Pick Breakdown -->
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <h3 style="font-size:15px; font-weight:700; color:#0f172a; margin:0;">🏷️ ปริมาณงานแยกตาม ชนิดการหยิบ (Type Pick)</h3>
+            <span class="pill" style="background:#eef2ff; color:#4338ca; font-weight:700;">Type Pick</span>
+          </div>
+          <div class="sub" style="margin-bottom:10px;">เปรียบเทียบ Full Rack, Half Rack, Mezzanine, Micro Rack, On Floor</div>
+          <div style="height:195px; position:relative; flex:1;">
+            <canvas id="macroTypePickChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 2: Owner Volume Share -->
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <h3 style="font-size:15px; font-weight:700; color:#0f172a; margin:0;">🏢 ปริมาณงานแยกตาม เจ้าของสินค้า (Owner)</h3>
+            <span class="pill" style="background:#fef3c7; color:#b45309; font-weight:700;">Owner Share</span>
+          </div>
+          <div class="sub" style="margin-bottom:10px;">สัดส่วน Max Mart, Punthai, GFA, Lube และอื่นๆ</div>
+          <div style="height:195px; position:relative; flex:1;">
+            <canvas id="macroOwnerChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 3: Affiliation Performance -->
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <h3 style="font-size:15px; font-weight:700; color:#0f172a; margin:0;">👥 ปริมาณงานและพนักงาน แยกตามสังกัด (Affiliation)</h3>
+            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700;">สังกัด</span>
+          </div>
+          <div class="sub" style="margin-bottom:10px;">เปรียบเทียบผลงานระหว่าง พนักงานประจำ และ Outsource</div>
+          <div style="height:195px; position:relative; flex:1;">
+            <canvas id="macroAffiliationChart"></canvas>
+          </div>
+        </div>
+      </div>
+
       <!-- 📍 Level 2 & 3: Interactive Drill-down Grid -->
       <div class="grid">
         <!-- 🔥 HEATMAP / PICKER MATRIX TABLE (ซ้าย) -->
@@ -515,6 +554,6 @@
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260801-typebreak-v16"></script>
+<script src="app.js?v=20260801-typebreak-v17"></script>
 </body>
 </html>

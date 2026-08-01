@@ -1570,6 +1570,175 @@ function renderTypeBreakdownPage(){
     kpiEl.innerHTML = kpiHtml;
   }
 
+  // ===== RENDER 3 MACRO DIMENSIONS CHARTS =====
+  const typeMap = new Map();
+  const ownerMap = new Map();
+  const affMap = new Map();
+
+  for (let i = 0; i < count; i++) {
+    const sh = S._sh ? S._sh[i] : null;
+    if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
+    if (shiftF !== 'all' && sh.sh !== shiftF) continue;
+
+    const row = packedRowData(S, i);
+    const sku = S.skus[row.skuIdx];
+    if (isSkuExcluded(sku)) continue;
+
+    const rawLoc = (S.locations && S.locations[row.zone]) ? S.locations[row.zone] : row.zone;
+    const zInfo = getZoneInfo(rawLoc);
+    const val = isPcs ? row.pcs : row.pickQty;
+
+    // Type Pick aggregation
+    const tp = zInfo.typePick || 'อื่นๆ';
+    typeMap.set(tp, (typeMap.get(tp) || 0) + val);
+
+    // Owner aggregation
+    const ow = zInfo.owner && zInfo.owner !== '-' ? zInfo.owner : 'อื่นๆ';
+    ownerMap.set(ow, (ownerMap.get(ow) || 0) + val);
+
+    // Affiliation aggregation
+    const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
+    const aff = getPickerAffiliation(pickerId);
+    if (!affMap.has(aff)) affMap.set(aff, { val: 0, pickers: new Set() });
+    const affRec = affMap.get(aff);
+    affRec.val += val;
+    affRec.pickers.add(pickerId);
+  }
+
+  const unitTxt = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
+
+  // Render Chart 1: Type Pick Chart
+  const exTypeChart = Chart.getChart('macroTypePickChart'); if (exTypeChart) exTypeChart.destroy();
+  const typeChartEl = document.getElementById('macroTypePickChart');
+  if (typeChartEl) {
+    const sortedTypes = [...typeMap.entries()].sort((a, b) => b[1] - a[1]);
+    const typeLabels = sortedTypes.map(x => x[0]);
+    const typeValues = sortedTypes.map(x => x[1]);
+    const typeColors = typeLabels.map(lbl => colorForLabel(ZONE_TYPE_COLORS, lbl));
+
+    new Chart(typeChartEl, {
+      type: 'bar',
+      data: {
+        labels: typeLabels,
+        datasets: [{
+          label: unitTxt,
+          data: typeValues,
+          backgroundColor: typeColors,
+          borderRadius: 6,
+          barThickness: 20
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        maintainAspectRatio: false,
+        layout: { padding: { top: 6, right: 40, bottom: 4, left: 4 } },
+        plugins: {
+          legend: { display: false },
+          datalabels: {
+            anchor: 'end',
+            align: 'end',
+            color: '#334155',
+            font: { weight: '700', size: 10.5 },
+            formatter: (v) => fmt(Math.ceil(v))
+          }
+        },
+        scales: {
+          x: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } },
+          y: { grid: { display: false }, ticks: { font: { weight: '600', size: 11 } } }
+        }
+      }
+    });
+  }
+
+  // Render Chart 2: Owner Chart
+  const exOwnerChart = Chart.getChart('macroOwnerChart'); if (exOwnerChart) exOwnerChart.destroy();
+  const ownerChartEl = document.getElementById('macroOwnerChart');
+  if (ownerChartEl) {
+    const sortedOwners = [...ownerMap.entries()].sort((a, b) => b[1] - a[1]);
+    const ownerLabels = sortedOwners.map(x => x[0]);
+    const ownerValues = sortedOwners.map(x => x[1]);
+    const ownerTotal = ownerValues.reduce((a, b) => a + b, 0) || 1;
+    const ownerColors = ['#f59e0b', '#10b981', '#6366f1', '#ec4899', '#8b5cf6', '#64748b'];
+
+    new Chart(ownerChartEl, {
+      type: 'doughnut',
+      data: {
+        labels: ownerLabels,
+        datasets: [{
+          data: ownerValues,
+          backgroundColor: ownerColors.slice(0, ownerLabels.length),
+          borderWidth: 3,
+          borderColor: '#fff'
+        }]
+      },
+      options: {
+        maintainAspectRatio: false,
+        layout: { padding: 12 },
+        cutout: '62%',
+        plugins: {
+          legend: { position: 'right', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } },
+          datalabels: {
+            display: (ctx) => (ctx.dataset.data[ctx.dataIndex] / ownerTotal) > 0.05,
+            color: '#fff',
+            font: { weight: '700', size: 11 },
+            formatter: (v) => Math.round((v / ownerTotal) * 100) + '%'
+          }
+        }
+      }
+    });
+  }
+
+  // Render Chart 3: Affiliation Chart
+  const exAffChart = Chart.getChart('macroAffiliationChart'); if (exAffChart) exAffChart.destroy();
+  const affChartEl = document.getElementById('macroAffiliationChart');
+  if (affChartEl) {
+    const sortedAff = [...affMap.entries()].sort((a, b) => b[1].val - a[1].val);
+    const affLabels = sortedAff.map(x => x[0]);
+    const affValues = sortedAff.map(x => x[1].val);
+    const affPickers = sortedAff.map(x => x[1].pickers.size);
+
+    new Chart(affChartEl, {
+      type: 'bar',
+      data: {
+        labels: affLabels,
+        datasets: [
+          {
+            label: `ปริมาณหยิบ (${unitTxt})`,
+            data: affValues,
+            backgroundColor: '#0f766e',
+            borderRadius: 6,
+            yAxisID: 'y'
+          },
+          {
+            label: 'จำนวนพนักงาน (คน)',
+            data: affPickers,
+            backgroundColor: '#f59e0b',
+            borderRadius: 6,
+            yAxisID: 'y1'
+          }
+        ]
+      },
+      options: {
+        maintainAspectRatio: false,
+        layout: { padding: { top: 18, right: 12, bottom: 4, left: 4 } },
+        plugins: {
+          legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } },
+          datalabels: {
+            anchor: 'end',
+            align: 'end',
+            font: { weight: '700', size: 10 },
+            formatter: (v) => fmt(Math.ceil(v))
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { weight: '600', size: 11 } } },
+          y: { position: 'left', grid: { color: '#f1f5f9' }, ticks: { callback: fmt } },
+          y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: fmt } }
+        }
+      }
+    });
+  }
+
   // 1.5 Zone Selector Pills (Level 2 Drill-down Pills)
   if (selectedTypePickFilter !== 'all') {
     const tableTitleEl = document.getElementById('typepickTableTitle');
