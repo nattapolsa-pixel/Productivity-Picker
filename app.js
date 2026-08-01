@@ -2431,7 +2431,7 @@ const builders = {
         const sku = S.skus[row.skuIdx];
         if (isSkuExcluded(sku)) continue;
 
-        const hr = Math.floor((sh.sm || 0) / 60) % 24;
+        const hr = Math.floor((Number(row.tmin) || 0) / 60) % 24;
         const val = isPcs ? row.pcs : row.pickQty;
         hourlyVol[hr] += val;
       }
