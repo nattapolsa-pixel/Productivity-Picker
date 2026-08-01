@@ -1171,7 +1171,7 @@ function aggregate(system, from, to, sf){
 // ยอดรวมของระบบตามช่วง+กะ (สแกนครั้งเดียวได้ทั้งชิ้นและหน่วยหยิบ)
 function sysTotals(system, from, to, sf){
   const S = DATA[system], SH = S._sh || [];
-  let pcs = 0, qty = 0;
+  let pcs = 0, qty = 0, lines = 0;
   const rowCount = packedRowCount(S);
   for(let i=0;i<rowCount;i++){
     const si = SH[i];
@@ -1180,10 +1180,11 @@ function sysTotals(system, from, to, sf){
       if(!isSkuExcluded(sku)){
         pcs += r.pcs;
         qty += r.pickQty;
+        lines++;
       }
     }
   }
-  return {pcs, qty};
+  return {pcs, qty, lines};
 }
 
 // ===== controls =====

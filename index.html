@@ -178,106 +178,106 @@
       </div>
 
       <!-- 📊 ROW 1 ANALYTICS GRID: BPS vs PTT & Storage Type Distribution -->
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; margin-top: 16px;">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
         <!-- Left Card: BPS vs PTT Share & Stats Panel -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; justify-space-between;">
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">📊 สัดส่วนระบบ (BPS vs PTT)</h3>
-            <span class="pill" id="catTotalBadge" style="background:#eef2ff; color:#4338ca; font-weight:700;">-</span>
+            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📊 สัดส่วนระบบ (BPS vs PTT)</h3>
+            <span class="pill" id="catTotalBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">-</span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบสัดส่วนยอดหยิบ Pick (PTT) vs Pick to Sort (BPS)</div>
+          <div class="sub" style="margin-bottom:14px;">เปรียบเทียบสัดส่วนยอดหยิบ Pick (PTT) vs Pick to Sort (BPS)</div>
           
-          <div style="display:grid; grid-template-columns: 180px 1fr; gap:14px; align-items:center; flex:1;">
-            <div style="height:190px; position:relative; display:flex; align-items:center; justify-content:center;">
+          <div style="display:grid; grid-template-columns: 200px 1fr; gap:16px; align-items:center; flex:1;">
+            <div style="height:200px; position:relative; display:flex; align-items:center; justify-content:center;">
               <canvas id="cat"></canvas>
             </div>
             <!-- Detailed Stats Breakdown Panel -->
-            <div id="catStatsBreakdown" style="display:flex; flex-direction:column; gap:10px;">
+            <div id="catStatsBreakdown" style="display:flex; flex-direction:column; gap:12px;">
               <!-- PTT Stat Box -->
-              <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #6366f1; border-radius:10px; padding:10px 12px;">
-                <div style="font-size:11px; font-weight:700; color:#4338ca; display:flex; justify-content:space-between;">
+              <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:5px solid #6366f1; border-radius:12px; padding:12px 16px;">
+                <div style="font-size:12px; font-weight:700; color:#4338ca; display:flex; justify-content:space-between;">
                   <span>🟣 Pick (PTT)</span>
-                  <span id="pttSharePct" style="font-weight:800; color:#4338ca;">0%</span>
+                  <span id="pttSharePct" style="font-weight:800; color:#4338ca; font-size:14px;">0%</span>
                 </div>
-                <div style="font-size:17px; font-weight:800; color:#0f172a; margin-top:2px;" id="pttVal">0</div>
-                <div style="font-size:10px; color:#64748b; margin-top:2px;" id="pttSubText">0 ชิ้น / 0 Lines</div>
+                <div style="font-size:19px; font-weight:800; color:#0f172a; margin-top:2px;" id="pttVal">0</div>
+                <div style="font-size:11px; color:#64748b; margin-top:2px;" id="pttSubText">0 ชิ้น · 0 Lines</div>
               </div>
 
               <!-- BPS Stat Box -->
-              <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #f59e0b; border-radius:10px; padding:10px 12px;">
-                <div style="font-size:11px; font-weight:700; color:#d97706; display:flex; justify-content:space-between;">
+              <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:5px solid #f59e0b; border-radius:12px; padding:12px 16px;">
+                <div style="font-size:12px; font-weight:700; color:#d97706; display:flex; justify-content:space-between;">
                   <span>🟠 Pick to Sort (BPS)</span>
-                  <span id="bpsSharePct" style="font-weight:800; color:#d97706;">0%</span>
+                  <span id="bpsSharePct" style="font-weight:800; color:#d97706; font-size:14px;">0%</span>
                 </div>
-                <div style="font-size:17px; font-weight:800; color:#0f172a; margin-top:2px;" id="bpsVal">0</div>
-                <div style="font-size:10px; color:#64748b; margin-top:2px;" id="bpsSubText">0 ชิ้น / 0 Lines</div>
+                <div style="font-size:19px; font-weight:800; color:#0f172a; margin-top:2px;" id="bpsVal">0</div>
+                <div style="font-size:11px; color:#64748b; margin-top:2px;" id="bpsSubText">0 ชิ้น · 0 Lines</div>
               </div>
             </div>
           </div>
         </div>
 
         <!-- Right Card: Storage Type Distribution Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">🏭 สัดส่วนตามรูปแบบการจัดเก็บ (Type Pick Share)</h3>
-            <span class="pill" style="background:#ecfeff; color:#0891b2; font-weight:700;">On Floor / Rack</span>
+            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🏭 สัดส่วนตามรูปแบบการจัดเก็บ (Type Pick Share)</h3>
+            <span class="pill" style="background:#ecfeff; color:#0891b2; font-weight:700; font-size:12.5px; padding:3px 10px;">On Floor / Rack</span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">กระจายตัวของปริมาณงานบน On Floor, Selective Rack และ Micro Rack</div>
-          <div style="height:190px; position:relative; flex:1;">
+          <div class="sub" style="margin-bottom:14px;">กระจายตัวของปริมาณงานบน On Floor, Selective Rack และ Micro Rack</div>
+          <div style="height:200px; position:relative; flex:1;">
             <canvas id="storageTypeChart"></canvas>
           </div>
         </div>
       </div>
 
       <!-- 🏢 ROW 2 ANALYTICS GRID: Owner Share & Affiliation Performance -->
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; margin-top: 16px;">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
         <!-- Owner Share Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">🏢 สัดส่วนงานแยกตามเจ้าของสินค้า (Owner Share)</h3>
-            <span class="pill" style="background:#fef3c7; color:#b45309; font-weight:700;">Max Mart / Punthai / GFA</span>
+            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🏢 สัดส่วนงานแยกตามเจ้าของสินค้า (Owner Share)</h3>
+            <span class="pill" style="background:#fef3c7; color:#b45309; font-weight:700; font-size:12.5px; padding:3px 10px;">Max Mart / Punthai / GFA</span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">ปริมาณการหยิบสินค้าจำแนกตาม Owner หลักในคลัง</div>
-          <div style="height:190px; position:relative; flex:1;">
+          <div class="sub" style="margin-bottom:14px;">ปริมาณการหยิบสินค้าจำแนกตาม Owner หลักในคลัง</div>
+          <div style="height:200px; position:relative; flex:1;">
             <canvas id="ownerShareChart"></canvas>
           </div>
         </div>
 
         <!-- Affiliation Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">👥 ปริมาณงานและพนักงาน แยกตามสังกัด (Affiliation)</h3>
-            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700;">ประจำ / Outsource</span>
+            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">👥 ปริมาณงานและพนักงาน แยกตามสังกัด (Affiliation)</h3>
+            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700; font-size:12.5px; padding:3px 10px;">ประจำ / Outsource</span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบผลงานและจำนวนพนักงานระหว่าง ประจำ และ Outsource</div>
-          <div style="height:190px; position:relative; flex:1;">
+          <div class="sub" style="margin-bottom:14px;">เปรียบเทียบผลงานและจำนวนพนักงานระหว่าง ประจำ และ Outsource</div>
+          <div style="height:200px; position:relative; flex:1;">
             <canvas id="macroAffiliationChart"></canvas>
           </div>
         </div>
       </div>
 
       <!-- 🕒 ROW 3 ANALYTICS GRID: Shift Compare & Peak Hourly Pick Volume Timeline -->
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; margin-top: 16px;">
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
         <!-- Shift Compare Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">☀️🌙 เปรียบเทียบผลงาน (กะเช้า vs กะดึก)</h3>
-            <span class="pill" style="background:#f3e8ff; color:#7e22ce; font-weight:700;">Shift Comparison</span>
+            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">☀️🌙 เปรียบเทียบผลงาน (กะเช้า vs กะดึก)</h3>
+            <span class="pill" style="background:#f3e8ff; color:#7e22ce; font-weight:700; font-size:12.5px; padding:3px 10px;">Shift Comparison</span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบปริมาณงานระหว่างกะวัน (07:00-16:00) และกะดึก (19:00-04:00)</div>
-          <div style="height:190px; position:relative; flex:1;">
+          <div class="sub" style="margin-bottom:14px;">เปรียบเทียบปริมาณงานระหว่างกะวัน (07:00-16:00) และกะดึก (19:00-04:00)</div>
+          <div style="height:200px; position:relative; flex:1;">
             <canvas id="shiftCompareChart"></canvas>
           </div>
         </div>
 
         <!-- Hourly Activity Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column;">
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin:0;">🕒 ปริมาณงานรายชั่วโมง (Hourly Activity)</h3>
-            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700;">24 ชั่วโมง</span>
+            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🕒 ปริมาณงานรายชั่วโมง (Hourly Activity)</h3>
+            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700; font-size:12.5px; padding:3px 10px;">24 ชั่วโมง</span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">วิเคราะห์ช่วงเวลาพีค (Peak Hours) ของการหยิบตลอดวัน</div>
-          <div style="height:190px; position:relative; flex:1;">
+          <div class="sub" style="margin-bottom:14px;">วิเคราะห์ช่วงเวลาพีค (Peak Hours) ของการหยิบตลอดวัน</div>
+          <div style="height:200px; position:relative; flex:1;">
             <canvas id="hourlyPeakChart"></canvas>
           </div>
         </div>
@@ -530,6 +530,6 @@
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260801-typebreak-v18"></script>
+<script src="app.js?v=20260801-typebreak-v19"></script>
 </body>
 </html>
