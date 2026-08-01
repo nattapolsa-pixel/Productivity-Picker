@@ -142,6 +142,108 @@ function saveExcludedSkusToStorage(){
   }catch(_){}
 }
 
+// ===== Excluded Zones State & Functions =====
+let excludedZones = new Set();
+let excludedZonesSavedAt = null;
+const EXCLUDED_ZONES_STORAGE_KEY = 'pick_dashboard_excluded_zones_v1';
+
+function isZoneExcluded(zoneCode){
+  if(excludedZones.size === 0) return false;
+  const z = String(zoneCode || '').trim().toUpperCase();
+  if(!z || z === '-') return false;
+  return excludedZones.has(z);
+}
+
+function loadExcludedZonesFromStorage(){
+  try{
+    const raw = localStorage.getItem(EXCLUDED_ZONES_STORAGE_KEY);
+    if(!raw){
+      excludedZones = new Set();
+      excludedZonesSavedAt = null;
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    const list = Array.isArray(parsed)
+      ? parsed
+      : (parsed && Array.isArray(parsed.zones) ? parsed.zones : []);
+    excludedZones = new Set(list.map(z => String(z).trim().toUpperCase()).filter(Boolean));
+    excludedZonesSavedAt = parsed && parsed.updatedAt ? parsed.updatedAt : null;
+  }catch(_){
+    excludedZones = new Set();
+    excludedZonesSavedAt = null;
+  }
+}
+
+function saveExcludedZonesToStorage(){
+  try{
+    const payload = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      zones: [...excludedZones].map(z => String(z).trim().toUpperCase()).filter(Boolean).sort()
+    };
+    localStorage.setItem(EXCLUDED_ZONES_STORAGE_KEY, JSON.stringify(payload));
+    excludedZonesSavedAt = payload.updatedAt;
+  }catch(_){}
+}
+
+function toggleZoneExclusion(zoneCode){
+  const z = String(zoneCode || '').trim().toUpperCase();
+  if(!z) return;
+  if(excludedZones.has(z)){
+    excludedZones.delete(z);
+  }else{
+    excludedZones.add(z);
+  }
+  saveExcludedZonesToStorage();
+  excludedSkuRevision++;
+  computeAggregations();
+  renderCurrentPage();
+  updateExcludedZonesBar();
+}
+
+function clearExcludedZones(){
+  excludedZones.clear();
+  saveExcludedZonesToStorage();
+  excludedSkuRevision++;
+  computeAggregations();
+  renderCurrentPage();
+  updateExcludedZonesBar();
+}
+
+function updateExcludedZonesBar(){
+  const bar = document.getElementById('excludedZonesBar');
+  const countBadge = document.getElementById('excludedZonesCountBadge');
+  const savedAtBadge = document.getElementById('excludedZonesSavedAt');
+  const badgesContainer = document.getElementById('excludedZonesBadges');
+
+  if(!bar) return;
+
+  if(excludedZones.size === 0){
+    bar.style.display = 'none';
+    return;
+  }
+
+  bar.style.display = 'block';
+  if(countBadge) countBadge.textContent = excludedZones.size.toLocaleString();
+  if(savedAtBadge){
+    savedAtBadge.textContent = excludedZonesSavedAt
+      ? `บันทึกล่าสุด: ${formatThaiDateTime(excludedZonesSavedAt)}`
+      : '';
+  }
+
+  if(badgesContainer){
+    let badgesHtml = '';
+    excludedZones.forEach(zCode => {
+      badgesHtml += `
+        <span style="display:inline-flex; align-items:center; gap:6px; background:#ffffff; border:1px solid #bbf7d0; color:#15803d; padding:4px 10px; border-radius:8px; font-size:12px; font-weight:600; box-shadow:0 2px 4px rgba(0,0,0,0.02);">
+          <span>📍 Zone ${escapeZoneHtml(zCode)}</span>
+          <button onclick="toggleZoneExclusion('${escapeZoneHtml(zCode)}')" style="border:0; background:none; color:#dc2626; cursor:pointer; font-weight:700; padding:0 2px;">✕</button>
+        </span>`;
+    });
+    badgesContainer.innerHTML = badgesHtml;
+  }
+}
+
 function invalidateAggregationCache(){
   excludedSkuRevision++;
   aggregateCache.clear();
@@ -604,9 +706,22 @@ function openZoneDetailModal(zoneCode) {
     const overallVal = isPcs ? totalPcs : totalQty;
     const overallProd = totalWorkHours > 0 ? (overallVal / totalWorkHours) : 0;
 
+    const isEx = isZoneExcluded(zoneCode);
+    const exBtnStyle = isEx
+      ? 'background:#16a34a; color:#fff; border:0; padding:6px 14px; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; box-shadow:0 2px 6px rgba(22,163,74,0.3); transition:.2s;'
+      : 'background:#ef4444; color:#fff; border:0; padding:6px 14px; border-radius:8px; font-size:12px; font-weight:700; cursor:pointer; box-shadow:0 2px 6px rgba(239,68,68,0.3); transition:.2s;';
+    const exBtnText = isEx
+      ? `✅ นำโซน ${escapeZoneHtml(zoneCode)} กลับเข้าการคำนวณ`
+      : `🚫 ตัดโซน ${escapeZoneHtml(zoneCode)} ออกจากการคำนวณ`;
+
     const titleEl = document.getElementById('zoneModalTitle');
     const subEl = document.getElementById('zoneModalSub');
-    if (titleEl) titleEl.innerHTML = `📍 รายละเอียดและผลงานใน Zone: <span style="color:#fbbf24; font-weight:800; font-size:20px; text-decoration:underline;">${escapeZoneHtml(zoneCode)}</span>`;
+    if (titleEl) {
+      titleEl.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; width:100%; flex-wrap:wrap; gap:10px;">
+        <span>📍 รายละเอียดและผลงานใน Zone: <span style="color:#fbbf24; font-weight:800; font-size:20px; text-decoration:underline;">${escapeZoneHtml(zoneCode)}</span> ${isEx ? '<span style="background:#ef4444; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; margin-left:6px; font-weight:700;">[ถูกตัดออกจากการคำนวณ]</span>' : ''}</span>
+        <button onclick="toggleZoneExclusion('${escapeZoneHtml(zoneCode)}'); openZoneDetailModal('${escapeZoneHtml(zoneCode)}');" style="${exBtnStyle}">${exBtnText}</button>
+      </div>`;
+    }
     if (subEl) subEl.textContent = `ชนิดการจัดเก็บ: ${zoneInfo.typePick || '-'} · เจ้าของสินค้า: ${zoneInfo.owner || '-'} · ช่วงวันที่: ${dfrom} ถึง ${dto}`;
 
     const bodyEl = document.getElementById('zoneModalBody');
@@ -3489,7 +3604,9 @@ async function loadDataOnce(force){
 
 // init
 loadExcludedSkusFromStorage();
+loadExcludedZonesFromStorage();
 bindDataStateActions();
+updateExcludedZonesBar();
 document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
 async function bootstrapDashboard(){
   await restoreDashboardFromCache();
