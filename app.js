@@ -195,19 +195,17 @@ function toggleZoneExclusion(zoneCode){
     excludedZones.add(z);
   }
   saveExcludedZonesToStorage();
-  excludedSkuRevision++;
-  computeAggregations();
-  renderCurrentPage();
+  invalidateAggregationCache();
   updateExcludedZonesBar();
+  render();
 }
 
 function clearExcludedZones(){
   excludedZones.clear();
   saveExcludedZonesToStorage();
-  excludedSkuRevision++;
-  computeAggregations();
-  renderCurrentPage();
+  invalidateAggregationCache();
   updateExcludedZonesBar();
+  render();
 }
 
 function updateExcludedZonesBar(){
@@ -989,6 +987,9 @@ function aggregate(system, from, to, sf){
     // หาก SKU นี้ถูกเลือกยกเว้น -> ข้ามไม่นำมาคิดสถิติรวมของระบบ
     // กรองก่อนสร้าง Zone/Location/Picker/OT ทุกชุด เพื่อไม่ให้ SKU ที่ยกเว้นหลุดไปคำนวณต่อ
     if (isSkuExcluded(sku)) continue;
+
+    // หาก Zone นี้ถูกเลือกยกเว้น -> ข้ามไม่นำมาคิดสถิติรวมทั้งหมด
+    if (isZoneExcluded(zone)) continue;
 
     lines++; pcs += pVal; pickQty += qVal; pickers.add(picker); zones.add(zone);
     (zoneMap[zone] = zoneMap[zone] || {
