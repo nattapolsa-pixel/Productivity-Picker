@@ -170,14 +170,26 @@
     <section class="page active" data-page="overview">
       <div class="kpis" id="kpis"></div>
       <div class="grid">
+        <!-- 📈 Chart 1: Trend Chart (Full Width) -->
         <div class="card wide">
           <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
           <div class="sub">แท่ง = ปริมาณตามหน่วยที่เลือก (ซ้าย) · เส้น = Productivity เฉลี่ยตามหน่วยที่เลือก (ขวา) · หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ</div>
           <div class="controls"><div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button data-mode="week">รายสัปดาห์</button><button data-mode="month">รายเดือน</button></div></div>
           <div class="chartbox"><canvas id="trend"></canvas></div>
+        </div>
+
+        <!-- 🕒 Chart 2: Hourly Activity Timeline (Full Width - Identical Size to Trend) -->
+        <div class="card wide" style="margin-top:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+            <h3 style="font-size:16.5px; font-weight:700; color:#0f172a; margin:0;">🕒 ปริมาณงานรายชั่วโมง (Hourly Activity Timeline)</h3>
+            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700; font-size:12.5px; padding:3px 10px;">24 ชั่วโมง (00:00 - 23:00 น.)</span>
+          </div>
+          <div class="sub" style="margin-bottom:12px;">วิเคราะห์ช่วงเวลาพีค (Peak Hours) ของการปฏิบัติงานหยิบสินค้าตลอดวัน (00:00 - 23:00 น.)</div>
+          <div class="chartbox"><canvas id="hourlyPeakChart"></canvas></div>
+        </div>
       </div>
 
-      <!-- 📊 ROW 1 ANALYTICS GRID: BPS vs PTT & Storage Type Distribution -->
+      <!-- 📊 ROW 2 ANALYTICS GRID: BPS vs PTT & Storage Type Distribution -->
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
         <!-- Left Card: BPS vs PTT Share & Stats Panel -->
         <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
@@ -229,7 +241,7 @@
         </div>
       </div>
 
-      <!-- 🏢 ROW 2 ANALYTICS GRID: Owner Share & Affiliation Performance -->
+      <!-- 🏢 ROW 3 ANALYTICS GRID: Owner Share & Affiliation Performance -->
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
         <!-- Owner Share Chart -->
         <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
@@ -256,10 +268,10 @@
         </div>
       </div>
 
-      <!-- 🕒 ROW 3 ANALYTICS GRID: Shift Compare & Peak Hourly Pick Volume Timeline -->
+      <!-- ☀️🌙 ROW 4 ANALYTICS GRID: Shift Compare -->
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
         <!-- Shift Compare Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
+        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px; grid-column: span 2;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
             <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">☀️🌙 เปรียบเทียบผลงาน (กะเช้า vs กะดึก)</h3>
             <span class="pill" style="background:#f3e8ff; color:#7e22ce; font-weight:700; font-size:12.5px; padding:3px 10px;">Shift Comparison</span>
@@ -267,18 +279,6 @@
           <div class="sub" style="margin-bottom:14px;">เปรียบเทียบปริมาณงานระหว่างกะวัน (07:00-16:00) และกะดึก (19:00-04:00)</div>
           <div style="height:200px; position:relative; flex:1;">
             <canvas id="shiftCompareChart"></canvas>
-          </div>
-        </div>
-
-        <!-- Hourly Activity Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🕒 ปริมาณงานรายชั่วโมง (Hourly Activity)</h3>
-            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700; font-size:12.5px; padding:3px 10px;">24 ชั่วโมง</span>
-          </div>
-          <div class="sub" style="margin-bottom:14px;">วิเคราะห์ช่วงเวลาพีค (Peak Hours) ของการหยิบตลอดวัน</div>
-          <div style="height:200px; position:relative; flex:1;">
-            <canvas id="hourlyPeakChart"></canvas>
           </div>
         </div>
       </div>
@@ -530,6 +530,6 @@
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260801-typebreak-v20"></script>
+<script src="app.js?v=20260801-typebreak-v21"></script>
 </body>
 </html>

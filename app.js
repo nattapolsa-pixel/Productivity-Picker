@@ -2441,6 +2441,7 @@ const builders = {
     const exHourly = Chart.getChart('hourlyPeakChart'); if (exHourly) exHourly.destroy();
     const hourlyEl = document.getElementById('hourlyPeakChart');
     if (hourlyEl) {
+      const maxVol = Math.max(1, ...hourlyVol);
       new Chart(hourlyEl, {
         type: 'line',
         data: {
@@ -2448,36 +2449,41 @@ const builders = {
           datasets: [{
             label: `ปริมาณการหยิบ (${unitTxt})`,
             data: hourlyVol,
-            borderColor: '#2563eb',
-            backgroundColor: 'rgba(37,99,235,0.12)',
+            borderColor: '#6366f1',
+            backgroundColor: 'rgba(99, 102, 241, 0.12)',
             fill: true,
             tension: 0.35,
-            borderWidth: 2.5,
-            pointRadius: 3,
-            pointBackgroundColor: '#2563eb'
+            borderWidth: 2.8,
+            pointRadius: 4,
+            pointHoverRadius: 6,
+            pointBackgroundColor: '#4338ca'
           }]
         },
         options: {
           maintainAspectRatio: false,
-          layout: { padding: { top: 18, right: 14, bottom: 4, left: 4 } },
+          layout: { padding: { top: 32, right: 16, bottom: 8, left: 4 } },
           plugins: {
             legend: { display: false },
             datalabels: {
               display: (ctx) => {
                 const val = ctx.dataset.data[ctx.dataIndex];
-                const max = Math.max(...ctx.dataset.data);
-                return val > 0 && val >= max * 0.45;
+                return val > 0 && (val >= maxVol * 0.15 || ctx.dataIndex % 2 === 0);
               },
-              anchor: 'top',
+              anchor: 'end',
               align: 'top',
-              offset: 4,
-              color: '#1e40af',
-              font: { weight: '700', size: 10 },
+              offset: 6,
+              color: '#3730a3',
+              backgroundColor: 'rgba(255, 255, 255, 0.95)',
+              borderColor: 'rgba(99, 102, 241, 0.3)',
+              borderWidth: 1,
+              borderRadius: 4,
+              padding: { top: 2, right: 5, bottom: 2, left: 5 },
+              font: { weight: '700', size: 10.5 },
               formatter: (v) => fmt(Math.ceil(v))
             }
           },
           scales: {
-            x: { grid: { color: '#f1f5f9' }, ticks: { font: { size: 10.5 } } },
+            x: { grid: { color: '#f1f5f9' }, ticks: { font: { weight: '600', size: 11 } } },
             y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
           }
         }
