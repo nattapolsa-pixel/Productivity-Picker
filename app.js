@@ -5,9 +5,9 @@
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
-// v4 is the first payload whose pick_qty is final UOM from BigQuery.  Do not
-// accept an older payload: its pick_qty has the retired Pack Size semantics.
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v4';
+// v5 sends pre-aggregated BigQuery cubes. Do not accept an older payload:
+// its pick_qty may have the retired Pack Size semantics or row-level format.
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v5-cubes';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -49,8 +49,8 @@ Chart.defaults.color = '#64748b';
 // ===== state =====
 const emptyData = () => ({
   meta:{schema_version:DASHBOARD_SCHEMA_VERSION},
-  PTT:{row_width:7,dates:[],pickers:[],skus:[],rows:[]},
-  BPS:{row_width:7,dates:[],pickers:[],skus:[],rows:[]}
+  PTT:{row_width:9,item_row_width:7,slot_row_width:8,dates:[],pickers:[],skus:[],rows:[],item_rows:[],slot_rows:[]},
+  BPS:{row_width:9,item_row_width:7,slot_row_width:8,dates:[],pickers:[],skus:[],rows:[],item_rows:[],slot_rows:[]}
 });
 let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
@@ -76,7 +76,9 @@ const DASHBOARD_CACHE_DB = 'pick_dashboard_cache_v1';
 const DASHBOARD_CACHE_STORE = 'responses';
 // แยก cache ออกจากข้อมูลรุ่นที่เคยคำนวณ Pack Size ใน browser เพื่อไม่ให้ใช้ยอดเก่า
 const DASHBOARD_CACHE_KEY = DASHBOARD_SCHEMA_VERSION + ':bq-pick-qty:latest';
-const DASHBOARD_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+// แสดงข้อมูลที่เคยโหลดสำเร็จก่อนทันที แล้วตรวจ revision เบื้องหลัง
+// เก็บได้นานขึ้นเพื่อไม่ให้ผู้ใช้เจอหน้าว่างเพียงเพราะไม่ได้เปิดเว็บเกิน 1 วัน
+const DASHBOARD_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function normalizeSkuKey(sku){
   const value = String(sku ?? '').replace(/\u00a0/g, ' ').trim();
@@ -101,6 +103,14 @@ function skuKeyVariants(sku){
 function isSkuExcluded(sku){
   if(excludedSkus.size === 0) return false;
   return skuKeyVariants(sku).some(key => excludedSkus.has(key));
+}
+
+function currentExcludedSkuList(){
+  return [...excludedSkus].map(normalizeSkuKey).filter(Boolean).sort();
+}
+
+function dashboardScopeQuery(){
+  return 'excluded_skus=' + encodeURIComponent(JSON.stringify(currentExcludedSkuList()));
 }
 
 function formatThaiDateTime(value){
@@ -313,7 +323,7 @@ function shiftOf(ds, t){
 // OT = จำนวนบล็อก 30 นาทีที่ทำครบ นับจากนาทีที่ 570 (16:30/04:30) ต้นกะ, สูงสุด OT_MAX
 function otHours(maxSm){ if(maxSm <= 570) return 0; return Math.min(OT_MAX, Math.floor((maxSm - 570)/30) * 0.5); }
 
-// payload รุ่นปัจจุบันเป็น flat array 7 ช่องต่อแถว
+// payload รุ่นเร็วเป็น cube แยกตามงาน: Work / Item / Time slot
 function packedRowCount(S){
   const width = Number(S && S.row_width) || 0;
   return S && Array.isArray(S.rows) ? (width ? Math.floor(S.rows.length / width) : S.rows.length) : 0;
@@ -326,40 +336,69 @@ function readBigQueryPickQty(value){
 }
 
 function packedRowData(S, i){
-  if (Number(S && S.row_width) !== 7) {
+  if (Number(S && S.row_width) !== 9) {
     throw new Error('Dashboard payload schema ไม่ตรงกับหน้าเว็บ');
   }
-  const skuIdx = S.rows[i*7+3];
-  const pcs = Number(S.rows[i*7+4]) || 0;
-  const bqPickQty = readBigQueryPickQty(S.rows[i*7+5]);
-  const cachedPickQty = S._pickQty && Number(S._pickQty[i]);
+  const offset = i * 9;
   return {
-    dateIdx: S.rows[i*7],
-    zone: S.rows[i*7+1],
-    pickerIdx: S.rows[i*7+2],
-    skuIdx,
-    pcs,
-    pickQty: Number.isFinite(cachedPickQty)
-      ? cachedPickQty
-      : bqPickQty,
-    tmin: S.rows[i*7+6]
+    dateIdx: S.rows[offset],
+    shiftCode: Number(S.rows[offset+1]) || 0,
+    zone: S.rows[offset+2],
+    pickerIdx: S.rows[offset+3],
+    pcs: Number(S.rows[offset+4]) || 0,
+    pickQty: readBigQueryPickQty(S.rows[offset+5]),
+    lines: Number(S.rows[offset+6]) || 0,
+    minSm: Number(S.rows[offset+7]) || 0,
+    maxSm: Number(S.rows[offset+8]) || 0
   };
 }
 
-// precompute ข้อมูลกะและ UOM จาก BigQuery ต่อแถว "ครั้งเดียว" หลังโหลดข้อมูล -> re-render (เปลี่ยน filter) เร็วขึ้นมาก
+function packedItemRowCount(S){
+  const width = Number(S && S.item_row_width) || 0;
+  return S && Array.isArray(S.item_rows) && width ? Math.floor(S.item_rows.length / width) : 0;
+}
+function packedItemRowData(S, i){
+  if(Number(S && S.item_row_width) !== 7) throw new Error('Dashboard item cube ไม่ตรงกับหน้าเว็บ');
+  const o = i * 7;
+  return {
+    dateIdx:S.item_rows[o], shiftCode:Number(S.item_rows[o+1])||0,
+    zone:S.item_rows[o+2], skuIdx:S.item_rows[o+3],
+    pcs:Number(S.item_rows[o+4])||0, pickQty:readBigQueryPickQty(S.item_rows[o+5]),
+    lines:Number(S.item_rows[o+6])||0
+  };
+}
+function packedSlotRowCount(S){
+  const width = Number(S && S.slot_row_width) || 0;
+  return S && Array.isArray(S.slot_rows) && width ? Math.floor(S.slot_rows.length / width) : 0;
+}
+function packedSlotRowData(S, i){
+  if(Number(S && S.slot_row_width) !== 8) throw new Error('Dashboard time-slot cube ไม่ตรงกับหน้าเว็บ');
+  const o = i * 8;
+  return {
+    dateIdx:S.slot_rows[o], shiftCode:Number(S.slot_rows[o+1])||0,
+    zone:S.slot_rows[o+2], pickerIdx:S.slot_rows[o+3], hour:Number(S.slot_rows[o+4])||0,
+    pcs:Number(S.slot_rows[o+5])||0, pickQty:readBigQueryPickQty(S.slot_rows[o+6]),
+    lines:Number(S.slot_rows[o+7])||0
+  };
+}
+
+// Work cube ส่งวันของกะและ min/max นาทีจากต้นกะมาแล้ว จึงไม่ต้องคำนวณซ้ำจากข้อมูลรายบรรทัด
 function prepShifts(){
   ['PTT','BPS'].forEach(n => {
     const S = DATA[n];
     if(!S || !Array.isArray(S.rows)) return;
     const count = packedRowCount(S);
     S._sh = new Array(count);
-    S._pickQty = new Array(count);
     for(let i=0;i<count;i++) {
-      const offset = i * 7;
+      const offset = i * 9;
       const dateIdx = S.rows[offset];
-      const tmin = Number(S.rows[offset + 6]) || 0;
-      S._pickQty[i] = readBigQueryPickQty(S.rows[offset + 5]);
-      S._sh[i] = shiftOf(S.dates[dateIdx], tmin);
+      const sh = Number(S.rows[offset + 1]) === 1 ? 'night' : 'morning';
+      S._sh[i] = {
+        sd:S.dates[dateIdx], sh,
+        sm:Number(S.rows[offset + 7]) || 0,
+        smMin:Number(S.rows[offset + 7]) || 0,
+        smMax:Number(S.rows[offset + 8]) || 0
+      };
     }
   });
 }
@@ -664,27 +703,13 @@ function openZoneDetailModal(zoneCode) {
       const rawLocStr = String(rawLoc || '-').trim().toUpperCase();
       if (zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode) continue;
 
-      const sku = S.skus[row.skuIdx];
-      if (isSkuExcluded(sku)) continue;
-
       const qty = row.pickQty;
       const pcs = row.pcs;
-      const val = isPcs ? pcs : qty;
       const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
-      const itemInfo = getItemInfo(sku);
 
       totalQty += qty;
       totalPcs += pcs;
-      totalLines += 1;
-
-      // SKU aggregation
-      if (!uniqueSkus.has(sku)) {
-        uniqueSkus.set(sku, { sku, name: itemInfo.name || sku, owner: itemInfo.owner || zInfo.owner || '-', qty: 0, pcs: 0, lines: 0 });
-      }
-      const skuRec = uniqueSkus.get(sku);
-      skuRec.qty += qty;
-      skuRec.pcs += pcs;
-      skuRec.lines += 1;
+      totalLines += row.lines;
 
       // Picker aggregation
       if (!uniquePickers.has(pickerId)) {
@@ -695,16 +720,39 @@ function openZoneDetailModal(zoneCode) {
           qty: 0,
           pcs: 0,
           lines: 0,
-          minSm: sh.sm,
-          maxSm: sh.sm
+          minSm: sh.smMin,
+          maxSm: sh.smMax
         });
       }
       const pRec = uniquePickers.get(pickerId);
       pRec.qty += qty;
       pRec.pcs += pcs;
-      pRec.lines += 1;
-      if (sh.sm < pRec.minSm) pRec.minSm = sh.sm;
-      if (sh.sm > pRec.maxSm) pRec.maxSm = sh.sm;
+      pRec.lines += row.lines;
+      if (sh.smMin < pRec.minSm) pRec.minSm = sh.smMin;
+      if (sh.smMax > pRec.maxSm) pRec.maxSm = sh.smMax;
+    }
+
+    // SKU มาจาก Item cube เพื่อไม่ให้ Work cube ต้องแบกมิติ SKU หลายแสนแถว
+    const itemCount = packedItemRowCount(S);
+    for(let i=0;i<itemCount;i++){
+      const row = packedItemRowData(S, i);
+      const sd = S.dates[row.dateIdx];
+      const sh = row.shiftCode === 1 ? 'night' : 'morning';
+      if(sd < dfrom || sd > dto || (shiftF !== 'all' && sh !== shiftF)) continue;
+      const zInfo = getZoneInfo(row.zone);
+      const zCode = zInfo.zone || zInfo.location || String(row.zone || '-').trim().toUpperCase();
+      const rawLocStr = String(row.zone || '-').trim().toUpperCase();
+      if(zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode) continue;
+      const sku = S.skus[row.skuIdx];
+      if(isSkuExcluded(sku)) continue;
+      const itemInfo = getItemInfo(sku);
+      const skuRec = uniqueSkus.get(sku) || {
+        sku, name:itemInfo.name || sku, owner:itemInfo.owner || zInfo.owner || '-', qty:0, pcs:0, lines:0
+      };
+      skuRec.qty += row.pickQty;
+      skuRec.pcs += row.pcs;
+      skuRec.lines += row.lines;
+      uniqueSkus.set(sku, skuRec);
     }
 
     let totalWorkHours = 0;
@@ -975,7 +1023,7 @@ function renderAffiliationBreakdown(){
 }
 
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
-// row width 7 = [dateIdx, zone, pickerIdx, skuIdx, pcs, pick_qty จาก BigQuery, minOfDay]
+// Work cube = [shiftDateIdx, shiftCode, zone, pickerIdx, pcs, pick_qty, lines, minSm, maxSm]
 function aggregate(system, from, to, sf){
   const cacheKey = [system, from, to, sf, excludedSkuRevision].join('|');
   if(aggregateCache.has(cacheKey)) return aggregateCache.get(cacheKey);
@@ -996,54 +1044,38 @@ function aggregate(system, from, to, sf){
     const location = zoneInfo.location;
     const zone = zoneInfo.zone;
     const picker = S.pickers[r.pickerIdx];
-    const sku = S.skus[r.skuIdx];
     const pVal = r.pcs;
     const qVal = r.pickQty;
-
-    // บันทึกสถิติสินค้าทั้งหมด (สำหรับหน้าค้นหา/ตั้งค่ายกเว้น)
-    (itemMapAll[sku] = itemMapAll[sku] || {pcs:0,qty:0,lines:0}).pcs += pVal;
-    itemMapAll[sku].qty += qVal;
-    itemMapAll[sku].lines++;
-
-    // หาก SKU นี้ถูกเลือกยกเว้น -> ข้ามไม่นำมาคิดสถิติรวมของระบบ
-    // กรองก่อนสร้าง Zone/Location/Picker/OT ทุกชุด เพื่อไม่ให้ SKU ที่ยกเว้นหลุดไปคำนวณต่อ
-    if (isSkuExcluded(sku)) continue;
+    const lineVal = r.lines;
 
     // หาก Zone นี้ถูกเลือกยกเว้น -> ข้ามไม่นำมาคิดสถิติรวมทั้งหมด
     if (isZoneExcluded(zone)) continue;
 
-    lines++; pcs += pVal; pickQty += qVal; pickers.add(picker); zones.add(zone);
+    lines += lineVal; pcs += pVal; pickQty += qVal; pickers.add(picker); zones.add(zone);
     (zoneMap[zone] = zoneMap[zone] || {
       pcs:0, qty:0, lines:0, pk:new Set(), locations:new Set(),
       typePick:zoneInfo.typePick, owner:zoneInfo.owner, known:zoneInfo.known
     });
-    zoneMap[zone].pcs += pVal; zoneMap[zone].qty += qVal; zoneMap[zone].lines++; zoneMap[zone].pk.add(picker); zoneMap[zone].locations.add(location);
+    zoneMap[zone].pcs += pVal; zoneMap[zone].qty += qVal; zoneMap[zone].lines += lineVal; zoneMap[zone].pk.add(picker); zoneMap[zone].locations.add(location);
 
     (locationMap[location] = locationMap[location] || {
       location, zone, typePick:zoneInfo.typePick, owner:zoneInfo.owner, known:zoneInfo.known,
       pcs:0, qty:0, lines:0, pk:new Set()
     });
-    locationMap[location].pcs += pVal; locationMap[location].qty += qVal; locationMap[location].lines++; locationMap[location].pk.add(picker);
-
-    (itemMap[sku] = itemMap[sku] || {pcs:0,qty:0,lines:0});
-    itemMap[sku].pcs += pVal; itemMap[sku].qty += qVal; itemMap[sku].lines++;
-
-    const hr = Math.floor(r.tmin/60);
-    (slotMap[hr] = slotMap[hr] || {pcs:0,qty:0,lines:0});
-    slotMap[hr].pcs += pVal; slotMap[hr].qty += qVal; slotMap[hr].lines++;
+    locationMap[location].pcs += pVal; locationMap[location].qty += qVal; locationMap[location].lines += lineVal; locationMap[location].pk.add(picker);
 
     (pickerZoneCnt[picker] = pickerZoneCnt[picker] || {});
-    pickerZoneCnt[picker][zone] = (pickerZoneCnt[picker][zone]||0)+1;
+    pickerZoneCnt[picker][zone] = (pickerZoneCnt[picker][zone]||0)+lineVal;
     (pickerLocationCnt[picker] = pickerLocationCnt[picker] || {});
-    pickerLocationCnt[picker][location] = (pickerLocationCnt[picker][location]||0)+1;
+    pickerLocationCnt[picker][location] = (pickerLocationCnt[picker][location]||0)+lineVal;
 
     (dayVol[si.sd] = dayVol[si.sd] || {lines:0,pcs:0,qty:0,pk:new Set()});
-    dayVol[si.sd].lines++; dayVol[si.sd].pcs += pVal; dayVol[si.sd].qty += qVal; dayVol[si.sd].pk.add(picker);
+    dayVol[si.sd].lines += lineVal; dayVol[si.sd].pcs += pVal; dayVol[si.sd].qty += qVal; dayVol[si.sd].pk.add(picker);
 
     // group ต่อ (คน, วันของกะ, กะ) เพื่อคิด work-hours + OT
     const k = picker+'|'+si.sd+'|'+si.sh;
     const b = grp[k] || (grp[k] = {picker, sd:si.sd, sh:si.sh, pcs:0, q:0, n:0, mx:-1, mn:999999});
-    b.pcs += pVal; b.q += qVal; b.n++; if(si.sm > b.mx) b.mx = si.sm; if(si.sm < b.mn) b.mn = si.sm;
+    b.pcs += pVal; b.q += qVal; b.n += lineVal; if(si.smMax > b.mx) b.mx = si.smMax; if(si.smMin < b.mn) b.mn = si.smMin;
 
     // แยกกลุ่มตาม Zone เพื่อคำนวณ Zone Productivity
     const zoneGrpKey = picker+'|'+si.sd+'|'+si.sh+'|'+zone;
@@ -1051,7 +1083,7 @@ function aggregate(system, from, to, sf){
       picker, sd:si.sd, sh:si.sh, zone, owner:zoneInfo.owner||'-', typePick:zoneInfo.typePick||'-',
       pcs:0, q:0, n:0, mx:-1, mn:999999
     });
-    zoneGroup.pcs += pVal; zoneGroup.q += qVal; zoneGroup.n++; if(si.sm > zoneGroup.mx) zoneGroup.mx = si.sm; if(si.sm < zoneGroup.mn) zoneGroup.mn = si.sm;
+    zoneGroup.pcs += pVal; zoneGroup.q += qVal; zoneGroup.n += lineVal; if(si.smMax > zoneGroup.mx) zoneGroup.mx = si.smMax; if(si.smMin < zoneGroup.mn) zoneGroup.mn = si.smMin;
 
     // แยกกลุ่มเพื่อวัด Productivity ตาม Owner และ Type Pick โดยใช้กติกาเวลาเดียวกับรายคน
     const ownerTypeKey = picker+'|'+si.sd+'|'+si.sh+'|'+zoneInfo.owner+'|'+zoneInfo.typePick;
@@ -1059,7 +1091,7 @@ function aggregate(system, from, to, sf){
       picker, sd:si.sd, sh:si.sh, owner:zoneInfo.owner || '-', typePick:zoneInfo.typePick || '-',
       pcs:0, q:0, n:0, mx:-1, mn:999999
     });
-    ownerType.pcs += pVal; ownerType.q += qVal; ownerType.n++; if(si.sm > ownerType.mx) ownerType.mx = si.sm; if(si.sm < ownerType.mn) ownerType.mn = si.sm;
+    ownerType.pcs += pVal; ownerType.q += qVal; ownerType.n += lineVal; if(si.smMax > ownerType.mx) ownerType.mx = si.smMax; if(si.smMin < ownerType.mn) ownerType.mn = si.smMin;
 
     // ผูกสังกัดจากรหัสพนักงานใน Sheet บันทึกเวลาทำงาน เพื่อสรุป Productivity และ OT รายสังกัด
     const affiliation = getPickerAffiliation(picker);
@@ -1068,7 +1100,7 @@ function aggregate(system, from, to, sf){
       picker, sd:si.sd, sh:si.sh, affiliation,
       pcs:0, q:0, n:0, mx:-1, mn:999999
     });
-    affiliationGroup.pcs += pVal; affiliationGroup.q += qVal; affiliationGroup.n++; if(si.sm > affiliationGroup.mx) affiliationGroup.mx = si.sm; if(si.sm < affiliationGroup.mn) affiliationGroup.mn = si.sm;
+    affiliationGroup.pcs += pVal; affiliationGroup.q += qVal; affiliationGroup.n += lineVal; if(si.smMax > affiliationGroup.mx) affiliationGroup.mx = si.smMax; if(si.smMin < affiliationGroup.mn) affiliationGroup.mn = si.smMin;
 
     // สรุปข้อมูลเจาะลึกรายบุคคล (Picker Drill-down: Zone, Time Slot, SKU)
     const pDrill = pickerDrilldownMap[picker] || (pickerDrilldownMap[picker] = {
@@ -1083,18 +1115,51 @@ function aggregate(system, from, to, sf){
       date: si.sd, pcs: 0, qty: 0, lines: 0, minMinutes: 999999, maxMinutes: -1,
       zones: {}, slots: {}, skus: {}
     });
-    dRec.pcs += pVal; dRec.qty += qVal; dRec.lines++;
-    if (r.tmin < dRec.minMinutes) dRec.minMinutes = r.tmin;
-    if (r.tmin > dRec.maxMinutes) dRec.maxMinutes = r.tmin;
+    dRec.pcs += pVal; dRec.qty += qVal; dRec.lines += lineVal;
+    if (si.smMin < dRec.minMinutes) dRec.minMinutes = si.smMin;
+    if (si.smMax > dRec.maxMinutes) dRec.maxMinutes = si.smMax;
 
     (dRec.zones[zone] = dRec.zones[zone] || { pcs: 0, qty: 0, lines: 0 });
-    dRec.zones[zone].pcs += pVal; dRec.zones[zone].qty += qVal; dRec.zones[zone].lines++;
+    dRec.zones[zone].pcs += pVal; dRec.zones[zone].qty += qVal; dRec.zones[zone].lines += lineVal;
+  }
 
-    (dRec.slots[hr] = dRec.slots[hr] || { pcs: 0, qty: 0, lines: 0 });
-    dRec.slots[hr].pcs += pVal; dRec.slots[hr].qty += qVal; dRec.slots[hr].lines++;
+  // Item cube มี SKU ครบทั้งหมดเพื่อให้รายการยกเว้นยังแสดงและนำกลับมาคำนวณได้
+  const itemRowCount = packedItemRowCount(S);
+  for(let i=0;i<itemRowCount;i++){
+    const r = packedItemRowData(S, i);
+    const sd = S.dates[r.dateIdx];
+    const sh = r.shiftCode === 1 ? 'night' : 'morning';
+    if(sd < from || sd > to || (sf !== 'all' && sh !== sf)) continue;
+    const zone = getZoneInfo(r.zone).zone;
+    if(isZoneExcluded(zone)) continue;
+    const sku = S.skus[r.skuIdx];
+    const all = itemMapAll[sku] || (itemMapAll[sku] = {pcs:0,qty:0,lines:0});
+    all.pcs += r.pcs; all.qty += r.pickQty; all.lines += r.lines;
+    if(isSkuExcluded(sku)) continue;
+    const item = itemMap[sku] || (itemMap[sku] = {pcs:0,qty:0,lines:0});
+    item.pcs += r.pcs; item.qty += r.pickQty; item.lines += r.lines;
+  }
 
-    (dRec.skus[sku] = dRec.skus[sku] || { pcs: 0, qty: 0, lines: 0 });
-    dRec.skus[sku].pcs += pVal; dRec.skus[sku].qty += qVal; dRec.skus[sku].lines++;
+  // Time-slot cube เก็บชั่วโมงแยกตาม Picker/Zone โดยตัด SKU ที่ยกเว้นจาก BigQuery แล้ว
+  const slotRowCount = packedSlotRowCount(S);
+  for(let i=0;i<slotRowCount;i++){
+    const r = packedSlotRowData(S, i);
+    const sd = S.dates[r.dateIdx];
+    const sh = r.shiftCode === 1 ? 'night' : 'morning';
+    if(sd < from || sd > to || (sf !== 'all' && sh !== sf)) continue;
+    const zone = getZoneInfo(r.zone).zone;
+    if(isZoneExcluded(zone)) continue;
+    const hr = r.hour;
+    const slot = slotMap[hr] || (slotMap[hr] = {pcs:0,qty:0,lines:0});
+    slot.pcs += r.pcs; slot.qty += r.pickQty; slot.lines += r.lines;
+
+    const picker = S.pickers[r.pickerIdx];
+    const pDrill = pickerDrilldownMap[picker];
+    const dRec = pDrill && pDrill.byDate[sd];
+    if(dRec){
+      const dSlot = dRec.slots[hr] || (dRec.slots[hr] = {pcs:0,qty:0,lines:0});
+      dSlot.pcs += r.pcs; dSlot.qty += r.pickQty; dSlot.lines += r.lines;
+    }
   }
 
   function applyProductivityHours(g){
@@ -1313,12 +1378,11 @@ function sysTotals(system, from, to, sf){
   for(let i=0;i<rowCount;i++){
     const si = SH[i];
     if(si && si.sd>=from && si.sd<=to && (sf==='all'||si.sh===sf)){
-      const r = packedRowData(S, i), sku = S.skus[r.skuIdx];
-      if(!isSkuExcluded(sku)){
-        pcs += r.pcs;
-        qty += r.pickQty;
-        lines++;
-      }
+      const r = packedRowData(S, i);
+      if(isZoneExcluded(getZoneInfo(r.zone).zone)) continue;
+      pcs += r.pcs;
+      qty += r.pickQty;
+      lines += r.lines;
     }
   }
   return {pcs, qty, lines};
@@ -1568,12 +1632,117 @@ function countUp(){
 // ===== Individual Picker Drill-down Renderer =====
 let selectedPickerId = '';
 let selectedPickerDate = 'all';
+const pickerItemPayloadCache = new Map();
+const pickerItemLoadState = new Map();
+
+function pickerItemsRequestKey(pickerId){
+  return [
+    dashboardCacheRevision || '0', sys, String(pickerId || '').trim(),
+    dfrom, dto, shiftF, JSON.stringify(currentExcludedSkuList())
+  ].join('|');
+}
+
+function applyPickerItemsPayload(pickerId, requestKey, payload){
+  if(!A || !A.picker_drilldown) return false;
+  const pData = A.picker_drilldown[pickerId];
+  if(!pData) return false;
+  Object.values(pData.byDate || {}).forEach(record => { record.skus = {}; });
+  const rows = Array.isArray(payload && payload.rows) ? payload.rows : [];
+  const width = Number(payload && payload.row_width) || 0;
+  if(width !== 7 || rows.length % width !== 0) throw new Error('รูปแบบรายการ SKU รายพนักงานไม่ถูกต้อง');
+  for(let offset=0; offset<rows.length; offset+=width){
+    const date = String(rows[offset] || '');
+    const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+    if(shiftF !== 'all' && shift !== shiftF) continue;
+    const dRec = pData.byDate && pData.byDate[date];
+    if(!dRec) continue;
+    const zone = getZoneInfo(rows[offset + 2]).zone;
+    if(isZoneExcluded(zone)) continue;
+    const sku = normalizeSkuKey(rows[offset + 3]) || '(none)';
+    if(isSkuExcluded(sku)) continue;
+    const rec = dRec.skus[sku] || (dRec.skus[sku] = {pcs:0, qty:0, lines:0});
+    rec.pcs += Number(rows[offset + 4]) || 0;
+    rec.qty += Number(rows[offset + 5]) || 0;
+    rec.lines += Number(rows[offset + 6]) || 0;
+  }
+  pData._skuLoadKey = requestKey;
+  return true;
+}
+
+async function loadPickerItemsForDrilldown(pickerId, force){
+  const picker = String(pickerId || '').trim();
+  if(!picker || !A || !A.picker_drilldown || !A.picker_drilldown[picker]) return;
+  const requestKey = pickerItemsRequestKey(picker);
+  const currentState = pickerItemLoadState.get(requestKey);
+  if(!force && currentState && currentState.status === 'loading') return currentState.promise;
+  if(!force && pickerItemPayloadCache.has(requestKey)){
+    applyPickerItemsPayload(picker, requestKey, pickerItemPayloadCache.get(requestKey));
+    pickerItemLoadState.set(requestKey, {status:'done'});
+    if(selectedPickerId === picker) renderPickerDrilldown();
+    return;
+  }
+
+  pickerItemLoadState.set(requestKey, {status:'loading'});
+  if(selectedPickerId === picker) renderPickerDrilldown();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90000);
+  const task = (async () => {
+    try{
+      const query = [
+        'mode=picker_items',
+        'system=' + encodeURIComponent(sys),
+        'picker=' + encodeURIComponent(picker),
+        'from=' + encodeURIComponent(dfrom),
+        'to=' + encodeURIComponent(dto),
+        'shift=' + encodeURIComponent(shiftF),
+        dashboardScopeQuery(),
+        't=' + Date.now()
+      ].join('&');
+      const response = await fetch(DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query, {
+        cache:'no-store', signal:controller.signal
+      });
+      if(!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      if(payload && payload.error) throw new Error(payload.error);
+      if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
+          String(payload.picker || '') !== picker || String(payload.system || '') !== sys){
+        throw new Error('Apps Script ตอบรายการ SKU คนละชุดกับหน้าที่เลือก');
+      }
+      pickerItemPayloadCache.set(requestKey, payload);
+      // จำกัด memory ฝั่ง browser เพราะผู้ใช้ทั่วไปเปิดดูเพียงไม่กี่คนต่อครั้ง
+      while(pickerItemPayloadCache.size > 12) pickerItemPayloadCache.delete(pickerItemPayloadCache.keys().next().value);
+      // ผู้ใช้อาจเปลี่ยนระบบ/วันที่ระหว่างรอ ห้ามนำผลของตัวกรองเก่าไปปนกับ A ชุดใหม่
+      if(pickerItemsRequestKey(picker) === requestKey){
+        applyPickerItemsPayload(picker, requestKey, payload);
+      }
+      pickerItemLoadState.set(requestKey, {status:'done'});
+    }catch(err){
+      const message = err && err.name === 'AbortError'
+        ? 'โหลดรายการ SKU ใช้เวลานานเกิน 90 วินาที'
+        : String(err && err.message || err);
+      pickerItemLoadState.set(requestKey, {status:'error', message});
+    }finally{
+      clearTimeout(timeout);
+      if(selectedPickerId === picker) renderPickerDrilldown();
+    }
+  })();
+  pickerItemLoadState.set(requestKey, {status:'loading', promise:task});
+  return task;
+}
+
+function retryPickerItemsLoad(){
+  if(!selectedPickerId) return;
+  const requestKey = pickerItemsRequestKey(selectedPickerId);
+  pickerItemLoadState.delete(requestKey);
+  void loadPickerItemsForDrilldown(selectedPickerId, true);
+}
 
 function selectPickerDrilldown(pickerId){
   selectedPickerId = String(pickerId || '').trim();
   selectedPickerDate = 'all';
   const selectEl = document.getElementById('pickerSelect');
   if(selectEl) selectEl.value = selectedPickerId;
+  void loadPickerItemsForDrilldown(selectedPickerId, false);
   renderPickerDrilldown();
   const cardEl = document.getElementById('pickerDetailContent');
   if(cardEl) cardEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1659,13 +1828,12 @@ function renderTypeBreakdownPage(){
     if (shiftF !== 'all' && sh.sh !== shiftF) continue;
 
     const row = packedRowData(S, i);
-    const sku = S.skus[row.skuIdx];
-    if (isSkuExcluded(sku)) continue;
-
     const val = isPcs ? row.pcs : row.pickQty;
+    const lineVal = row.lines;
     const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
     const zoneInfo = getZoneInfo(row.zone);
     const zoneCode = zoneInfo.zone || String(row.zone || '-').trim().toUpperCase();
+    if(isZoneExcluded(zoneCode)) continue;
     const pickerAffiliation = getPickerAffiliation(pickerId);
 
     let categoryVal = '';
@@ -1689,7 +1857,7 @@ function renderTypeBreakdownPage(){
       totalByType[categoryVal] = { val: 0, lines: 0, pickers: new Set(), zones: new Set() };
     }
     totalByType[categoryVal].val += val;
-    totalByType[categoryVal].lines += 1;
+    totalByType[categoryVal].lines += lineVal;
     totalByType[categoryVal].pickers.add(pickerId);
     totalByType[categoryVal].zones.add(zoneCode);
     totalGrandVal += val;
@@ -1703,7 +1871,7 @@ function renderTypeBreakdownPage(){
     }
     const zRecord = zonesInCurrentType.get(zoneCode);
     zRecord.val += val;
-    zRecord.lines += 1;
+    zRecord.lines += lineVal;
     zRecord.pickers.add(pickerId);
 
     // Zone Filter check
@@ -1723,14 +1891,14 @@ function renderTypeBreakdownPage(){
 
     const pData = perPicker.get(pickerId);
     pData.totalVal += val;
-    pData.totalLines += 1;
+    pData.totalLines += lineVal;
     pData.byType[categoryVal] = (pData.byType[categoryVal] || 0) + val;
 
     if (!pData.byZone[zoneCode]) {
       pData.byZone[zoneCode] = { zone: zoneCode, typePick: zoneInfo.typePick, val: 0, lines: 0 };
     }
     pData.byZone[zoneCode].val += val;
-    pData.byZone[zoneCode].lines += 1;
+    pData.byZone[zoneCode].lines += lineVal;
   }
 
   // 0. Render Breadcrumb Bar
@@ -1798,11 +1966,9 @@ function renderTypeBreakdownPage(){
     if (shiftF !== 'all' && sh.sh !== shiftF) continue;
 
     const row = packedRowData(S, i);
-    const sku = S.skus[row.skuIdx];
-    if (isSkuExcluded(sku)) continue;
-
     const rawLoc = (S.locations && S.locations[row.zone]) ? S.locations[row.zone] : row.zone;
     const zInfo = getZoneInfo(rawLoc);
+    if(isZoneExcluded(zInfo.zone)) continue;
     const val = isPcs ? row.pcs : row.pickQty;
 
     // Type Pick aggregation
@@ -2151,6 +2317,7 @@ function renderPickerDrilldown(){
       if (currentSelect && currentSelect.options.length === 2 && currentSelect.options[1].value) {
         selectedPickerId = currentSelect.options[1].value;
         currentSelect.value = selectedPickerId;
+        void loadPickerItemsForDrilldown(selectedPickerId, false);
         renderPickerDrilldown();
       }
     };
@@ -2160,6 +2327,7 @@ function renderPickerDrilldown(){
         if (currentSelect && currentSelect.options.length > 1 && currentSelect.options[1].value) {
           selectedPickerId = currentSelect.options[1].value;
           currentSelect.value = selectedPickerId;
+          void loadPickerItemsForDrilldown(selectedPickerId, false);
           renderPickerDrilldown();
         }
       }
@@ -2172,6 +2340,7 @@ function renderPickerDrilldown(){
     selectEl.onchange = () => {
       selectedPickerId = selectEl.value;
       selectedPickerDate = 'all';
+      void loadPickerItemsForDrilldown(selectedPickerId, false);
       renderPickerDrilldown();
     };
   }
@@ -2203,6 +2372,11 @@ function renderPickerDrilldown(){
   }
 
   const pData = drillMap[selectedPickerId];
+  const pickerSkuRequestKey = pickerItemsRequestKey(selectedPickerId);
+  const pickerSkuState = pickerItemLoadState.get(pickerSkuRequestKey);
+  if(pData._skuLoadKey !== pickerSkuRequestKey && !pickerSkuState){
+    setTimeout(() => void loadPickerItemsForDrilldown(selectedPickerId, false), 0);
+  }
   const datesArray = [...(pData.dates || [])].sort();
 
   // Populate date select options
@@ -2399,6 +2573,17 @@ function renderPickerDrilldown(){
         </thead>
         <tbody>`;
 
+  if(!activeSkusList.length){
+    if(pickerSkuState && pickerSkuState.status === 'loading'){
+      html += `<tr><td colspan="7" class="empty-cell">⏳ กำลังโหลดรายการ SKU ของพนักงานคนนี้…</td></tr>`;
+    }else if(pickerSkuState && pickerSkuState.status === 'error'){
+      html += `<tr><td colspan="7" class="empty-cell">⚠️ ${escapeZoneHtml(pickerSkuState.message || 'โหลดรายการ SKU ไม่สำเร็จ')} <button type="button" onclick="retryPickerItemsLoad()">ลองอีกครั้ง</button></td></tr>`;
+    }else if(pData._skuLoadKey === pickerSkuRequestKey){
+      html += `<tr><td colspan="7" class="empty-cell">ไม่พบรายการ SKU ในช่วงวันที่และตัวกรองที่เลือก</td></tr>`;
+    }else{
+      html += `<tr><td colspan="7" class="empty-cell">⏳ กำลังเตรียมโหลดรายการ SKU รายพนักงาน…</td></tr>`;
+    }
+  }
   activeSkusList.forEach((sku, idx) => {
     const kv = activeSkusMap[sku];
     const info = getItemInfo(sku);
@@ -2640,17 +2825,15 @@ const builders = {
     const hourlyVol = new Array(24).fill(0);
     ['PTT', 'BPS'].forEach(sName => {
       const S = DATA[sName];
-      if (!S || !Array.isArray(S.rows)) return;
-      const count = packedRowCount(S);
+      if (!S || !Array.isArray(S.slot_rows)) return;
+      const count = packedSlotRowCount(S);
       for (let i = 0; i < count; i++) {
-        const sh = S._sh ? S._sh[i] : null;
-        if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
-        if (shiftF !== 'all' && sh.sh !== shiftF) continue;
-        const row = packedRowData(S, i);
-        const sku = S.skus[row.skuIdx];
-        if (isSkuExcluded(sku)) continue;
-
-        const hr = Math.floor((Number(row.tmin) || 0) / 60) % 24;
+        const row = packedSlotRowData(S, i);
+        const sd = S.dates[row.dateIdx];
+        const sh = row.shiftCode === 1 ? 'night' : 'morning';
+        if (sd < dfrom || sd > dto || (shiftF !== 'all' && sh !== shiftF)) continue;
+        if(isZoneExcluded(getZoneInfo(row.zone).zone)) continue;
+        const hr = row.hour;
         const val = isPcs ? row.pcs : row.pickQty;
         hourlyVol[hr] += val;
       }
@@ -2771,8 +2954,7 @@ const builders = {
         if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
         if (shiftF !== 'all' && sh.sh !== shiftF) continue;
         const row = packedRowData(S, i);
-        const sku = S.skus[row.skuIdx];
-        if (isSkuExcluded(sku)) continue;
+        if(isZoneExcluded(getZoneInfo(row.zone).zone)) continue;
 
         const val = isPcs ? row.pcs : row.pickQty;
         const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
@@ -2845,8 +3027,7 @@ const builders = {
         if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
         if (shiftF !== 'all' && sh.sh !== shiftF) continue;
         const row = packedRowData(S, i);
-        const sku = S.skus[row.skuIdx];
-        if (isSkuExcluded(sku)) continue;
+        if(isZoneExcluded(getZoneInfo(row.zone).zone)) continue;
 
         const val = isPcs ? row.pcs : row.pickQty;
         if (sh.sh === 'night') nightVol += val;
@@ -3336,14 +3517,16 @@ window.toggleExcludeSku = function(sku) {
   }
   saveExcludedSkusToStorage();
   invalidateAggregationCache();
-  render();
+  dashboardCacheRevision = '';
+  void loadData(false);
 };
 
 window.clearExcludedSkus = function() {
   excludedSkus.clear();
   saveExcludedSkusToStorage();
   invalidateAggregationCache();
-  render();
+  dashboardCacheRevision = '';
+  void loadData(false);
 };
 
 function renderExcludedBadges() {
@@ -3480,7 +3663,9 @@ function bindDataStateActions(){
   const upload = document.getElementById('dataStateUpload');
   const retry = document.getElementById('dataStateRetry');
   if(upload) upload.onclick = () => document.getElementById('btnUploadModal')?.click();
-  if(retry) retry.onclick = () => loadData(true);
+  // Retry ต้องยอมอ่าน Script Cache: คำขอก่อนหน้าอาจประมวลผลเสร็จหลัง browser timeout
+  // การบังคับ fresh ที่นี่ทำให้ทุกครั้งเริ่ม query หลายแสนแถวใหม่และวนช้าซ้ำเดิม
+  if(retry) retry.onclick = () => loadData(false);
 }
 
 // ===== loading overlay =====
@@ -3589,16 +3774,22 @@ async function clearDashboardResponseCache(){
 
 function dashboardPayloadRowCount(payload){
   const validSource = source =>
-    source && Number(source.row_width) === 7 &&
+    source && Number(source.row_width) === 9 && Number(source.item_row_width) === 7 && Number(source.slot_row_width) === 8 &&
     Array.isArray(source.dates) && Array.isArray(source.pickers) && Array.isArray(source.skus) &&
-    Array.isArray(source.rows) && source.rows.length % 7 === 0;
+    Array.isArray(source.rows) && source.rows.length % 9 === 0 &&
+    Array.isArray(source.item_rows) && source.item_rows.length % 7 === 0 &&
+    Array.isArray(source.slot_rows) && source.slot_rows.length % 8 === 0;
   const validSchema = payload && payload.meta &&
     payload.meta.schema_version === DASHBOARD_SCHEMA_VERSION;
-  if(!validSchema || !validSource(payload.PTT) || !validSource(payload.BPS)) {
+  const payloadExclusions = payload && payload.meta && Array.isArray(payload.meta.excluded_skus)
+    ? payload.meta.excluded_skus.map(normalizeSkuKey).filter(Boolean).sort()
+    : [];
+  const validScope = JSON.stringify(payloadExclusions) === JSON.stringify(currentExcludedSkuList());
+  if(!validSchema || !validScope || !validSource(payload.PTT) || !validSource(payload.BPS)) {
     throw new Error('รูปแบบข้อมูล BigQuery เป็นคนละรุ่นกับหน้าเว็บ กรุณากดรีเฟรชอีกครั้ง');
   }
   const packedRows = packedRowCount(payload.PTT) + packedRowCount(payload.BPS);
-  return Number(payload.meta && payload.meta.rows) || packedRows;
+  return Number(payload.meta && payload.meta.input_lines) || packedRows;
 }
 
 function setDashboardSourceBadge(totalRows, source){
@@ -3664,7 +3855,7 @@ async function restoreDashboardFromCache(){
 
 async function fetchRevisionOrDashboard(signal){
   const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
-    'mode=revision&t=' + Date.now();
+    'mode=revision&' + dashboardScopeQuery() + '&t=' + Date.now();
   const response = await fetch(url, {cache:'no-store', signal});
   if(!response.ok) throw new Error('HTTP ' + response.status);
   const body = await response.text();
@@ -3742,7 +3933,7 @@ async function loadDataOnce(force){
 
     if(!j) {
       const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
-        'fresh=' + (force ? '1' : '0') + '&t=' + Date.now();
+        'fresh=' + (force ? '1' : '0') + '&' + dashboardScopeQuery() + '&t=' + Date.now();
       const res = await fetch(url, {cache:'no-store', signal:controller.signal});
       if(!res.ok) throw new Error('HTTP ' + res.status);
       body = await res.text();

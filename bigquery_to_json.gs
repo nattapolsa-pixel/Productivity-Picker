@@ -19,16 +19,19 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v4';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v5-cubes';
 const MAX_UPLOAD_ROWS = 50000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const JOB_DEADLINE_MS = 240000;
+// ลดจำนวนรอบเรียก jobs.getQueryResults: ชุดข้อมูลปัจจุบัน ~410k แถว
+// เดิมอ่านครั้งละ 10k ทำให้ต้องเรียก API มากกว่า 40 รอบต่อการเปิดเว็บหนึ่งครั้ง
+const BQ_RESULT_PAGE_ROWS = 30000;
 // ==========================================================
 
-const MASTER_CACHE_TTL = 900; // Master จาก Google Sheets เปลี่ยนไม่บ่อย ลดเวลาเปิด Sheet ทุก cache miss
+const MASTER_CACHE_TTL = 3600; // Master อัปเดตรายวัน; ลด cold rebuild จากทุก 15 นาทีเหลืออย่างมากชั่วโมงละครั้ง
 const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่างเดียวกับ revision เพื่อลด cache chunk เก่าค้าง
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v1';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v2-cubes';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
 const PICKER_NAME_TAB = 'บันทึกเวลาทำงาน';
 const PICKER_NAME_START_ROW = 26;
@@ -57,7 +60,13 @@ function doGet(e) {
     // mode=revision เป็นคำตอบขนาดเล็กสำหรับหน้าเว็บที่มี IndexedDB cache อยู่แล้ว
     // ช่วยไม่ต้องดาวน์โหลด dashboard หลาย MB ซ้ำเมื่อข้อมูล BigQuery ยังไม่เปลี่ยน
     const mode = String(e && e.parameter && e.parameter.mode || '').toLowerCase();
-    const revision = getDashboardRevisionToken_(getDataRevision_());
+    const requestScope = getDashboardRequestScope_(e);
+    // รายการ SKU รายพนักงานมีจำนวนมากกว่าข้อมูลสรุปหลัก จึงโหลดเฉพาะ
+    // เมื่อผู้ใช้เปิดรายละเอียดพนักงานคนนั้น เพื่อไม่ให้หน้าแรกต้องแบกทุก SKU
+    if (mode === 'picker_items') {
+      return json_(buildPickerItemsData_(e, requestScope));
+    }
+    const revision = getDashboardRevisionToken_(getDataRevision_(), requestScope.key);
     if (mode === 'revision') {
       return json_({
         schema_version: DASHBOARD_SCHEMA_VERSION,
@@ -76,16 +85,37 @@ function doGet(e) {
         console.warn('Dashboard cache read failed: ' + cacheReadErr);
       }
     }
-    const dataObj = buildDashboardData_(true);
-    dataObj.meta.data_revision = revision;
-    const json = JSON.stringify(dataObj);
+    // กัน cache miss พร้อมกันหลายหน้าต่างยิง query หลายแสนแถวซ้ำกัน
+    // ผู้รอจะตรวจ cache ซ้ำหลังคำขอแรกสร้างเสร็จ (double-checked cache)
+    const dashboardBuildLock = LockService.getScriptLock();
+    let dashboardBuildLocked = false;
     try {
-      // กัน GET เก่าที่เริ่มก่อน upload เขียน cache ทับข้อมูลรุ่นใหม่
-      if (getDashboardRevisionToken_(getDataRevision_()) === revision) setCached_(json, revision);
-    } catch (cacheWriteErr) {
-      console.warn('Dashboard cache write failed: ' + cacheWriteErr);
+      dashboardBuildLocked = dashboardBuildLock.tryLock(90000);
+      if (!dashboardBuildLocked) {
+        throw new Error('ระบบกำลังเตรียมข้อมูล Dashboard กรุณาลองอีกครั้งในอีกสักครู่');
+      }
+      if (!fresh) {
+        try {
+          const cachedAfterWait = getCached_(revision);
+          if (cachedAfterWait) return textJson_(cachedAfterWait);
+        } catch (cacheReadAfterWaitErr) {
+          console.warn('Dashboard cache read after wait failed: ' + cacheReadAfterWaitErr);
+        }
+      }
+
+      const dataObj = buildDashboardData_(true, requestScope);
+      dataObj.meta.data_revision = revision;
+      const json = JSON.stringify(dataObj);
+      try {
+        // กัน GET เก่าที่เริ่มก่อน upload เขียน cache ทับข้อมูลรุ่นใหม่
+        if (getDashboardRevisionToken_(getDataRevision_(), requestScope.key) === revision) setCached_(json, revision);
+      } catch (cacheWriteErr) {
+        console.warn('Dashboard cache write failed: ' + cacheWriteErr);
+      }
+      return textJson_(json);
+    } finally {
+      if (dashboardBuildLocked) dashboardBuildLock.releaseLock();
     }
-    return textJson_(json);
   } catch (err) {
     return json_({ error: String(err && err.message || err) });
   }
@@ -99,10 +129,108 @@ function getDashboardRefreshBucket_() {
   return Math.floor(Date.now() / (MASTER_CACHE_TTL * 1000));
 }
 
-function getDashboardRevisionToken_(dataRevision) {
+function getDashboardRevisionToken_(dataRevision, requestScopeKey) {
   // Uploads bump dataRevision immediately. The time bucket also detects data
   // changed outside this endpoint (BigQuery or master Sheets) within 15 minutes.
-  return String(dataRevision || '0') + ':' + getDashboardRefreshBucket_();
+  return String(dataRevision || '0') + ':' + getDashboardRefreshBucket_() + ':' + String(requestScopeKey || 'all');
+}
+
+function getDashboardRequestScope_(e) {
+  let requested = [];
+  try {
+    const raw = String(e && e.parameter && e.parameter.excluded_skus || '[]');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) requested = parsed;
+  } catch (_) {}
+
+  const seen = {};
+  const excludedSkus = [];
+  requested.slice(0, 500).forEach(function(value) {
+    let key = String(value == null ? '' : value).replace(/\u00a0/g, ' ').trim();
+    if (/^\d+\.0+$/.test(key)) key = key.slice(0, key.indexOf('.'));
+    if (!key || key.length > 80 || seen[key]) return;
+    seen[key] = true;
+    excludedSkus.push(key);
+  });
+  excludedSkus.sort();
+  const digest = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    JSON.stringify(excludedSkus),
+    Utilities.Charset.UTF_8
+  );
+  const key = Utilities.base64EncodeWebSafe(digest).replace(/=+$/, '').slice(0, 16);
+  return { excludedSkus: excludedSkus, key: key };
+}
+
+function sqlStringLiteral_(value) {
+  return "'" + String(value == null ? '' : value).replace(/'/g, "''") + "'";
+}
+
+function buildPickerItemsData_(e, requestScope) {
+  const params = e && e.parameter || {};
+  const system = String(params.system || '').toUpperCase();
+  const picker = String(params.picker || '').replace(/\u00a0/g, ' ').trim();
+  const from = String(params.from || '').trim();
+  const to = String(params.to || '').trim();
+  const shift = String(params.shift || 'all').toLowerCase();
+  if (system !== 'PTT' && system !== 'BPS') throw new Error('ระบบที่ขอไม่ถูกต้อง');
+  if (!picker || picker.length > 80) throw new Error('รหัสพนักงานไม่ถูกต้อง');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+    throw new Error('ช่วงวันที่ไม่ถูกต้อง');
+  }
+  if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
+
+  const scope = requestScope || { excludedSkus: [] };
+  const excludedSql = scope.excludedSkus.length
+    ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
+    : '';
+  const shiftSql = shift === 'morning'
+    ? "AND shift_code = 'M'"
+    : (shift === 'night' ? "AND shift_code = 'N'" : '');
+  const sql = [
+    'WITH base AS (',
+    '  SELECT',
+    '    IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date,',
+    "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
+    "    COALESCE(zone, '??') AS zone,",
+    "    COALESCE(CAST(sku AS STRING), '(none)') AS sku,",
+    "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
+    '    pcs, pick_qty',
+    '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
+    '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
+    '    AND COALESCE(CAST(picker_id AS STRING), \'(none)\') = ' + sqlStringLiteral_(picker),
+    '),',
+    'filtered AS (',
+    '  SELECT * FROM base',
+    '  WHERE shift_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
+    '    ' + shiftSql,
+    '    ' + excludedSql,
+    ')',
+    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, sku,",
+    '       SUM(pcs), SUM(pick_qty), COUNT(*)',
+    'FROM filtered',
+    'GROUP BY shift_date, shift_code, zone, sku',
+    'ORDER BY shift_date, zone, sku'
+  ].join('\n');
+
+  const rows = [];
+  bqQueryEach_(sql, function(r) {
+    rows.push(
+      String(r[0] || ''), r[1] === 'N' ? 1 : 0,
+      String(r[2] || '??'), String(r[3] || '(none)'),
+      Number(r[4]) || 0, Number(r[5]) || 0, Number(r[6]) || 0
+    );
+  }, JOB_DEADLINE_MS, true);
+
+  return {
+    schema_version: DASHBOARD_SCHEMA_VERSION,
+    picker: picker,
+    system: system,
+    row_width: 7,
+    rows: rows,
+    excluded_skus: scope.excludedSkus,
+    generated: new Date().toISOString()
+  };
 }
 
 function bumpDataRevision_() {
@@ -1284,42 +1412,110 @@ function promotePickMasterStage_(snapshotDate) {
   };
 }
 
-function buildDashboardData_(useQueryCache) {
+function buildDashboardData_(useQueryCache, requestScope) {
   const currentDate = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
+  const scope = requestScope || { excludedSkus: [], key: 'all' };
   const pickerDirectory = loadPickerDirectory_();
   const pickerNames = pickerDirectory.names;
   const pickerAffiliations = pickerDirectory.affiliations;
   const zoneMaster = loadZoneMasterMap_();
-  // ดึงจาก t_pick_dashboard (Materialized Table) แทน v_pick_enriched (View ซ้อนกัน 3 ชั้น)
-  // ทำให้ Apps Script ตอบเร็วกว่าเดิมมาก
-  const sql =
-    "SELECT category, " +
-    "FORMAT_DATE('%Y-%m-%d', pick_date) AS d, " +
-    "zone, picker_id AS picker, sku, tmin, pcs, pick_qty " +
-    "FROM `" + BQ_PROJECT + "." + BQ_DATASET + "." + DASHBOARD_TABLE + "` " +
-    "WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + " DAY)";
+  const excludedSql = scope.excludedSkus.length
+    ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
+    : '';
 
-  const mk = () => ({ _d:{}, _p:{}, _s:{}, dates:[], pickers:[], skus:[], rows:[] });
+  // ส่งเฉพาะ cube ที่หน้าเว็บใช้ แทน 1 แถวต่อ Pick Detail:
+  // W = วัน/กะ/Zone/Picker (KPI, Productivity, OT)
+  // I = วัน/กะ/Zone/SKU (หน้าสินค้าและการยกเว้น)
+  // S = วัน/กะ/Zone/Picker/ชั่วโมง (กราฟช่วงเวลา)
+  const sql = [
+    'WITH base AS (',
+    '  SELECT',
+    '    UPPER(category) AS category,',
+    '    IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date,',
+    "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
+    '    COALESCE(zone, \'??\') AS zone,',
+    '    COALESCE(picker_id, \'(none)\') AS picker,',
+    '    COALESCE(CAST(sku AS STRING), \'(none)\') AS sku,',
+    "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
+    '    CAST(DIV(tmin, 60) AS INT64) AS hour_of_day,',
+    '    CASE WHEN tmin >= 1140 THEN tmin - 1140 WHEN tmin < 420 THEN tmin + 300 ELSE tmin - 420 END AS shift_minute,',
+    '    pcs, pick_qty',
+    '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
+    "  WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + ' DAY)',
+    "    AND UPPER(category) IN ('PTT','BPS')",
+    '),',
+    'included AS (',
+    '  SELECT * FROM base WHERE TRUE ' + excludedSql,
+    '),',
+    'cubes AS (',
+    "  SELECT 'W' AS cube_type, category, shift_date, shift_code, zone, picker,",
+    '         CAST(NULL AS STRING) AS sku, CAST(NULL AS INT64) AS hour_of_day,',
+    '         SUM(pcs) AS pcs, SUM(pick_qty) AS pick_qty, COUNT(*) AS line_count,',
+    '         MIN(shift_minute) AS min_shift_minute, MAX(shift_minute) AS max_shift_minute',
+    '  FROM included GROUP BY category, shift_date, shift_code, zone, picker',
+    '  UNION ALL',
+    "  SELECT 'I', category, shift_date, shift_code, zone, CAST(NULL AS STRING), sku, CAST(NULL AS INT64),",
+    '         SUM(pcs), SUM(pick_qty), COUNT(*), CAST(NULL AS INT64), CAST(NULL AS INT64)',
+    '  FROM base GROUP BY category, shift_date, shift_code, zone, sku',
+    '  UNION ALL',
+    "  SELECT 'S', category, shift_date, shift_code, zone, picker, CAST(NULL AS STRING), hour_of_day,",
+    '         SUM(pcs), SUM(pick_qty), COUNT(*), CAST(NULL AS INT64), CAST(NULL AS INT64)',
+    '  FROM included GROUP BY category, shift_date, shift_code, zone, picker, hour_of_day',
+    ')',
+    'SELECT cube_type, category, FORMAT_DATE(\'%Y-%m-%d\', shift_date), shift_code, zone, picker, sku, hour_of_day,',
+    '       pcs, pick_qty, line_count, min_shift_minute, max_shift_minute',
+    'FROM cubes',
+    'ORDER BY category, shift_date, cube_type'
+  ].join('\n');
+
+  const mk = () => ({
+    _d:{}, _p:{}, _s:{}, dates:[], pickers:[], skus:[],
+    rows:[], item_rows:[], slot_rows:[], input_lines:0
+  });
   const sysd = { PTT: mk(), BPS: mk() };
   const idx = (map, arr, key) => { if (!(key in map)) { map[key] = arr.length; arr.push(key); } return map[key]; };
 
   let total = 0;
   bqQueryEach_(sql, function(r) {
-    const cat = r[0];
+    const cube = r[0];
+    const cat = r[1];
     const S = sysd[cat];
-    if (!S) return;                         // เอาเฉพาะ PTT / BPS
-    const d = r[1];
-    const zone = r[2] || '??';
-    const picker = r[3] || '(none)';
-    const sku = r[4] || '(none)';
-    const tmin = Number(r[5]) || 0;
-    const pcs = Number(r[6]) || 0;
-    const pick_qty = Number(r[7]) || 0;
-    const di = idx(S._d, S.dates, d), pi = idx(S._p, S.pickers, picker), si = idx(S._s, S.skus, sku);
-    S.rows.push(di, zone, pi, si, pcs, pick_qty, tmin);
+    if (!S) return;
+    const d = r[2];
+    const shiftCode = r[3] === 'N' ? 1 : 0;
+    const zone = r[4] || '??';
+    const picker = r[5] || '(none)';
+    const sku = r[6] || '(none)';
+    const hour = Number(r[7]) || 0;
+    const pcs = Number(r[8]) || 0;
+    const pickQty = Number(r[9]) || 0;
+    const lines = Number(r[10]) || 0;
+    const minSm = Number(r[11]) || 0;
+    const maxSm = Number(r[12]) || 0;
+    const di = idx(S._d, S.dates, d);
+    if (cube === 'W') {
+      const pi = idx(S._p, S.pickers, picker);
+      S.rows.push(di, shiftCode, zone, pi, pcs, pickQty, lines, minSm, maxSm);
+      S.input_lines += lines;
+    } else if (cube === 'I') {
+      const si = idx(S._s, S.skus, sku);
+      S.item_rows.push(di, shiftCode, zone, si, pcs, pickQty, lines);
+    } else if (cube === 'S') {
+      const pi = idx(S._p, S.pickers, picker);
+      S.slot_rows.push(di, shiftCode, zone, pi, hour, pcs, pickQty, lines);
+    }
     total++;
   }, JOB_DEADLINE_MS, useQueryCache !== false);
   ['PTT','BPS'].forEach(c => sortDates_(sysd[c]));
+
+  const compact = function(S) {
+    return {
+      row_width: 9, item_row_width: 7, slot_row_width: 8,
+      dates: S.dates, pickers: S.pickers, skus: S.skus,
+      rows: S.rows, item_rows: S.item_rows, slot_rows: S.slot_rows
+    };
+  };
+  const inputLines = sysd.PTT.input_lines + sysd.BPS.input_lines;
 
   return {
     meta: { generated: new Date().toISOString(), source: 'BigQuery ' + DASHBOARD_TABLE,
@@ -1333,9 +1529,10 @@ function buildDashboardData_(useQueryCache) {
             picker_affiliations: pickerAffiliations,
             zone_master: zoneMaster,
             zone_master_source: ZONE_MASTER_SHEET_ID + '/' + ZONE_MASTER_TAB,
-            recent_days: RECENT_DAYS, rows: total },
-    PTT: { row_width: 7, dates: sysd.PTT.dates, pickers: sysd.PTT.pickers, skus: sysd.PTT.skus, rows: sysd.PTT.rows },
-    BPS: { row_width: 7, dates: sysd.BPS.dates, pickers: sysd.BPS.pickers, skus: sysd.BPS.skus, rows: sysd.BPS.rows }
+            excluded_skus: scope.excludedSkus,
+            recent_days: RECENT_DAYS, rows: total, input_lines: inputLines },
+    PTT: compact(sysd.PTT),
+    BPS: compact(sysd.BPS)
   };
 }
 
@@ -1371,10 +1568,12 @@ function refreshDashboardTableNow() {
 
 // เรียงวันที่ให้ต่อเนื่อง แล้ว remap index ของ rows ตามลำดับใหม่
 function sortDates_(S) {
-  const w = (S && S.row_width) || 7;
   const order = S.dates.map((d, i) => [d, i]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
   const remap = {}; order.forEach((o, ni) => remap[o[1]] = ni);
-  for (let i = 0; i < S.rows.length; i += w) S.rows[i] = remap[S.rows[i]];
+  [[S.rows, 9], [S.item_rows, 7], [S.slot_rows, 8]].forEach(function(entry) {
+    const rows = entry[0], width = entry[1];
+    for (let i = 0; i < rows.length; i += width) rows[i] = remap[rows[i]];
+  });
   S.dates = order.map(o => o[0]);
 }
 
@@ -1382,7 +1581,9 @@ function sortDates_(S) {
 function bqQueryEach_(sql, onRow, deadlineMs, useQueryCache) {
   const deadline = Number(deadlineMs || JOB_DEADLINE_MS);
   const started = Date.now();
-  const pageSize = 10000;
+  // ทดสอบจริงกับ Cube: 30k/หน้าเร็วกว่า 50k และไม่เกิด out of memory แบบ 100k
+  // การขอหน้าที่ใหญ่ขึ้นลด network round-trip ของ Apps Script ลงมาก โดยยังอ่านแบบทีละหน้า
+  const pageSize = BQ_RESULT_PAGE_ROWS;
   let page = BigQuery.Jobs.query({
     query: sql,
     useLegacySql: false,
