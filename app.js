@@ -1783,24 +1783,31 @@ async function loadCurrentItemCube(force){
   if(!force && itemCubePayloadCache.has(requestKey)) return itemCubePayloadCache.get(requestKey);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120000);
+  const timeout = setTimeout(() => controller.abort(), 60000);
   const task = (async () => {
     try{
-      const dates = cubeRequestDates(requestSystem, requestFrom, requestTo);
-      const tasks = dates.map(date => () => fetchDailyItemCube(
-        requestSystem, date, requestShift, controller.signal, force
-      ));
-      const dailyPayloads = await runWithConcurrency(tasks, 3);
-      const payload = {
-        schema_version:DASHBOARD_SCHEMA_VERSION,
-        system:requestSystem,
-        from:requestFrom,
-        to:requestTo,
-        shift:requestShift,
-        row_width:7,
-        rows:dailyPayloads.flatMap(day => day.rows),
-        generated:new Date().toISOString()
-      };
+      const query = [
+        'mode=item_cube',
+        'system=' + encodeURIComponent(requestSystem),
+        'from=' + encodeURIComponent(requestFrom),
+        'to=' + encodeURIComponent(requestTo),
+        'shift=' + encodeURIComponent(requestShift),
+        't=' + Date.now()
+      ].join('&');
+      const response = await fetchWithTransientRetry(
+        DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
+        {cache:'no-store', signal:controller.signal},
+        2
+      );
+      if(!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      if(payload && payload.error) throw new Error(payload.error);
+      if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
+          payload.system !== requestSystem || payload.from !== requestFrom || payload.to !== requestTo ||
+          payload.shift !== requestShift || Number(payload.row_width) !== 7 ||
+          !Array.isArray(payload.rows) || payload.rows.length % 7 !== 0){
+        throw new Error('Apps Script ตอบข้อมูลสินค้าไม่ตรงกับช่วงวันที่เลือก');
+      }
       itemCubePayloadCache.set(requestKey, payload);
       while(itemCubePayloadCache.size > 8) itemCubePayloadCache.delete(itemCubePayloadCache.keys().next().value);
       itemCubeLoadState.set(requestKey, {status:'done'});
@@ -1813,7 +1820,7 @@ async function loadCurrentItemCube(force){
       return payload;
     }catch(err){
       const message = err && err.name === 'AbortError'
-        ? 'โหลดข้อมูลสินค้าใช้เวลานานเกิน 2 นาที'
+        ? 'โหลดข้อมูลสินค้าใช้เวลานานเกิน 1 นาที'
         : String(err && err.message || err);
       itemCubeLoadState.set(requestKey, {status:'error', message});
       if(itemCubeRequestKey() === requestKey && currentPage === 'items') render();
@@ -1919,24 +1926,32 @@ async function loadCurrentSlotCube(force, system = sys){
   if(!force && slotCubePayloadCache.has(requestKey)) return slotCubePayloadCache.get(requestKey);
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120000);
+  const timeout = setTimeout(() => controller.abort(), 60000);
   const task = (async () => {
     try{
-      const dates = cubeRequestDates(requestSystem, requestFrom, requestTo);
-      const tasks = dates.map(date => () => fetchDailySlotCube(
-        requestSystem, date, requestShift, controller.signal, force
-      ));
-      const dailyPayloads = await runWithConcurrency(tasks, 3);
-      const payload = {
-        schema_version:DASHBOARD_SCHEMA_VERSION,
-        system:requestSystem,
-        from:requestFrom,
-        to:requestTo,
-        shift:requestShift,
-        row_width:8,
-        rows:dailyPayloads.flatMap(day => day.rows),
-        generated:new Date().toISOString()
-      };
+      const query = [
+        'mode=slot_cube',
+        'system=' + encodeURIComponent(requestSystem),
+        'from=' + encodeURIComponent(requestFrom),
+        'to=' + encodeURIComponent(requestTo),
+        'shift=' + encodeURIComponent(requestShift),
+        dashboardScopeQuery(),
+        't=' + Date.now()
+      ].join('&');
+      const response = await fetchWithTransientRetry(
+        DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
+        {cache:'no-store', signal:controller.signal},
+        2
+      );
+      if(!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      if(payload && payload.error) throw new Error(payload.error);
+      if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
+          payload.system !== requestSystem || payload.from !== requestFrom || payload.to !== requestTo ||
+          payload.shift !== requestShift || Number(payload.row_width) !== 8 ||
+          !Array.isArray(payload.rows) || payload.rows.length % 8 !== 0){
+        throw new Error('Apps Script ตอบข้อมูลช่วงเวลาไม่ตรงกับที่เลือก');
+      }
       slotCubePayloadCache.set(requestKey, payload);
       while(slotCubePayloadCache.size > 8) slotCubePayloadCache.delete(slotCubePayloadCache.keys().next().value);
       slotCubeLoadState.set(requestKey, {status:'done'});
@@ -1947,7 +1962,7 @@ async function loadCurrentSlotCube(force, system = sys){
       return payload;
     }catch(err){
       const message = err && err.name === 'AbortError'
-        ? 'โหลดข้อมูลช่วงเวลาใช้เวลานานเกิน 2 นาที'
+        ? 'โหลดข้อมูลช่วงเวลาใช้เวลานานเกิน 1 นาที'
         : String(err && err.message || err);
       slotCubeLoadState.set(requestKey, {status:'error', message});
       if(currentPage === 'time' || currentPage === 'typebreak') render();
