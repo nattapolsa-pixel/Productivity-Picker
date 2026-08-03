@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v6-lazy-cubes';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v7-resilient-cubes';
 const MAX_UPLOAD_ROWS = 50000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const JOB_DEADLINE_MS = 240000;
@@ -28,10 +28,12 @@ const JOB_DEADLINE_MS = 240000;
 const BQ_RESULT_PAGE_ROWS = 30000;
 // ==========================================================
 
-const MASTER_CACHE_TTL = 3600; // Master อัปเดตรายวัน; ลด cold rebuild จากทุก 15 นาทีเหลืออย่างมากชั่วโมงละครั้ง
+const MASTER_CACHE_TTL = 21600; // Master อัปเดตรายวัน; ใช้ cache 6 ชม. เพื่อลด cold rebuild ของ Apps Script
 const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่างเดียวกับ revision เพื่อลด cache chunk เก่าค้าง
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v3-lazy-cubes';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v4-gzip-daily-cubes';
+const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
+const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
 const PICKER_NAME_TAB = 'บันทึกเวลาทำงาน';
 const PICKER_NAME_START_ROW = 26;
@@ -83,6 +85,24 @@ function doGet(e) {
         console.warn('Item cube cache write failed: ' + itemCacheWriteErr);
       }
       return textJson_(itemJson);
+    }
+    // Time-slot cube แยกจาก payload หลักเช่นเดียวกับ Item เพื่อให้หน้าแรกและหน้าพนักงาน
+    // ตอบกลับได้เร็วแม้ Script Cache หมดอายุ
+    if (mode === 'slot_cube') {
+      const slotRevision = getSlotCubeCacheRevision_(e, requestScope);
+      try {
+        const cachedSlots = getCached_(slotRevision);
+        if (cachedSlots) return textJson_(cachedSlots);
+      } catch (slotCacheReadErr) {
+        console.warn('Slot cube cache read failed: ' + slotCacheReadErr);
+      }
+      const slotJson = JSON.stringify(buildSlotCubeData_(e, requestScope));
+      try {
+        setCached_(slotJson, slotRevision);
+      } catch (slotCacheWriteErr) {
+        console.warn('Slot cube cache write failed: ' + slotCacheWriteErr);
+      }
+      return textJson_(slotJson);
     }
     const revision = getDashboardRevisionToken_(getDataRevision_(), requestScope.key);
     if (mode === 'revision') {
@@ -196,6 +216,19 @@ function getItemCubeCacheRevision_(e) {
     sha256Hex_(JSON.stringify(scope)).slice(0, 24);
 }
 
+function getSlotCubeCacheRevision_(e, requestScope) {
+  const params = e && e.parameter || {};
+  const scope = [
+    String(params.system || '').toUpperCase(),
+    String(params.from || ''),
+    String(params.to || ''),
+    String(params.shift || 'all').toLowerCase(),
+    String(requestScope && requestScope.key || 'all')
+  ];
+  return 'slot_' + getDataRevision_() + '_' + getDashboardRefreshBucket_() + '_' +
+    sha256Hex_(JSON.stringify(scope)).slice(0, 24);
+}
+
 function buildItemCubeData_(e) {
   const params = e && e.parameter || {};
   const system = String(params.system || '').toUpperCase();
@@ -221,6 +254,7 @@ function buildItemCubeData_(e) {
     '    pcs, pick_qty',
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
+    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
     '),',
     'filtered AS (',
     '  SELECT * FROM base',
@@ -250,6 +284,73 @@ function buildItemCubeData_(e) {
     to: to,
     shift: shift,
     row_width: 7,
+    rows: rows,
+    generated: new Date().toISOString()
+  };
+}
+
+function buildSlotCubeData_(e, requestScope) {
+  const params = e && e.parameter || {};
+  const system = String(params.system || '').toUpperCase();
+  const from = String(params.from || '').trim();
+  const to = String(params.to || '').trim();
+  const shift = String(params.shift || 'all').toLowerCase();
+  if (system !== 'PTT' && system !== 'BPS') throw new Error('ระบบที่ขอไม่ถูกต้อง');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+    throw new Error('ช่วงวันที่ไม่ถูกต้อง');
+  }
+  if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
+
+  const scope = requestScope || { excludedSkus: [] };
+  const excludedSql = scope.excludedSkus.length
+    ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
+    : '';
+  const shiftSql = shift === 'morning'
+    ? "AND shift_code = 'M'"
+    : (shift === 'night' ? "AND shift_code = 'N'" : '');
+  const sql = [
+    'WITH base AS (',
+    '  SELECT',
+    '    IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date,',
+    "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
+    "    COALESCE(zone, '??') AS zone,",
+    "    COALESCE(picker_id, '(none)') AS picker,",
+    "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
+    '    CAST(DIV(tmin, 60) AS INT64) AS hour_of_day,',
+    '    pcs, pick_qty',
+    '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
+    '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
+    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
+    '),',
+    'filtered AS (',
+    '  SELECT * FROM base',
+    '  WHERE shift_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
+    '    ' + shiftSql,
+    '    ' + excludedSql,
+    ')',
+    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, picker, hour_of_day,",
+    '       SUM(pcs), SUM(pick_qty), COUNT(*)',
+    'FROM filtered',
+    'GROUP BY shift_date, shift_code, zone, picker, hour_of_day',
+    'ORDER BY shift_date, hour_of_day, zone, picker'
+  ].join('\n');
+
+  const rows = [];
+  bqQueryEach_(sql, function(r) {
+    rows.push(
+      String(r[0] || ''), r[1] === 'N' ? 1 : 0,
+      String(r[2] || '??'), String(r[3] || '(none)'), Number(r[4]) || 0,
+      Number(r[5]) || 0, Number(r[6]) || 0, Number(r[7]) || 0
+    );
+  }, JOB_DEADLINE_MS, true);
+
+  return {
+    schema_version: DASHBOARD_SCHEMA_VERSION,
+    system: system,
+    from: from,
+    to: to,
+    shift: shift,
+    row_width: 8,
     rows: rows,
     generated: new Date().toISOString()
   };
@@ -341,7 +442,7 @@ function clearCache_(revision) {
     const prefix = cachePrefix_(revision);
     const n = c.get(prefix + 'n');
     if (n) {
-      const cnt = parseInt(n, 10), keys = [prefix + 'n'];
+      const cnt = parseInt(n, 10), keys = [prefix + 'n', prefix + 'codec'];
       for (let i = 0; i < cnt; i++) keys.push(prefix + i);
       c.removeAll(keys);
     }
@@ -822,7 +923,8 @@ function textJson_(str) {
   return ContentService.createTextOutput(str).setMimeType(ContentService.MimeType.JSON);
 }
 
-// เก็บ/อ่าน JSON ก้อนใหญ่ใน Script Cache แบบแบ่งชิ้น (แต่ละ key จำกัด ~100KB)
+// เก็บ/อ่าน JSON ก้อนใหญ่ใน Script Cache แบบ gzip + base64 แล้วแบ่งชิ้น
+// payload เดิม ~646 KB เหลือ ~277 KB หลัง encode ทำให้ CacheService ไม่หลุดบาง chunk ง่าย
 function getCached_(revision) {
   const c = CacheService.getScriptCache();
   const prefix = cachePrefix_(revision);
@@ -835,14 +937,26 @@ function getCached_(revision) {
     if (part == null) return null;
     parts.push(part);
   }
-  return parts.join('');
+  const joined = parts.join('');
+  const codec = c.get(prefix + 'codec');
+  if (codec !== CACHE_CODEC) return joined;
+  const compressed = Utilities.base64Decode(joined);
+  return Utilities.ungzip(Utilities.newBlob(compressed)).getDataAsString('UTF-8');
 }
 function setCached_(str, revision) {
   const c = CacheService.getScriptCache();
   const prefix = cachePrefix_(revision);
-  const CH = 95000, cnt = Math.ceil(str.length / CH), obj = {};
-  for (let i = 0; i < cnt; i++) obj[prefix + i] = str.substring(i * CH, (i + 1) * CH);
+  const compressed = Utilities.gzip(
+    Utilities.newBlob(String(str || ''), 'application/json', 'dashboard.json')
+  ).getBytes();
+  const encoded = Utilities.base64Encode(compressed);
+  const cnt = Math.ceil(encoded.length / CACHE_CHUNK_CHARS), obj = {};
+  for (let i = 0; i < cnt; i++) {
+    obj[prefix + i] = encoded.substring(i * CACHE_CHUNK_CHARS, (i + 1) * CACHE_CHUNK_CHARS);
+  }
   c.putAll(obj, CACHE_TTL);
+  c.put(prefix + 'codec', CACHE_CODEC, CACHE_TTL);
+  // เขียน n หลังทุก chunk สำเร็จ เพื่อไม่ให้ผู้อ่านเห็น cache ที่ยังไม่ครบ
   c.put(prefix + 'n', String(cnt), CACHE_TTL);
 }
 
@@ -1512,10 +1626,9 @@ function buildDashboardData_(useQueryCache, requestScope) {
     ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
     : '';
 
-  // ส่งเฉพาะ cube ที่หน้าเว็บใช้ แทน 1 แถวต่อ Pick Detail:
-  // W = วัน/กะ/Zone/Picker (KPI, Productivity, OT)
-  // S = วัน/กะ/Zone/Picker/ชั่วโมง (กราฟช่วงเวลา)
-  // มิติ Item แยกเป็น mode=item_cube และโหลดเมื่อผู้ใช้เปิดดูเท่านั้น
+  // Payload หลักส่งเฉพาะ W = วัน/กะ/Zone/Picker สำหรับ KPI, Productivity, OT และหน้าพนักงาน
+  // มิติ Item และ Time-slot แยกเป็น mode=item_cube / mode=slot_cube และโหลดเป็นรายวันเมื่อเปิดหน้า
+  // ทำให้ cache miss ยังตอบ payload หลักได้ทันและข้อมูลพนักงานไม่หายเมื่อข้อมูลโตขึ้น
   const sql = [
     'WITH base AS (',
     '  SELECT',
@@ -1524,9 +1637,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
     "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
     '    COALESCE(zone, \'??\') AS zone,',
     '    COALESCE(picker_id, \'(none)\') AS picker,',
-    '    COALESCE(CAST(sku AS STRING), \'(none)\') AS sku,',
     "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
-    '    CAST(DIV(tmin, 60) AS INT64) AS hour_of_day,',
     '    CASE WHEN tmin >= 1140 THEN tmin - 1140 WHEN tmin < 420 THEN tmin + 300 ELSE tmin - 420 END AS shift_minute,',
     '    pcs, pick_qty',
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
@@ -1536,21 +1647,11 @@ function buildDashboardData_(useQueryCache, requestScope) {
     'included AS (',
     '  SELECT * FROM base WHERE TRUE ' + excludedSql,
     '),',
-    'cubes AS (',
-    "  SELECT 'W' AS cube_type, category, shift_date, shift_code, zone, picker,",
-    '         CAST(NULL AS STRING) AS sku, CAST(NULL AS INT64) AS hour_of_day,',
-    '         SUM(pcs) AS pcs, SUM(pick_qty) AS pick_qty, COUNT(*) AS line_count,',
-    '         MIN(shift_minute) AS min_shift_minute, MAX(shift_minute) AS max_shift_minute',
-    '  FROM included GROUP BY category, shift_date, shift_code, zone, picker',
-    '  UNION ALL',
-    "  SELECT 'S', category, shift_date, shift_code, zone, picker, CAST(NULL AS STRING), hour_of_day,",
-    '         SUM(pcs), SUM(pick_qty), COUNT(*), CAST(NULL AS INT64), CAST(NULL AS INT64)',
-    '  FROM included GROUP BY category, shift_date, shift_code, zone, picker, hour_of_day',
-    ')',
-    'SELECT cube_type, category, FORMAT_DATE(\'%Y-%m-%d\', shift_date), shift_code, zone, picker, sku, hour_of_day,',
-    '       pcs, pick_qty, line_count, min_shift_minute, max_shift_minute',
-    'FROM cubes',
-    'ORDER BY category, shift_date, cube_type'
+    "SELECT category, FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, picker,",
+    '       SUM(pcs), SUM(pick_qty), COUNT(*), MIN(shift_minute), MAX(shift_minute)',
+    'FROM included',
+    'GROUP BY category, shift_date, shift_code, zone, picker',
+    'ORDER BY category, shift_date, zone, picker'
   ].join('\n');
 
   const mk = () => ({
@@ -1562,30 +1663,22 @@ function buildDashboardData_(useQueryCache, requestScope) {
 
   let total = 0;
   bqQueryEach_(sql, function(r) {
-    const cube = r[0];
-    const cat = r[1];
+    const cat = r[0];
     const S = sysd[cat];
     if (!S) return;
-    const d = r[2];
-    const shiftCode = r[3] === 'N' ? 1 : 0;
-    const zone = r[4] || '??';
-    const picker = r[5] || '(none)';
-    const sku = r[6] || '(none)';
-    const hour = Number(r[7]) || 0;
-    const pcs = Number(r[8]) || 0;
-    const pickQty = Number(r[9]) || 0;
-    const lines = Number(r[10]) || 0;
-    const minSm = Number(r[11]) || 0;
-    const maxSm = Number(r[12]) || 0;
+    const d = r[1];
+    const shiftCode = r[2] === 'N' ? 1 : 0;
+    const zone = r[3] || '??';
+    const picker = r[4] || '(none)';
+    const pcs = Number(r[5]) || 0;
+    const pickQty = Number(r[6]) || 0;
+    const lines = Number(r[7]) || 0;
+    const minSm = Number(r[8]) || 0;
+    const maxSm = Number(r[9]) || 0;
     const di = idx(S._d, S.dates, d);
-    if (cube === 'W') {
-      const pi = idx(S._p, S.pickers, picker);
-      S.rows.push(di, shiftCode, zone, pi, pcs, pickQty, lines, minSm, maxSm);
-      S.input_lines += lines;
-    } else if (cube === 'S') {
-      const pi = idx(S._p, S.pickers, picker);
-      S.slot_rows.push(di, shiftCode, zone, pi, hour, pcs, pickQty, lines);
-    }
+    const pi = idx(S._p, S.pickers, picker);
+    S.rows.push(di, shiftCode, zone, pi, pcs, pickQty, lines, minSm, maxSm);
+    S.input_lines += lines;
     total++;
   }, JOB_DEADLINE_MS, useQueryCache !== false);
   ['PTT','BPS'].forEach(c => sortDates_(sysd[c]));
