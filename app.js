@@ -3584,6 +3584,7 @@ const builders = {
     if(!list.length) h += '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
     list.forEach((p,i) => {
       const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
+      const qtyCellStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : 'color:#4338ca;font-weight:600;';
       const prodValue = isPcs ? (p.avg_pcs_prod || 0) : (p.avg_prod || 0);
       const pickerName = p.name || getPickerName(p.picker);
       const pickerNameText = pickerName && pickerName !== p.picker ? pickerName : '-';
@@ -3623,6 +3624,8 @@ const builders = {
     const isPcs = unitMode === 'pcs';
     const chartValues = isPcs ? t.map(x=>x.pcs) : t.map(x=>x.qty);
     const chartLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
+
+    const exSlot = Chart.getChart('slot'); if(exSlot) exSlot.destroy();
     new Chart(document.getElementById('slot'), {
       type:'bar',
       data:{labels:t.map(x=>x.label), datasets:[{
@@ -3654,6 +3657,7 @@ const builders = {
     const chartValues = isPcs ? it.map(x=>x.pcs) : it.map(x=>x.qty);
     const chartLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
 
+    const exItem = Chart.getChart('item'); if(exItem) exItem.destroy();
     new Chart(document.getElementById('item'), {
       type: 'bar',
       data: {
@@ -3772,6 +3776,7 @@ const builders = {
       elTable.innerHTML = h;
     }
 
+    renderItemTable();
   }
 };
 
