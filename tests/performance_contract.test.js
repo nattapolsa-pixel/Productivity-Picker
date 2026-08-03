@@ -17,10 +17,13 @@ assert(app.includes('const pendingLoad = activeLoadPromise;'), 'Post-upload refr
 assert(app.includes('const result = await loadData(true);'), 'Post-upload refresh must force one post-MERGE request');
 assert(app.includes('retry.onclick = () => loadData(false)'), 'Retry after timeout must reuse a completed server cache');
 assert(app.includes('30 * 24 * 60 * 60 * 1000'), 'Last-known-good dashboard cache must survive normal gaps between visits');
-assert(app.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v5-cubes'"), 'Frontend must use the compact cube payload');
+assert(app.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v6-lazy-cubes'"), 'Frontend must use the lazy compact cube payload');
 assert(app.includes('packedItemRowData') && app.includes('packedSlotRowData'), 'Frontend cube readers are missing');
 assert(app.includes("'mode=picker_items'"), 'Picker SKU detail must load lazily instead of bloating the initial payload');
 assert(app.includes('loadPickerItemsForDrilldown'), 'Picker SKU lazy loader is missing');
+assert(app.includes("'mode=item_cube'"), 'Item detail must load lazily instead of bloating the initial payload');
+assert(app.includes('loadCurrentItemCube'), 'Item cube lazy loader is missing');
+assert(app.includes('fetchWithTransientRetry'), 'Transient Apps Script failures must retry automatically');
 
 assert(backend.includes("if (mode === 'revision')"), 'Backend revision endpoint is missing');
 assert(backend.includes('dataObj.meta.data_revision = revision'), 'Dashboard revision metadata is missing');
@@ -31,9 +34,10 @@ assert(backend.includes('const BQ_RESULT_PAGE_ROWS = 30000'), 'BigQuery cube pag
 assert(backend.includes('const pageSize = BQ_RESULT_PAGE_ROWS'), 'Dashboard query must use the optimized BigQuery page size');
 assert(backend.includes('const cachedAfterWait = getCached_(revision)'), 'Concurrent cache misses must share the first completed dashboard build');
 assert(backend.includes('dashboardBuildLock.tryLock(90000)'), 'Dashboard build must prevent a BigQuery thundering herd');
-assert(backend.includes("SELECT 'W' AS cube_type") && backend.includes("SELECT 'I'") && backend.includes("SELECT 'S'"), 'Backend must aggregate work, item, and time-slot cubes in BigQuery');
+assert(backend.includes("SELECT 'W' AS cube_type") && !backend.includes("SELECT 'I'") && backend.includes("SELECT 'S'"), 'Initial backend payload must include only work and time-slot cubes');
 assert(backend.includes("if (mode === 'picker_items')") && backend.includes('buildPickerItemsData_'), 'Backend picker SKU detail endpoint is missing');
-assert(backend.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v5-cubes'"), 'Backend must publish the compact cube schema');
+assert(backend.includes("if (mode === 'item_cube')") && backend.includes('buildItemCubeData_'), 'Backend item cube lazy endpoint is missing');
+assert(backend.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v6-lazy-cubes'"), 'Backend must publish the lazy compact cube schema');
 assert(backend.includes('SET (source_rows, inserted_rows, updated_rows)'), 'MERGE stats must use one pre-merge scan');
 assert(!backend.includes("compression: 'GZIP'"), 'NDJSON must remain parallel-loadable');
 assert(!backend.includes('Utilities.gzip('), 'Do not gzip NDJSON; BigQuery cannot parallel-read compressed JSON');

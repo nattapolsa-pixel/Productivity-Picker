@@ -5,9 +5,9 @@
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
-// v5 sends pre-aggregated BigQuery cubes. Do not accept an older payload:
+// v6 sends compact work/time cubes first and lazy-loads item detail. Do not accept an older payload:
 // its pick_qty may have the retired Pack Size semantics or row-level format.
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v5-cubes';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v6-lazy-cubes';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -70,6 +70,7 @@ let ZONE_MASTER = {...ZONE_MASTER_FALLBACK};
 let aggregateCache = new Map();
 let excludedSkuRevision = 0;
 let dashboardCacheRevision = '';
+let activeZoneDetailCode = '';
 const DASHBOARD_TIMEOUT_MS = 180000;
 const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
 const DASHBOARD_CACHE_DB = 'pick_dashboard_cache_v1';
@@ -681,6 +682,7 @@ function renderWarehouseMap(activeLocations, isPcs){
 
 function openZoneDetailModal(zoneCode) {
   try {
+    activeZoneDetailCode = String(zoneCode || '').trim().toUpperCase();
     const isPcs = unitMode === 'pcs';
     const S = DATA[sys];
     if (!S || !Array.isArray(S.rows)) return;
@@ -732,19 +734,14 @@ function openZoneDetailModal(zoneCode) {
       if (sh.smMax > pRec.maxSm) pRec.maxSm = sh.smMax;
     }
 
-    // SKU มาจาก Item cube เพื่อไม่ให้ Work cube ต้องแบกมิติ SKU หลายแสนแถว
-    const itemCount = packedItemRowCount(S);
-    for(let i=0;i<itemCount;i++){
-      const row = packedItemRowData(S, i);
-      const sd = S.dates[row.dateIdx];
-      const sh = row.shiftCode === 1 ? 'night' : 'morning';
-      if(sd < dfrom || sd > dto || (shiftF !== 'all' && sh !== shiftF)) continue;
+    // SKU โหลดแบบ lazy เฉพาะเมื่อเปิดรายละเอียด Zone ไม่เพิ่มภาระให้หน้าแรก
+    const itemRowsReady = forEachCurrentItemRow(sys, dfrom, dto, shiftF, row => {
       const zInfo = getZoneInfo(row.zone);
       const zCode = zInfo.zone || zInfo.location || String(row.zone || '-').trim().toUpperCase();
       const rawLocStr = String(row.zone || '-').trim().toUpperCase();
-      if(zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode) continue;
-      const sku = S.skus[row.skuIdx];
-      if(isSkuExcluded(sku)) continue;
+      if(zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode) return;
+      const sku = row.sku;
+      if(isSkuExcluded(sku)) return;
       const itemInfo = getItemInfo(sku);
       const skuRec = uniqueSkus.get(sku) || {
         sku, name:itemInfo.name || sku, owner:itemInfo.owner || zInfo.owner || '-', qty:0, pcs:0, lines:0
@@ -753,7 +750,8 @@ function openZoneDetailModal(zoneCode) {
       skuRec.pcs += row.pcs;
       skuRec.lines += row.lines;
       uniqueSkus.set(sku, skuRec);
-    }
+    });
+    if(!itemRowsReady) void loadCurrentItemCube(false);
 
     let totalWorkHours = 0;
     const pickerList = [...uniquePickers.values()].map(p => {
@@ -889,7 +887,11 @@ function openZoneDetailModal(zoneCode) {
               <tbody>`;
 
       if (skuList.length === 0) {
-        bodyHtml += `<tr><td colspan="7" class="empty-cell" style="text-align:center; padding:16px; color:#94a3b8;">ไม่มีรายการสินค้าใน Zone นี้ช่วงวันที่เลือก</td></tr>`;
+        const itemState = itemCubeLoadState.get(itemCubeRequestKey());
+        const itemMessage = !itemRowsReady && itemState && itemState.status === 'error'
+          ? `โหลดรายการสินค้าไม่สำเร็จ: ${escapeZoneHtml(itemState.message || '')} <button onclick="retryCurrentItemCube()" class="refreshbtn">ลองอีกครั้ง</button>`
+          : (!itemRowsReady ? 'กำลังโหลดรายการสินค้าเฉพาะช่วงที่เลือก…' : 'ไม่มีรายการสินค้าใน Zone นี้ช่วงวันที่เลือก');
+        bodyHtml += `<tr><td colspan="7" class="empty-cell" style="text-align:center; padding:16px; color:#94a3b8;">${itemMessage}</td></tr>`;
       } else {
         skuList.slice(0, 10).forEach((item, idx) => {
           const val = isPcs ? item.pcs : item.qty;
@@ -925,6 +927,7 @@ function openZoneDetailModal(zoneCode) {
 }
 
 function closeZoneDetailModal() {
+  activeZoneDetailCode = '';
   const modalEl = document.getElementById('zoneDetailModal');
   if (modalEl) modalEl.style.display = 'none';
 }
@@ -1123,22 +1126,18 @@ function aggregate(system, from, to, sf){
     dRec.zones[zone].pcs += pVal; dRec.zones[zone].qty += qVal; dRec.zones[zone].lines += lineVal;
   }
 
-  // Item cube มี SKU ครบทั้งหมดเพื่อให้รายการยกเว้นยังแสดงและนำกลับมาคำนวณได้
-  const itemRowCount = packedItemRowCount(S);
-  for(let i=0;i<itemRowCount;i++){
-    const r = packedItemRowData(S, i);
-    const sd = S.dates[r.dateIdx];
-    const sh = r.shiftCode === 1 ? 'night' : 'morning';
-    if(sd < from || sd > to || (sf !== 'all' && sh !== sf)) continue;
+  // Item cube โหลดเฉพาะหน้า Items/รายละเอียด Zone; payload รุ่นเดิมยังใช้เป็น fallback สำหรับ cache/test
+  forEachCurrentItemRow(system, from, to, sf, r => {
     const zone = getZoneInfo(r.zone).zone;
-    if(isZoneExcluded(zone)) continue;
-    const sku = S.skus[r.skuIdx];
+    if(isZoneExcluded(zone)) return;
+    const sku = r.sku;
     const all = itemMapAll[sku] || (itemMapAll[sku] = {pcs:0,qty:0,lines:0});
     all.pcs += r.pcs; all.qty += r.pickQty; all.lines += r.lines;
-    if(isSkuExcluded(sku)) continue;
-    const item = itemMap[sku] || (itemMap[sku] = {pcs:0,qty:0,lines:0});
-    item.pcs += r.pcs; item.qty += r.pickQty; item.lines += r.lines;
-  }
+    if(!isSkuExcluded(sku)) {
+      const item = itemMap[sku] || (itemMap[sku] = {pcs:0,qty:0,lines:0});
+      item.pcs += r.pcs; item.qty += r.pickQty; item.lines += r.lines;
+    }
+  });
 
   // Time-slot cube เก็บชั่วโมงแยกตาม Picker/Zone โดยตัด SKU ที่ยกเว้นจาก BigQuery แล้ว
   const slotRowCount = packedSlotRowCount(S);
@@ -1634,6 +1633,157 @@ let selectedPickerId = '';
 let selectedPickerDate = 'all';
 const pickerItemPayloadCache = new Map();
 const pickerItemLoadState = new Map();
+const itemCubePayloadCache = new Map();
+const itemCubeLoadState = new Map();
+
+function dashboardDataEpoch(){
+  const parts = String(dashboardCacheRevision || '0').split(':');
+  return parts.length >= 2 ? parts.slice(0, 2).join(':') : parts[0];
+}
+
+function itemCubeRequestKey(system = sys, from = dfrom, to = dto, sf = shiftF){
+  return [dashboardDataEpoch(), system, from, to, sf].join('|');
+}
+
+function hasCurrentItemCube(system = sys, from = dfrom, to = dto, sf = shiftF){
+  if(itemCubePayloadCache.has(itemCubeRequestKey(system, from, to, sf))) return true;
+  const source = DATA && DATA[system];
+  return packedItemRowCount(source) > 0;
+}
+
+function forEachCurrentItemRow(system, from, to, sf, callback){
+  const payload = itemCubePayloadCache.get(itemCubeRequestKey(system, from, to, sf));
+  if(payload){
+    const rows = payload.rows;
+    for(let offset=0; offset<rows.length; offset+=7){
+      callback({
+        date:String(rows[offset] || ''),
+        shift:Number(rows[offset + 1]) === 1 ? 'night' : 'morning',
+        zone:rows[offset + 2],
+        sku:normalizeSkuKey(rows[offset + 3]) || '(none)',
+        pcs:Number(rows[offset + 4]) || 0,
+        pickQty:readBigQueryPickQty(rows[offset + 5]),
+        lines:Number(rows[offset + 6]) || 0
+      });
+    }
+    return true;
+  }
+
+  // รองรับ payload รุ่นก่อนหน้าและข้อมูลจำลองในชุดทดสอบ
+  const source = DATA && DATA[system];
+  const count = packedItemRowCount(source);
+  for(let i=0; i<count; i++){
+    const row = packedItemRowData(source, i);
+    const date = source.dates[row.dateIdx];
+    const shift = row.shiftCode === 1 ? 'night' : 'morning';
+    if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
+    callback({
+      date, shift, zone:row.zone, sku:normalizeSkuKey(source.skus[row.skuIdx]) || '(none)',
+      pcs:row.pcs, pickQty:row.pickQty, lines:row.lines
+    });
+  }
+  return count > 0;
+}
+
+function waitForRetry(ms, signal){
+  return new Promise((resolve, reject) => {
+    if(signal && signal.aborted){
+      const err = new Error('Request aborted'); err.name = 'AbortError'; reject(err); return;
+    }
+    const timer = setTimeout(resolve, ms);
+    if(signal) signal.addEventListener('abort', () => {
+      clearTimeout(timer);
+      const err = new Error('Request aborted'); err.name = 'AbortError'; reject(err);
+    }, {once:true});
+  });
+}
+
+async function fetchWithTransientRetry(url, options, retries = 1){
+  const transientStatuses = new Set([404, 408, 429, 500, 502, 503, 504]);
+  let lastError = null;
+  for(let attempt=0; attempt<=retries; attempt++){
+    try{
+      const response = await fetch(url, options);
+      if(response.ok || !transientStatuses.has(response.status) || attempt === retries) return response;
+      lastError = new Error('HTTP ' + response.status);
+    }catch(err){
+      if(err && err.name === 'AbortError') throw err;
+      lastError = err;
+      if(attempt === retries) throw err;
+    }
+    await waitForRetry(1200 * (attempt + 1), options && options.signal);
+  }
+  throw lastError || new Error('เชื่อมต่อไม่สำเร็จ');
+}
+
+async function loadCurrentItemCube(force){
+  if(!DATA_URL || !dfrom || !dto) return;
+  const requestSystem = sys;
+  const requestFrom = dfrom;
+  const requestTo = dto;
+  const requestShift = shiftF;
+  const requestKey = itemCubeRequestKey(requestSystem, requestFrom, requestTo, requestShift);
+  const currentState = itemCubeLoadState.get(requestKey);
+  if(!force && currentState && currentState.status === 'loading') return currentState.promise;
+  if(!force && itemCubePayloadCache.has(requestKey)) return itemCubePayloadCache.get(requestKey);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  const task = (async () => {
+    try{
+      const query = [
+        'mode=item_cube',
+        'system=' + encodeURIComponent(requestSystem),
+        'from=' + encodeURIComponent(requestFrom),
+        'to=' + encodeURIComponent(requestTo),
+        'shift=' + encodeURIComponent(requestShift),
+        't=' + Date.now()
+      ].join('&');
+      const response = await fetchWithTransientRetry(
+        DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
+        {cache:'no-store', signal:controller.signal},
+        1
+      );
+      if(!response.ok) throw new Error('HTTP ' + response.status);
+      const payload = await response.json();
+      if(payload && payload.error) throw new Error(payload.error);
+      if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
+          payload.system !== requestSystem || payload.from !== requestFrom || payload.to !== requestTo ||
+          payload.shift !== requestShift || Number(payload.row_width) !== 7 ||
+          !Array.isArray(payload.rows) || payload.rows.length % 7 !== 0){
+        throw new Error('Apps Script ตอบรายการสินค้าไม่ตรงกับหน้าที่เลือก');
+      }
+      itemCubePayloadCache.set(requestKey, payload);
+      while(itemCubePayloadCache.size > 8) itemCubePayloadCache.delete(itemCubePayloadCache.keys().next().value);
+      itemCubeLoadState.set(requestKey, {status:'done'});
+      if(itemCubeRequestKey() === requestKey){
+        aggregateCache.clear();
+        if(currentPage === 'items') render();
+        const modal = document.getElementById('zoneDetailModal');
+        if(activeZoneDetailCode && modal && modal.style.display !== 'none') openZoneDetailModal(activeZoneDetailCode);
+      }
+      return payload;
+    }catch(err){
+      const message = err && err.name === 'AbortError'
+        ? 'โหลดข้อมูลสินค้าใช้เวลานานเกิน 2 นาที'
+        : String(err && err.message || err);
+      itemCubeLoadState.set(requestKey, {status:'error', message});
+      if(itemCubeRequestKey() === requestKey && currentPage === 'items') render();
+      return null;
+    }finally{
+      clearTimeout(timeout);
+    }
+  })();
+  itemCubeLoadState.set(requestKey, {status:'loading', promise:task});
+  if(currentPage === 'items') render();
+  return task;
+}
+
+function retryCurrentItemCube(){
+  const requestKey = itemCubeRequestKey();
+  itemCubeLoadState.delete(requestKey);
+  void loadCurrentItemCube(true);
+}
 
 function pickerItemsRequestKey(pickerId){
   return [
@@ -1698,9 +1848,11 @@ async function loadPickerItemsForDrilldown(pickerId, force){
         dashboardScopeQuery(),
         't=' + Date.now()
       ].join('&');
-      const response = await fetch(DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query, {
-        cache:'no-store', signal:controller.signal
-      });
+      const response = await fetchWithTransientRetry(
+        DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
+        {cache:'no-store', signal:controller.signal},
+        1
+      );
       if(!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
       if(payload && payload.error) throw new Error(payload.error);
@@ -3305,6 +3457,7 @@ const builders = {
     });
   },
   items(){
+    if(!hasCurrentItemCube()) setTimeout(() => void loadCurrentItemCube(false), 0);
     const isPcs = unitMode === 'pcs';
     let it = [...A.by_item];
     it.sort((a, b) => (b.qty - a.qty) || (b.pcs - a.pcs));
@@ -3396,7 +3549,14 @@ const builders = {
 
       let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (BigQuery) ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
       if (!displayItems.length) {
-        h += '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
+        const itemState = itemCubeLoadState.get(itemCubeRequestKey());
+        if(!hasCurrentItemCube() && itemState && itemState.status === 'error'){
+          h += `<tr><td colspan="7" style="text-align:center;color:#b91c1c;padding:24px">โหลดรายการสินค้าไม่สำเร็จ: ${escapeZoneHtml(itemState.message || '')} <button onclick="retryCurrentItemCube()" class="refreshbtn">ลองอีกครั้ง</button></td></tr>`;
+        }else if(!hasCurrentItemCube()){
+          h += '<tr><td colspan="7" style="text-align:center;color:#64748b;padding:24px">⏳ กำลังโหลดรายการสินค้าเฉพาะช่วงวันที่เลือก… หน้าอื่นยังใช้งานได้ตามปกติ</td></tr>';
+        }else{
+          h += '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
+        }
       } else {
         displayItems.forEach((x, i) => {
           const isEx = isSkuExcluded(x.sku);
@@ -3856,7 +4016,7 @@ async function restoreDashboardFromCache(){
 async function fetchRevisionOrDashboard(signal){
   const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
     'mode=revision&' + dashboardScopeQuery() + '&t=' + Date.now();
-  const response = await fetch(url, {cache:'no-store', signal});
+  const response = await fetchWithTransientRetry(url, {cache:'no-store', signal}, 1);
   if(!response.ok) throw new Error('HTTP ' + response.status);
   const body = await response.text();
   const payload = JSON.parse(body);
@@ -3934,7 +4094,7 @@ async function loadDataOnce(force){
     if(!j) {
       const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
         'fresh=' + (force ? '1' : '0') + '&' + dashboardScopeQuery() + '&t=' + Date.now();
-      const res = await fetch(url, {cache:'no-store', signal:controller.signal});
+      const res = await fetchWithTransientRetry(url, {cache:'no-store', signal:controller.signal}, 1);
       if(!res.ok) throw new Error('HTTP ' + res.status);
       body = await res.text();
       try {

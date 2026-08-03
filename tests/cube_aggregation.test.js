@@ -62,4 +62,23 @@ assert.deepEqual(JSON.parse(JSON.stringify(result.by_timeslot.map(x => [x.label,
 assert.equal(result.by_picker[0].lines, 4);
 assert.equal(result.by_zone[0].qty, 25);
 
+vm.runInContext(`
+  DATA.PTT.item_rows = [];
+  DATA.PTT.skus = [];
+  dashboardCacheRevision = 'revision:bucket:scope';
+  aggregateCache.clear();
+  itemCubePayloadCache.set(itemCubeRequestKey('PTT','2026-08-01','2026-08-01','all'), {
+    schema_version:DASHBOARD_SCHEMA_VERSION, system:'PTT', from:'2026-08-01', to:'2026-08-01', shift:'all',
+    row_width:7,
+    rows:['2026-08-01',0,'AA','SKU1',100,25,4, '2026-08-01',0,'AA','SKU2',50,10,2]
+  });
+  globalThis.__lazyItemResult = aggregate('PTT','2026-08-01','2026-08-01','all');
+`, context);
+
+const lazyResult = context.__lazyItemResult;
+assert.equal(lazyResult.by_item.length, 1);
+assert.equal(lazyResult.by_item[0].sku, 'SKU1');
+assert.equal(lazyResult.by_item_all.length, 2);
+assert.equal(lazyResult.by_item_all.find(x => x.sku === 'SKU2').excluded, true);
+
 console.log('Compact cube aggregation tests passed');

@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v5-cubes';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v6-lazy-cubes';
 const MAX_UPLOAD_ROWS = 50000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const JOB_DEADLINE_MS = 240000;
@@ -31,7 +31,7 @@ const BQ_RESULT_PAGE_ROWS = 30000;
 const MASTER_CACHE_TTL = 3600; // Master อัปเดตรายวัน; ลด cold rebuild จากทุก 15 นาทีเหลืออย่างมากชั่วโมงละครั้ง
 const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่างเดียวกับ revision เพื่อลด cache chunk เก่าค้าง
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v2-cubes';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v3-lazy-cubes';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
 const PICKER_NAME_TAB = 'บันทึกเวลาทำงาน';
 const PICKER_NAME_START_ROW = 26;
@@ -65,6 +65,24 @@ function doGet(e) {
     // เมื่อผู้ใช้เปิดรายละเอียดพนักงานคนนั้น เพื่อไม่ให้หน้าแรกต้องแบกทุก SKU
     if (mode === 'picker_items') {
       return json_(buildPickerItemsData_(e, requestScope));
+    }
+    // Item cube มีจำนวนแถวมากที่สุด จึงแยกโหลดเฉพาะเมื่อเปิดหน้าสินค้าหรือรายละเอียด Zone
+    // เพื่อลด payload หน้าแรกและหลีกเลี่ยง timeout ระหว่าง Apps Script -> browser
+    if (mode === 'item_cube') {
+      const itemRevision = getItemCubeCacheRevision_(e);
+      try {
+        const cachedItems = getCached_(itemRevision);
+        if (cachedItems) return textJson_(cachedItems);
+      } catch (itemCacheReadErr) {
+        console.warn('Item cube cache read failed: ' + itemCacheReadErr);
+      }
+      const itemJson = JSON.stringify(buildItemCubeData_(e));
+      try {
+        setCached_(itemJson, itemRevision);
+      } catch (itemCacheWriteErr) {
+        console.warn('Item cube cache write failed: ' + itemCacheWriteErr);
+      }
+      return textJson_(itemJson);
     }
     const revision = getDashboardRevisionToken_(getDataRevision_(), requestScope.key);
     if (mode === 'revision') {
@@ -164,6 +182,77 @@ function getDashboardRequestScope_(e) {
 
 function sqlStringLiteral_(value) {
   return "'" + String(value == null ? '' : value).replace(/'/g, "''") + "'";
+}
+
+function getItemCubeCacheRevision_(e) {
+  const params = e && e.parameter || {};
+  const scope = [
+    String(params.system || '').toUpperCase(),
+    String(params.from || ''),
+    String(params.to || ''),
+    String(params.shift || 'all').toLowerCase()
+  ];
+  return 'item_' + getDataRevision_() + '_' + getDashboardRefreshBucket_() + '_' +
+    sha256Hex_(JSON.stringify(scope)).slice(0, 24);
+}
+
+function buildItemCubeData_(e) {
+  const params = e && e.parameter || {};
+  const system = String(params.system || '').toUpperCase();
+  const from = String(params.from || '').trim();
+  const to = String(params.to || '').trim();
+  const shift = String(params.shift || 'all').toLowerCase();
+  if (system !== 'PTT' && system !== 'BPS') throw new Error('ระบบที่ขอไม่ถูกต้อง');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+    throw new Error('ช่วงวันที่ไม่ถูกต้อง');
+  }
+  if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
+
+  const shiftSql = shift === 'morning'
+    ? "AND shift_code = 'M'"
+    : (shift === 'night' ? "AND shift_code = 'N'" : '');
+  const sql = [
+    'WITH base AS (',
+    '  SELECT',
+    '    IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date,',
+    "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
+    "    COALESCE(zone, '??') AS zone,",
+    "    COALESCE(CAST(sku AS STRING), '(none)') AS sku,",
+    '    pcs, pick_qty',
+    '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
+    '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
+    '),',
+    'filtered AS (',
+    '  SELECT * FROM base',
+    '  WHERE shift_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
+    '    ' + shiftSql,
+    ')',
+    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, sku,",
+    '       SUM(pcs), SUM(pick_qty), COUNT(*)',
+    'FROM filtered',
+    'GROUP BY shift_date, shift_code, zone, sku',
+    'ORDER BY shift_date, zone, sku'
+  ].join('\n');
+
+  const rows = [];
+  bqQueryEach_(sql, function(r) {
+    rows.push(
+      String(r[0] || ''), r[1] === 'N' ? 1 : 0,
+      String(r[2] || '??'), String(r[3] || '(none)'),
+      Number(r[4]) || 0, Number(r[5]) || 0, Number(r[6]) || 0
+    );
+  }, JOB_DEADLINE_MS, true);
+
+  return {
+    schema_version: DASHBOARD_SCHEMA_VERSION,
+    system: system,
+    from: from,
+    to: to,
+    shift: shift,
+    row_width: 7,
+    rows: rows,
+    generated: new Date().toISOString()
+  };
 }
 
 function buildPickerItemsData_(e, requestScope) {
@@ -1425,8 +1514,8 @@ function buildDashboardData_(useQueryCache, requestScope) {
 
   // ส่งเฉพาะ cube ที่หน้าเว็บใช้ แทน 1 แถวต่อ Pick Detail:
   // W = วัน/กะ/Zone/Picker (KPI, Productivity, OT)
-  // I = วัน/กะ/Zone/SKU (หน้าสินค้าและการยกเว้น)
   // S = วัน/กะ/Zone/Picker/ชั่วโมง (กราฟช่วงเวลา)
+  // มิติ Item แยกเป็น mode=item_cube และโหลดเมื่อผู้ใช้เปิดดูเท่านั้น
   const sql = [
     'WITH base AS (',
     '  SELECT',
@@ -1453,10 +1542,6 @@ function buildDashboardData_(useQueryCache, requestScope) {
     '         SUM(pcs) AS pcs, SUM(pick_qty) AS pick_qty, COUNT(*) AS line_count,',
     '         MIN(shift_minute) AS min_shift_minute, MAX(shift_minute) AS max_shift_minute',
     '  FROM included GROUP BY category, shift_date, shift_code, zone, picker',
-    '  UNION ALL',
-    "  SELECT 'I', category, shift_date, shift_code, zone, CAST(NULL AS STRING), sku, CAST(NULL AS INT64),",
-    '         SUM(pcs), SUM(pick_qty), COUNT(*), CAST(NULL AS INT64), CAST(NULL AS INT64)',
-    '  FROM base GROUP BY category, shift_date, shift_code, zone, sku',
     '  UNION ALL',
     "  SELECT 'S', category, shift_date, shift_code, zone, picker, CAST(NULL AS STRING), hour_of_day,",
     '         SUM(pcs), SUM(pick_qty), COUNT(*), CAST(NULL AS INT64), CAST(NULL AS INT64)',
@@ -1497,9 +1582,6 @@ function buildDashboardData_(useQueryCache, requestScope) {
       const pi = idx(S._p, S.pickers, picker);
       S.rows.push(di, shiftCode, zone, pi, pcs, pickQty, lines, minSm, maxSm);
       S.input_lines += lines;
-    } else if (cube === 'I') {
-      const si = idx(S._s, S.skus, sku);
-      S.item_rows.push(di, shiftCode, zone, si, pcs, pickQty, lines);
     } else if (cube === 'S') {
       const pi = idx(S._p, S.pickers, picker);
       S.slot_rows.push(di, shiftCode, zone, pi, hour, pcs, pickQty, lines);
