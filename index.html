@@ -165,6 +165,7 @@
     <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> ช่วงเวลา</button>
     <button class="nav" data-page="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8l-9-5-9 5v8l9 5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg> สินค้า (Items)</button>
     <button class="upload-btn" id="btnUploadModal" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#059669,#10b981);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:10px;width:100%;box-shadow:0 4px 12px rgba(16,185,129,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:19px;height:19px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> 📤 นำเข้าไฟล์ CSV / Excel</button>
+    <button id="btnExportPDF" onclick="exportPDF()" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#7c3aed,#6366f1);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:8px;width:100%;box-shadow:0 4px 12px rgba(99,102,241,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:19px;height:19px;flex-shrink:0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> 📋 Export PDF Report</button>
     <div class="sidebadge"><span class="live-pulse-dot"></span>กำลังเชื่อมต่อ BigQuery…</div>
   </nav>
 
@@ -578,6 +579,6 @@
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260803-resilient-cubes-v7"></script>
+<script src="app.js?v=20260803-features-v8"></script>
 </body>
 </html>
