@@ -3930,6 +3930,12 @@ function show(page){
   if(!built[page]){ builders[page](); built[page] = true; }
 }
 
+function preloadAllCubes(){
+  if(!hasLiveData || !dfrom || !dto) return;
+  if(!hasCurrentSlotCube()) setTimeout(() => void loadCurrentSlotCube(false), 50);
+  if(!hasCurrentItemCube()) setTimeout(() => void loadCurrentItemCube(false), 100);
+}
+
 function render(){
   A = aggregate(sys, dfrom, dto, shiftF);
   destroyCharts();
@@ -3941,6 +3947,7 @@ function render(){
   updateDateHeader();
   renderKPIs();
   show(currentPage);
+  preloadAllCubes();
 }
 
 function setSideBadge(message){
