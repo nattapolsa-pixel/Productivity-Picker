@@ -555,6 +555,37 @@
   </div>
 </div>
 
+<!-- Modal แจ้งเตือนเมื่อนำเข้าไฟล์สำเร็จ -->
+<div id="uploadSuccessModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.65);z-index:10000;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+  <div style="background:#fff;border-radius:22px;padding:30px;width:90%;max-width:480px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.35);text-align:center;animation:modalPop 0.22s ease-out;border:1px solid rgba(255,255,255,0.2);">
+    <div style="width:68px;height:68px;background:linear-gradient(135deg,#dcfce7 0%,#bbf7d0 100%);color:#16a34a;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 16px auto;box-shadow:0 10px 20px -5px rgba(22,163,74,0.3);">✓</div>
+    <h3 style="font-size:21px;font-weight:700;color:#0f172a;margin:0 0 6px 0;">นำเข้าข้อมูลสำเร็จแล้ว! 🎉</h3>
+    <p style="font-size:13px;color:#64748b;margin:0 0 20px 0;">ข้อมูล Pick Detail ได้ถูกนำเข้าสู่ BigQuery และอัปเดตบนหน้าเว็บเรียบร้อยแล้ว</p>
+
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin-bottom:22px;text-align:left;font-size:13px;color:#334155;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2e8f0;">
+        <span style="color:#64748b;font-weight:500;">⏱️ เวลาที่นำเข้าเสร็จ:</span>
+        <span id="succModalTime" style="font-weight:700;color:#0f172a;">-</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2e8f0;">
+        <span style="color:#64748b;font-weight:500;">📄 ชื่อไฟล์:</span>
+        <span id="succModalFilename" style="font-weight:600;color:#2563eb;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">-</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2e8f0;">
+        <span style="color:#64748b;font-weight:500;">📊 แถวทั้งหมดที่นำเข้า:</span>
+        <span id="succModalTotalRows" style="font-weight:700;color:#16a34a;font-size:14px;">-</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#64748b;padding-top:2px;">
+        <span>➕ เพิ่มใหม่: <b id="succModalInserted" style="color:#1e293b;font-weight:600;">-</b></span>
+        <span>✏️ แก้ไข: <b id="succModalUpdated" style="color:#1e293b;font-weight:600;">-</b></span>
+        <span>🔁 มีอยู่แล้ว: <b id="succModalUnchanged" style="color:#1e293b;font-weight:600;">-</b></span>
+      </div>
+    </div>
+
+    <button id="btnCloseUploadSuccess" style="width:100%;border:0;background:linear-gradient(135deg,#16a34a 0%,#15803d 100%);color:#fff;padding:12px 20px;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(22,163,74,0.3);transition:.2s;">ตกลง (ปิดหน้าต่าง)</button>
+  </div>
+</div>
+
 <!-- 📍 ZONE DETAIL POPUP MODAL -->
 <div id="zoneDetailModal" class="modal-overlay" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(15,23,42,0.68); backdrop-filter:blur(6px); z-index:9999; align-items:center; justify-content:center; padding:16px; box-sizing:border-box;">
   <div class="modal-card" style="background:#ffffff; width:100%; max-width:880px; max-height:92vh; border-radius:18px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.35); display:flex; flex-direction:column; overflow:hidden; animation:modalPop 0.22s ease-out; border:1px solid rgba(255,255,255,0.2);">
@@ -579,6 +610,6 @@
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
 <script src="item_master.js?v=20260724-itemlist1"></script>
-<script src="app.js?v=20260803-single-request-v11"></script>
+<script src="app.js?v=20260804-upload-success-popup-v14"></script>
 </body>
 </html>

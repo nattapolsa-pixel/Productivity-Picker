@@ -77,6 +77,7 @@ const DASHBOARD_CACHE_DB = 'pick_dashboard_cache_v1';
 const DASHBOARD_CACHE_STORE = 'responses';
 // แยก cache ออกจากข้อมูลรุ่นที่เคยคำนวณ Pack Size ใน browser เพื่อไม่ให้ใช้ยอดเก่า
 const DASHBOARD_CACHE_KEY = DASHBOARD_SCHEMA_VERSION + ':bq-pick-qty:latest';
+const DASHBOARD_CUBE_CACHE_PREFIX = DASHBOARD_SCHEMA_VERSION + ':cube:';
 // แสดงข้อมูลที่เคยโหลดสำเร็จก่อนทันที แล้วตรวจ revision เบื้องหลัง
 // เก็บได้นานขึ้นเพื่อไม่ให้ผู้ใช้เจอหน้าว่างเพียงเพราะไม่ได้เปิดเว็บเกิน 1 วัน
 const DASHBOARD_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -1436,8 +1437,30 @@ function buildControls(){
     };
   }
 
-  bar.querySelectorAll('.systog:not(.shiftog):not(.unittog) button').forEach(b => { b.classList.toggle('active', b.dataset.sys===sys); b.onclick = () => {
-    if(b.dataset.sys === sys) return; sys = b.dataset.sys;
+  bar.querySelectorAll('.systog:not(.shiftog):not(.unittog) button').forEach(b => { b.classList.toggle('active', b.dataset.sys===sys); b.onclick = async () => {
+    const nextSystem = b.dataset.sys;
+    if(nextSystem === sys) return;
+    if(!hasCurrentItemCube(nextSystem) || !hasCurrentSlotCube(nextSystem)){
+      showLoading(true, `กำลังเตรียมข้อมูล ${nextSystem} ให้ครบทุกหน้า…`);
+      dashboardBundleLoading = true;
+      try{
+        const [itemPayload, slotPayload] = await Promise.all([
+          loadCurrentItemCube(false, nextSystem),
+          loadCurrentSlotCube(false, nextSystem)
+        ]);
+        if(!itemPayload || !slotPayload) {
+          const itemState = itemCubeLoadState.get(itemCubeRequestKey(nextSystem));
+          const slotState = slotCubeLoadState.get(slotCubeRequestKey(nextSystem));
+          const reason = [itemState && itemState.message, slotState && slotState.message].filter(Boolean).join(' / ');
+          setSideBadge(`ข้อมูล ${nextSystem} ยังมาไม่ครบ\n${reason || 'กรุณากดลองสลับระบบอีกครั้ง'}`);
+          return;
+        }
+      }finally{
+        dashboardBundleLoading = false;
+        showLoading(false);
+      }
+    }
+    sys = nextSystem;
     bar.querySelectorAll('.systog:not(.shiftog):not(.unittog) button').forEach(x => x.classList.toggle('active', x.dataset.sys === sys));
     render();
   };});
@@ -1635,14 +1658,33 @@ const itemCubeDailyPayloadCache = new Map();
 const slotCubePayloadCache = new Map();
 const slotCubeLoadState = new Map();
 const slotCubeDailyPayloadCache = new Map();
+let dashboardBundleLoading = false;
 
 function dashboardDataEpoch(){
   const parts = String(dashboardCacheRevision || '0').split(':');
   return parts.length >= 2 ? parts.slice(0, 2).join(':') : parts[0];
 }
 
-function itemCubeRequestKey(system = sys, from = dfrom, to = dto, sf = shiftF){
-  return [dashboardDataEpoch(), system, from, to, sf].join('|');
+function canonicalCubeScope(system = sys, from = dfrom, to = dto){
+  return {
+    system,
+    from: DMIN || from,
+    to: DMAX || to,
+    shift: 'all'
+  };
+}
+
+function itemCubeRequestKey(system = sys, from = dfrom, to = dto){
+  const scope = canonicalCubeScope(system, from, to);
+  return [dashboardDataEpoch(), scope.system, scope.from, scope.to, scope.shift].join('|');
+}
+
+function isValidItemCubePayload(payload, system, from, to, shift, expectedEpoch = dashboardDataEpoch()){
+  return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
+    String(payload.data_epoch || '') === String(expectedEpoch || '') &&
+    payload.system === system && payload.from === from && payload.to === to &&
+    payload.shift === shift && Number(payload.row_width) === 7 &&
+    Array.isArray(payload.rows) && payload.rows.length % 7 === 0;
 }
 
 function dailyCubeRequestKey(kind, system, date, sf){
@@ -1681,9 +1723,12 @@ function forEachCurrentItemRow(system, from, to, sf, callback){
   if(payload){
     const rows = payload.rows;
     for(let offset=0; offset<rows.length; offset+=7){
+      const date = String(rows[offset] || '');
+      const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+      if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
       callback({
-        date:String(rows[offset] || ''),
-        shift:Number(rows[offset + 1]) === 1 ? 'night' : 'morning',
+        date,
+        shift,
         zone:rows[offset + 2],
         sku:normalizeSkuKey(rows[offset + 3]) || '(none)',
         pcs:Number(rows[offset + 4]) || 0,
@@ -1741,8 +1786,59 @@ async function fetchWithTransientRetry(url, options, retries = 1){
   throw lastError || new Error('เชื่อมต่อไม่สำเร็จ');
 }
 
+function dashboardResponseEncodingQuery(){
+  return typeof DecompressionStream !== 'undefined' ? 'encoding=gzip' : 'encoding=plain';
+}
+
+async function readDashboardJsonResponse(response){
+  const outerText = await response.text();
+  let payload;
+  try{
+    payload = JSON.parse(outerText);
+  }catch(_){
+    throw new Error('Apps Script ตอบกลับมาไม่ใช่ข้อมูล JSON');
+  }
+  if(payload && payload.encoding === 'gzip-base64-v1' && typeof payload.data === 'string'){
+    try{
+      const binary = atob(payload.data);
+      const bytes = new Uint8Array(binary.length);
+      for(let i=0; i<binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const decompressed = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+      const body = await new Response(decompressed).text();
+      return {payload:JSON.parse(body), body};
+    }catch(_){
+      throw new Error('เปิดข้อมูล Dashboard ที่บีบอัดไม่สำเร็จ กรุณากดรีเฟรชอีกครั้ง');
+    }
+  }
+  return {payload, body:outerText};
+}
+
+async function fetchDashboardCubeJson(url, options){
+  const transientCodes = new Set(['DATA_EPOCH_CHANGED','DASHBOARD_UPDATE_BUSY']);
+  let lastError = null;
+  for(let attempt=0; attempt<3; attempt++){
+    const response = await fetchWithTransientRetry(url, options, 2);
+    if(!response.ok) throw new Error('HTTP ' + response.status);
+    const payload = (await readDashboardJsonResponse(response)).payload;
+    if(!payload || !payload.error) return payload;
+    const err = new Error(String(payload.error));
+    err.code = String(payload.code || 'DASHBOARD_RESPONSE_ERROR');
+    lastError = err;
+    if(!transientCodes.has(err.code) || attempt === 2) throw err;
+    await waitForRetry(1000 * (attempt + 1), options && options.signal);
+  }
+  throw lastError || new Error('โหลดข้อมูล Dashboard ไม่สำเร็จ');
+}
+
+function dashboardTransientError(message, code = 'DATA_EPOCH_CHANGED'){
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
 async function fetchDailyItemCube(system, date, shift, signal, force){
   const dailyKey = dailyCubeRequestKey('item', system, date, shift);
+  const requestEpoch = dashboardDataEpoch();
   if(!force && itemCubeDailyPayloadCache.has(dailyKey)) return itemCubeDailyPayloadCache.get(dailyKey);
   const query = [
     'mode=item_cube',
@@ -1750,33 +1846,33 @@ async function fetchDailyItemCube(system, date, shift, signal, force){
     'from=' + encodeURIComponent(date),
     'to=' + encodeURIComponent(date),
     'shift=' + encodeURIComponent(shift),
+    dashboardResponseEncodingQuery(),
     't=' + Date.now()
   ].join('&');
-  const response = await fetchWithTransientRetry(
+  const payload = await fetchDashboardCubeJson(
     DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
-    {cache:'no-store', signal},
-    2
+    {cache:'no-store', signal}
   );
-  if(!response.ok) throw new Error('HTTP ' + response.status);
-  const payload = await response.json();
-  if(payload && payload.error) throw new Error(payload.error);
   if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
+      String(payload.data_epoch || '') !== String(requestEpoch || '') ||
       payload.system !== system || payload.from !== date || payload.to !== date ||
       payload.shift !== shift || Number(payload.row_width) !== 7 ||
       !Array.isArray(payload.rows) || payload.rows.length % 7 !== 0){
-    throw new Error('Apps Script ตอบรายการสินค้าไม่ตรงกับวันที่เลือก');
+    throw dashboardTransientError('ข้อมูลสินค้าเปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
   }
   itemCubeDailyPayloadCache.set(dailyKey, payload);
   while(itemCubeDailyPayloadCache.size > 80) itemCubeDailyPayloadCache.delete(itemCubeDailyPayloadCache.keys().next().value);
   return payload;
 }
 
-async function loadCurrentItemCube(force){
+async function loadCurrentItemCube(force, system = sys){
   if(!DATA_URL || !dfrom || !dto) return;
-  const requestSystem = sys;
-  const requestFrom = dfrom;
-  const requestTo = dto;
-  const requestShift = shiftF;
+  const requestSystem = system;
+  const scope = canonicalCubeScope(requestSystem, dfrom, dto);
+  const requestFrom = scope.from;
+  const requestTo = scope.to;
+  const requestShift = scope.shift;
+  const requestEpoch = dashboardDataEpoch();
   const requestKey = itemCubeRequestKey(requestSystem, requestFrom, requestTo, requestShift);
   const currentState = itemCubeLoadState.get(requestKey);
   if(!force && currentState && currentState.status === 'loading') return currentState.promise;
@@ -1786,34 +1882,37 @@ async function loadCurrentItemCube(force){
   const timeout = setTimeout(() => controller.abort(), 60000);
   const task = (async () => {
     try{
+      if(!force){
+        const cached = await readDashboardCubeCache('item', requestKey);
+        if(isValidItemCubePayload(cached, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)){
+          itemCubePayloadCache.set(requestKey, cached);
+          itemCubeLoadState.set(requestKey, {status:'done'});
+          return cached;
+        }
+      }
       const query = [
         'mode=item_cube',
         'system=' + encodeURIComponent(requestSystem),
         'from=' + encodeURIComponent(requestFrom),
         'to=' + encodeURIComponent(requestTo),
         'shift=' + encodeURIComponent(requestShift),
+        dashboardResponseEncodingQuery(),
         't=' + Date.now()
       ].join('&');
-      const response = await fetchWithTransientRetry(
+      const payload = await fetchDashboardCubeJson(
         DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
-        {cache:'no-store', signal:controller.signal},
-        2
+        {cache:'no-store', signal:controller.signal}
       );
-      if(!response.ok) throw new Error('HTTP ' + response.status);
-      const payload = await response.json();
-      if(payload && payload.error) throw new Error(payload.error);
-      if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
-          payload.system !== requestSystem || payload.from !== requestFrom || payload.to !== requestTo ||
-          payload.shift !== requestShift || Number(payload.row_width) !== 7 ||
-          !Array.isArray(payload.rows) || payload.rows.length % 7 !== 0){
-        throw new Error('Apps Script ตอบข้อมูลสินค้าไม่ตรงกับช่วงวันที่เลือก');
+      if(!isValidItemCubePayload(payload, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)){
+        throw dashboardTransientError('ข้อมูลสินค้าเปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
       }
       itemCubePayloadCache.set(requestKey, payload);
+      await writeDashboardCubeCache('item', requestKey, payload);
       while(itemCubePayloadCache.size > 8) itemCubePayloadCache.delete(itemCubePayloadCache.keys().next().value);
       itemCubeLoadState.set(requestKey, {status:'done'});
       if(itemCubeRequestKey() === requestKey){
         aggregateCache.clear();
-        if(currentPage === 'items') render();
+        if(!dashboardBundleLoading && currentPage === 'items') render();
         const modal = document.getElementById('zoneDetailModal');
         if(activeZoneDetailCode && modal && modal.style.display !== 'none') openZoneDetailModal(activeZoneDetailCode);
       }
@@ -1822,15 +1921,15 @@ async function loadCurrentItemCube(force){
       const message = err && err.name === 'AbortError'
         ? 'โหลดข้อมูลสินค้าใช้เวลานานเกิน 1 นาที'
         : String(err && err.message || err);
-      itemCubeLoadState.set(requestKey, {status:'error', message});
-      if(itemCubeRequestKey() === requestKey && currentPage === 'items') render();
+      itemCubeLoadState.set(requestKey, {status:'error', message, code:String(err && err.code || '')});
+      if(!dashboardBundleLoading && itemCubeRequestKey() === requestKey && currentPage === 'items') render();
       return null;
     }finally{
       clearTimeout(timeout);
     }
   })();
   itemCubeLoadState.set(requestKey, {status:'loading', promise:task});
-  if(currentPage === 'items') render();
+  if(!dashboardBundleLoading && currentPage === 'items') render();
   return task;
 }
 
@@ -1840,8 +1939,17 @@ function retryCurrentItemCube(){
   void loadCurrentItemCube(true);
 }
 
-function slotCubeRequestKey(system = sys, from = dfrom, to = dto, sf = shiftF){
-  return ['slot', dashboardDataEpoch(), system, from, to, sf, JSON.stringify(currentExcludedSkuList())].join('|');
+function slotCubeRequestKey(system = sys, from = dfrom, to = dto){
+  const scope = canonicalCubeScope(system, from, to);
+  return ['slot', dashboardDataEpoch(), scope.system, scope.from, scope.to, scope.shift, JSON.stringify(currentExcludedSkuList())].join('|');
+}
+
+function isValidSlotCubePayload(payload, system, from, to, shift, expectedEpoch = dashboardDataEpoch()){
+  return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
+    String(payload.data_epoch || '') === String(expectedEpoch || '') &&
+    payload.system === system && payload.from === from && payload.to === to &&
+    payload.shift === shift && Number(payload.row_width) === 8 &&
+    Array.isArray(payload.rows) && payload.rows.length % 8 === 0;
 }
 
 function hasCurrentSlotCube(system = sys, from = dfrom, to = dto, sf = shiftF){
@@ -1854,9 +1962,12 @@ function forEachCurrentSlotRow(system, from, to, sf, callback){
   if(payload){
     const rows = payload.rows;
     for(let offset=0; offset<rows.length; offset+=8){
+      const date = String(rows[offset] || '');
+      const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+      if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
       callback({
-        date:String(rows[offset] || ''),
-        shift:Number(rows[offset + 1]) === 1 ? 'night' : 'morning',
+        date,
+        shift,
         zone:rows[offset + 2],
         picker:String(rows[offset + 3] || '(none)'),
         hour:Number(rows[offset + 4]) || 0,
@@ -1885,6 +1996,7 @@ function forEachCurrentSlotRow(system, from, to, sf, callback){
 
 async function fetchDailySlotCube(system, date, shift, signal, force){
   const dailyKey = dailyCubeRequestKey('slot', system, date, shift);
+  const requestEpoch = dashboardDataEpoch();
   if(!force && slotCubeDailyPayloadCache.has(dailyKey)) return slotCubeDailyPayloadCache.get(dailyKey);
   const query = [
     'mode=slot_cube',
@@ -1892,22 +2004,20 @@ async function fetchDailySlotCube(system, date, shift, signal, force){
     'from=' + encodeURIComponent(date),
     'to=' + encodeURIComponent(date),
     'shift=' + encodeURIComponent(shift),
+    dashboardResponseEncodingQuery(),
     dashboardScopeQuery(),
     't=' + Date.now()
   ].join('&');
-  const response = await fetchWithTransientRetry(
+  const payload = await fetchDashboardCubeJson(
     DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
-    {cache:'no-store', signal},
-    2
+    {cache:'no-store', signal}
   );
-  if(!response.ok) throw new Error('HTTP ' + response.status);
-  const payload = await response.json();
-  if(payload && payload.error) throw new Error(payload.error);
   if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
+      String(payload.data_epoch || '') !== String(requestEpoch || '') ||
       payload.system !== system || payload.from !== date || payload.to !== date ||
       payload.shift !== shift || Number(payload.row_width) !== 8 ||
       !Array.isArray(payload.rows) || payload.rows.length % 8 !== 0){
-    throw new Error('Apps Script ตอบข้อมูลช่วงเวลาไม่ตรงกับวันที่เลือก');
+    throw dashboardTransientError('ข้อมูลช่วงเวลาเปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
   }
   slotCubeDailyPayloadCache.set(dailyKey, payload);
   while(slotCubeDailyPayloadCache.size > 80) slotCubeDailyPayloadCache.delete(slotCubeDailyPayloadCache.keys().next().value);
@@ -1917,9 +2027,11 @@ async function fetchDailySlotCube(system, date, shift, signal, force){
 async function loadCurrentSlotCube(force, system = sys){
   if(!DATA_URL || !dfrom || !dto) return null;
   const requestSystem = system;
-  const requestFrom = dfrom;
-  const requestTo = dto;
-  const requestShift = shiftF;
+  const scope = canonicalCubeScope(requestSystem, dfrom, dto);
+  const requestFrom = scope.from;
+  const requestTo = scope.to;
+  const requestShift = scope.shift;
+  const requestEpoch = dashboardDataEpoch();
   const requestKey = slotCubeRequestKey(requestSystem, requestFrom, requestTo, requestShift);
   const currentState = slotCubeLoadState.get(requestKey);
   if(!force && currentState && currentState.status === 'loading') return currentState.promise;
@@ -1929,43 +2041,46 @@ async function loadCurrentSlotCube(force, system = sys){
   const timeout = setTimeout(() => controller.abort(), 60000);
   const task = (async () => {
     try{
+      if(!force){
+        const cached = await readDashboardCubeCache('slot', requestKey);
+        if(isValidSlotCubePayload(cached, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)){
+          slotCubePayloadCache.set(requestKey, cached);
+          slotCubeLoadState.set(requestKey, {status:'done'});
+          return cached;
+        }
+      }
       const query = [
         'mode=slot_cube',
         'system=' + encodeURIComponent(requestSystem),
         'from=' + encodeURIComponent(requestFrom),
         'to=' + encodeURIComponent(requestTo),
         'shift=' + encodeURIComponent(requestShift),
+        dashboardResponseEncodingQuery(),
         dashboardScopeQuery(),
         't=' + Date.now()
       ].join('&');
-      const response = await fetchWithTransientRetry(
+      const payload = await fetchDashboardCubeJson(
         DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
-        {cache:'no-store', signal:controller.signal},
-        2
+        {cache:'no-store', signal:controller.signal}
       );
-      if(!response.ok) throw new Error('HTTP ' + response.status);
-      const payload = await response.json();
-      if(payload && payload.error) throw new Error(payload.error);
-      if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
-          payload.system !== requestSystem || payload.from !== requestFrom || payload.to !== requestTo ||
-          payload.shift !== requestShift || Number(payload.row_width) !== 8 ||
-          !Array.isArray(payload.rows) || payload.rows.length % 8 !== 0){
-        throw new Error('Apps Script ตอบข้อมูลช่วงเวลาไม่ตรงกับที่เลือก');
+      if(!isValidSlotCubePayload(payload, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)){
+        throw dashboardTransientError('ข้อมูลช่วงเวลาเปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
       }
       slotCubePayloadCache.set(requestKey, payload);
+      await writeDashboardCubeCache('slot', requestKey, payload);
       while(slotCubePayloadCache.size > 8) slotCubePayloadCache.delete(slotCubePayloadCache.keys().next().value);
       slotCubeLoadState.set(requestKey, {status:'done'});
       if(slotCubeRequestKey(requestSystem, dfrom, dto, shiftF) === requestKey){
         aggregateCache.clear();
-        if(currentPage === 'time' || currentPage === 'typebreak') render();
+        if(!dashboardBundleLoading && (currentPage === 'time' || currentPage === 'typebreak')) render();
       }
       return payload;
     }catch(err){
       const message = err && err.name === 'AbortError'
         ? 'โหลดข้อมูลช่วงเวลาใช้เวลานานเกิน 1 นาที'
         : String(err && err.message || err);
-      slotCubeLoadState.set(requestKey, {status:'error', message});
-      if(currentPage === 'time' || currentPage === 'typebreak') render();
+      slotCubeLoadState.set(requestKey, {status:'error', message, code:String(err && err.code || '')});
+      if(!dashboardBundleLoading && (currentPage === 'time' || currentPage === 'typebreak')) render();
       return null;
     }finally{
       clearTimeout(timeout);
@@ -4125,6 +4240,85 @@ async function writeDashboardResponseCache(body, payload){
   }
 }
 
+function dashboardCubeStorageKey(kind, requestKey){
+  return DASHBOARD_CUBE_CACHE_PREFIX + kind + ':' + requestKey;
+}
+
+async function readDashboardCubeCache(kind, requestKey){
+  let db;
+  try{
+    db = await openDashboardCacheDb();
+    const tx = db.transaction(DASHBOARD_CACHE_STORE, 'readonly');
+    const record = await idbRequestResult(
+      tx.objectStore(DASHBOARD_CACHE_STORE).get(dashboardCubeStorageKey(kind, requestKey))
+    );
+    if(!record || !record.payload) return null;
+    if(Date.now() - Number(record.savedAt || 0) > DASHBOARD_CACHE_MAX_AGE_MS) return null;
+    return record.payload;
+  }catch(_){
+    return null;
+  }finally{
+    if(db) db.close();
+  }
+}
+
+async function writeDashboardCubeCache(kind, requestKey, payload){
+  let db;
+  try{
+    db = await openDashboardCacheDb();
+    const tx = db.transaction(DASHBOARD_CACHE_STORE, 'readwrite');
+    tx.objectStore(DASHBOARD_CACHE_STORE).put({
+      key: dashboardCubeStorageKey(kind, requestKey),
+      schemaVersion: DASHBOARD_SCHEMA_VERSION,
+      revision: dashboardDataEpoch(),
+      savedAt: Date.now(),
+      payload
+    });
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error('บันทึก cube cache ไม่สำเร็จ'));
+      tx.onabort = () => reject(tx.error || new Error('ยกเลิกการบันทึก cube cache'));
+    });
+  }catch(err){
+    console.warn('บันทึก Cube cache ไม่สำเร็จ:', err);
+  }finally{
+    if(db) db.close();
+  }
+}
+
+async function pruneDashboardCubeCache(){
+  let db;
+  try{
+    db = await openDashboardCacheDb();
+    const tx = db.transaction(DASHBOARD_CACHE_STORE, 'readwrite');
+    const store = tx.objectStore(DASHBOARD_CACHE_STORE);
+    const epoch = dashboardDataEpoch();
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error('ลบ cache เก่าไม่สำเร็จ'));
+      tx.onabort = () => reject(tx.error || new Error('ยกเลิกการลบ cache เก่า'));
+      const cursorRequest = store.openCursor();
+      cursorRequest.onerror = () => reject(cursorRequest.error || new Error('อ่านรายการ cache ไม่สำเร็จ'));
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if(!cursor) return;
+        const key = String(cursor.key || '');
+        const record = cursor.value || {};
+        if(key.startsWith(DASHBOARD_CUBE_CACHE_PREFIX) &&
+            (String(record.revision || '') !== epoch ||
+             Date.now() - Number(record.savedAt || 0) > DASHBOARD_CACHE_MAX_AGE_MS)) {
+          cursor.delete();
+        }
+        cursor.continue();
+      };
+    });
+  }catch(_){
+    // IndexedDB เป็นเพียงตัวเร่ง ต้องไม่ทำให้ Dashboard หยุดทำงาน
+  }finally{
+    if(db) db.close();
+  }
+}
+
 async function clearDashboardResponseCache(){
   let db;
   try{
@@ -4180,7 +4374,98 @@ function setDashboardSourceBadge(totalRows, source){
   );
 }
 
-function applyDashboardPayload(payload, previous, source){
+function finalizeDashboardBundle(totalRows, source){
+  aggregateCache.clear();
+  hideDataState();
+  setDashboardSourceBadge(totalRows, source);
+  buildControls();
+  render();
+  void pruneDashboardCubeCache();
+}
+
+function captureDashboardRuntime(){
+  return {
+    DATA,
+    ALL_DATES:[...ALL_DATES], DMIN, DMAX,
+    sys, shiftF, dfrom, dto, datePresetMode, trendMode,
+    dashboardCacheRevision, lastFetchTime, hasLiveData
+  };
+}
+
+function restoreDashboardRuntime(snapshot){
+  if(!snapshot) return;
+  DATA = snapshot.DATA;
+  ALL_DATES = [...snapshot.ALL_DATES];
+  DMIN = snapshot.DMIN; DMAX = snapshot.DMAX;
+  sys = snapshot.sys; shiftF = snapshot.shiftF;
+  dfrom = snapshot.dfrom; dto = snapshot.dto;
+  datePresetMode = snapshot.datePresetMode; trendMode = snapshot.trendMode;
+  dashboardCacheRevision = snapshot.dashboardCacheRevision;
+  lastFetchTime = snapshot.lastFetchTime;
+  hasLiveData = snapshot.hasLiveData;
+  prepareZoneMaster();
+}
+
+async function restoreCurrentCubePairFromCache(){
+  const scope = canonicalCubeScope(sys, dfrom, dto);
+  const itemKey = itemCubeRequestKey(sys, scope.from, scope.to, scope.shift);
+  const slotKey = slotCubeRequestKey(sys, scope.from, scope.to, scope.shift);
+  const [itemPayload, slotPayload] = await Promise.all([
+    readDashboardCubeCache('item', itemKey),
+    readDashboardCubeCache('slot', slotKey)
+  ]);
+  if(!isValidItemCubePayload(itemPayload, sys, scope.from, scope.to, scope.shift) ||
+      !isValidSlotCubePayload(slotPayload, sys, scope.from, scope.to, scope.shift)) {
+    return false;
+  }
+  itemCubePayloadCache.set(itemKey, itemPayload);
+  itemCubeLoadState.set(itemKey, {status:'done'});
+  slotCubePayloadCache.set(slotKey, slotPayload);
+  slotCubeLoadState.set(slotKey, {status:'done'});
+  return true;
+}
+
+async function ensureDashboardBundleReady(force, totalRows, source){
+  dashboardBundleLoading = true;
+  try{
+    let cubesReady = hasCurrentItemCube() && hasCurrentSlotCube();
+    if(!cubesReady && !force) cubesReady = await restoreCurrentCubePairFromCache();
+    if(!cubesReady){
+      const [itemPayload, slotPayload] = await Promise.all([
+        hasCurrentItemCube()
+          ? Promise.resolve(itemCubePayloadCache.get(itemCubeRequestKey()) || DATA[sys])
+          : loadCurrentItemCube(force, sys),
+        hasCurrentSlotCube()
+          ? Promise.resolve(slotCubePayloadCache.get(slotCubeRequestKey()) || DATA[sys])
+          : loadCurrentSlotCube(force, sys)
+      ]);
+      if(!itemPayload || !slotPayload){
+        const itemState = itemCubeLoadState.get(itemCubeRequestKey());
+        const slotState = slotCubeLoadState.get(slotCubeRequestKey());
+        const reasons = [itemState && itemState.message, slotState && slotState.message].filter(Boolean);
+        const error = new Error(reasons.join(' / ') || 'ข้อมูลสินค้าและช่วงเวลายังโหลดไม่ครบ');
+        error.code = [itemState && itemState.code, slotState && slotState.code].find(Boolean) || '';
+        throw error;
+      }
+    }
+    dashboardBundleLoading = false;
+    finalizeDashboardBundle(totalRows, source);
+
+    // เตรียมอีกระบบไว้เบื้องหลัง เมื่อสลับ PTT/BPS จะไม่ต้องรอนานอีกรอบ
+    const otherSystem = sys === 'PTT' ? 'BPS' : 'PTT';
+    setTimeout(() => {
+      void Promise.all([
+        loadCurrentItemCube(false, otherSystem),
+        loadCurrentSlotCube(false, otherSystem)
+      ]);
+    }, 800);
+    return true;
+  }finally{
+    dashboardBundleLoading = false;
+  }
+}
+
+function applyDashboardPayload(payload, previous, source, options){
   const totalRows = dashboardPayloadRowCount(payload);
   if(totalRows === 0) return 0;
 
@@ -4198,10 +4483,11 @@ function applyDashboardPayload(payload, previous, source){
   dto   = keepTo ? previous.dto : DMAX;
   datePresetMode = (keepFrom || keepTo) ? (previous.datePresetMode || 'custom') : 'all';
   trendMode = previous.trendMode || trendMode;
-  hideDataState();
-  setDashboardSourceBadge(totalRows, source);
-  buildControls();
-  render();
+  if(options && options.deferReady){
+    setSideBadge('กำลังเตรียมข้อมูลพนักงาน\nสินค้า และช่วงเวลา…');
+  }else{
+    finalizeDashboardBundle(totalRows, source);
+  }
   return totalRows;
 }
 
@@ -4211,11 +4497,19 @@ async function restoreDashboardFromCache(){
   try{
     const payload = JSON.parse(record.body);
     const previous = {sys, shiftF, dfrom, dto, datePresetMode, trendMode};
-    const rows = applyDashboardPayload(payload, previous, 'cache');
+    const rows = applyDashboardPayload(payload, previous, 'cache', {deferReady:true});
     if(rows <= 0) {
       void clearDashboardResponseCache();
       return false;
     }
+    dashboardBundleLoading = true;
+    const cubeReady = await restoreCurrentCubePairFromCache();
+    dashboardBundleLoading = false;
+    if(!cubeReady){
+      clearDashboardState();
+      return false;
+    }
+    finalizeDashboardBundle(rows, 'cache');
     return true;
   }catch(err){
     console.warn('Dashboard cache ใช้งานไม่ได้ จะโหลดจาก BigQuery ใหม่:', err);
@@ -4227,11 +4521,15 @@ async function restoreDashboardFromCache(){
 async function fetchRevisionOrDashboard(signal){
   const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
     'mode=revision&' + dashboardScopeQuery() + '&t=' + Date.now();
-  const response = await fetchWithTransientRetry(url, {cache:'no-store', signal}, 1);
+  const response = await fetchWithTransientRetry(url, {cache:'no-store', signal}, 2);
   if(!response.ok) throw new Error('HTTP ' + response.status);
   const body = await response.text();
   const payload = JSON.parse(body);
-  if(payload && payload.error) throw new Error(payload.error);
+  if(payload && payload.error) {
+    const err = new Error(payload.error);
+    err.code = String(payload.code || 'DASHBOARD_RESPONSE_ERROR');
+    throw err;
+  }
   if(payload && payload.meta && payload.PTT && payload.BPS) {
     // รองรับ Apps Script deployment รุ่นเดิมที่ยังไม่รู้จัก mode=revision
     return {payload, body};
@@ -4239,7 +4537,11 @@ async function fetchRevisionOrDashboard(signal){
   if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION || payload.revision == null) {
     throw new Error('Apps Script ตอบ revision ไม่ถูกต้อง');
   }
-  return {revision:String(payload.revision)};
+  return {
+    revision:String(payload.revision),
+    minDate:String(payload.min_date || ''),
+    maxDate:String(payload.max_date || '')
+  };
 }
 
 // ===== โหลดข้อมูล: ดึงตรงจาก BigQuery และกันคำขอซ้อน =====
@@ -4266,10 +4568,11 @@ function loadData(force){
   return wrapped;
 }
 
-async function loadDataOnce(force){
+async function loadDataOnce(force, transientAttempt = 0){
   document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
   const previous = {sys, shiftF, dfrom, dto, datePresetMode, trendMode};
   const hadLiveData = hasLiveData;
+  const runtimeSnapshot = hadLiveData ? captureDashboardRuntime() : null;
   if(!DATA_URL){
     showDataState('error', 'ยังไม่ได้ตั้งค่า Apps Script Web App และระบบจะไม่แสดงข้อมูลสำรอง');
     return {ok:false, rows:0};
@@ -4287,14 +4590,37 @@ async function loadDataOnce(force){
   try{
     let body = '';
     let j = null;
+    let earlyCubePromise = null;
+    let requestedRevision = '';
 
-    if(!force && hadLiveData && dashboardCacheRevision) {
+    // ขอ revision + ขอบเขตวันที่ก่อนเสมอ เพื่อเริ่ม Item/Time cube พร้อมกับ Main cube
+    // ลด cold load จากเวลารวมแบบต่อคิวให้เหลือเวลาของคำขอที่ช้าที่สุด
+    {
       const probe = await fetchRevisionOrDashboard(controller.signal);
       if(probe.revision != null) {
-        if(probe.revision === dashboardCacheRevision) {
+        requestedRevision = String(probe.revision);
+        if(!force && hadLiveData && probe.revision === dashboardCacheRevision) {
           const currentRows = dashboardPayloadRowCount(DATA);
-          setDashboardSourceBadge(currentRows, 'live');
+          if(!hasCurrentItemCube() || !hasCurrentSlotCube()) {
+            showLoading(true, 'กำลังเตรียมข้อมูลพนักงาน สินค้า และช่วงเวลาให้พร้อมกัน…');
+          }
+          await ensureDashboardBundleReady(false, currentRows, 'live');
           return {ok:true, rows:currentRows, unchanged:true};
+        }
+        if(/^\d{4}-\d{2}-\d{2}$/.test(probe.minDate) &&
+            /^\d{4}-\d{2}-\d{2}$/.test(probe.maxDate) && probe.minDate <= probe.maxDate) {
+          dashboardCacheRevision = probe.revision;
+          DMIN = probe.minDate;
+          DMAX = probe.maxDate;
+          dfrom = previous.dfrom && previous.dfrom >= DMIN && previous.dfrom <= DMAX ? previous.dfrom : DMIN;
+          dto = previous.dto && previous.dto >= DMIN && previous.dto <= DMAX ? previous.dto : DMAX;
+          showLoading(true, 'กำลังดึงข้อมูลพนักงาน สินค้า และช่วงเวลาพร้อมกัน…');
+          earlyCubePromise = Promise.all([
+            loadCurrentItemCube(force, sys),
+            loadCurrentSlotCube(force, sys)
+          ]);
+          // ตัว loader แปลง error เป็น null อยู่แล้ว; catch นี้ป้องกัน unhandled rejection หาก browser ปิดคำขอ
+          void earlyCubePromise.catch(() => null);
         }
       } else {
         j = probe.payload;
@@ -4304,20 +4630,29 @@ async function loadDataOnce(force){
 
     if(!j) {
       const url = DATA_URL + (DATA_URL.includes('?')?'&':'?') +
-        'fresh=' + (force ? '1' : '0') + '&' + dashboardScopeQuery() + '&t=' + Date.now();
-      const res = await fetchWithTransientRetry(url, {cache:'no-store', signal:controller.signal}, 1);
+        'fresh=' + (force ? '1' : '0') + '&' + dashboardResponseEncodingQuery() + '&' +
+        dashboardScopeQuery() + '&t=' + Date.now();
+      const res = await fetchWithTransientRetry(url, {cache:'no-store', signal:controller.signal}, 2);
       if(!res.ok) throw new Error('HTTP ' + res.status);
-      body = await res.text();
       try {
-        j = JSON.parse(body);
-      } catch(_) {
-        if(body.includes('ไม่มีหน่วยความจำ')) {
+        const decoded = await readDashboardJsonResponse(res);
+        body = decoded.body;
+        j = decoded.payload;
+      } catch(parseErr) {
+        if(String(parseErr && parseErr.message || '').includes('ไม่มีหน่วยความจำ')) {
           throw new Error('Apps Script มีหน่วยความจำไม่พอสำหรับข้อมูลชุดนี้');
         }
-        throw new Error('Apps Script ตอบกลับมาไม่ใช่ข้อมูล JSON');
+        throw parseErr;
       }
     }
-    if(j && j.error) throw new Error(j.error);
+    if(j && j.error) {
+      const err = new Error(j.error);
+      err.code = String(j.code || 'DASHBOARD_RESPONSE_ERROR');
+      throw err;
+    }
+    if(requestedRevision && String(j && j.meta && j.meta.data_revision || '') !== requestedRevision) {
+      throw dashboardTransientError('ข้อมูล BigQuery มีการอัปเดตระหว่างโหลด ระบบกำลังลองใหม่ให้อัตโนมัติ');
+    }
     const totalRows = dashboardPayloadRowCount(j);
     if(totalRows === 0){
       dashboardCacheRevision = '';
@@ -4326,15 +4661,31 @@ async function loadDataOnce(force){
       return {ok:true, rows:0};
     }
 
-    applyDashboardPayload(j, previous, 'live');
-    void writeDashboardResponseCache(body, j);
+    applyDashboardPayload(j, previous, 'live', {deferReady:true});
+    showLoading(true, 'กำลังเตรียมข้อมูลพนักงาน สินค้า และช่วงเวลาให้พร้อมกัน…');
+    if(earlyCubePromise) await earlyCubePromise;
+    await ensureDashboardBundleReady(force, totalRows, 'live');
+    await writeDashboardResponseCache(body, j);
     return {ok:true, rows:totalRows};
   }catch(err){
     console.warn('ดึงข้อมูลสดไม่สำเร็จ:', err);
+    if(['DATA_EPOCH_CHANGED','DASHBOARD_UPDATE_BUSY'].includes(String(err && err.code || '')) && transientAttempt < 2){
+      dashboardBundleLoading = false;
+      if(hadLiveData) {
+        restoreDashboardRuntime(runtimeSnapshot);
+      } else {
+        clearDashboardState();
+        sys = previous.sys;
+        shiftF = previous.shiftF;
+      }
+      await waitForRetry(1200 * (transientAttempt + 1));
+      return await loadDataOnce(force, transientAttempt + 1);
+    }
     const message = err && err.name === 'AbortError'
       ? 'BigQuery ใช้เวลาตอบกลับเกิน 3 นาที กรุณากดลองอีกครั้ง'
       : (err && err.message ? err.message : 'ระบบเชื่อมต่อ BigQuery ไม่สำเร็จ');
     if(hadLiveData){
+      restoreDashboardRuntime(runtimeSnapshot);
       setSideBadge('อัปเดต BigQuery ไม่สำเร็จ\nยังแสดงข้อมูลรอบก่อน');
     } else {
       showDataState('error', message);
@@ -4380,6 +4731,9 @@ bootstrapDashboard();
   const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
   const MAX_UPLOAD_ROWS = 50000;
   const MAX_FILE_BYTES = 25 * 1024 * 1024;
+  const UPLOAD_CHUNK_TARGET_BYTES = 600 * 1024;
+  const UPLOAD_CHUNK_MAX_ROWS = 5000;
+  const UPLOAD_CHUNK_CONCURRENCY = 3;
   const XLSX_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
   const REQUIRED_HEADERS = [
     {index:1, name:'PICKDETAILKEY'},
@@ -4504,7 +4858,6 @@ bootstrapDashboard();
     btnStart.onclick = async () => {
       if (!selectedFile || !DATA_URL) return;
       const fileForUpload = selectedFile;
-      const hadDashboardBeforeUpload = hasLiveData;
       setUploadBusy(true);
       progressBox.style.display = 'block';
       statusText.textContent = '⏳ กำลังอ่านข้อมูลไฟล์...';
@@ -4529,17 +4882,47 @@ bootstrapDashboard();
           );
         }
 
-        const payload = JSON.stringify({
-          action: 'upload_rows',
-          fmt: 'array',
-          rows: rows,
-          meta: parsed.meta
-        });
-        const sizeKB = Math.round(payload.length / 1024);
-        statusText.textContent = `🚀 ตรวจผ่าน ${rows.length.toLocaleString()} แถว กำลังส่งเข้า BigQuery (~${sizeKB.toLocaleString()} KB)...`;
-        progressBar.style.width = '55%';
+        const chunks = splitUploadRows(rows);
+        const sessionId = createUploadSessionId();
+        let completedChunks = 0;
+        statusText.textContent =
+          `🚀 ตรวจผ่าน ${rows.length.toLocaleString()} แถว แบ่งส่งอย่างปลอดภัย ${chunks.length.toLocaleString()} ชุด...`;
+        progressBar.style.width = '40%';
 
-        const json = await postUploadWithRetry(payload);
+        const chunkTasks = chunks.map((chunkRows, chunkIndex) => async () => {
+          const chunkPayload = JSON.stringify({
+            action: 'upload_chunk',
+            sessionId,
+            chunkIndex,
+            totalChunks: chunks.length,
+            totalRows: rows.length,
+            fmt: 'array',
+            rows: chunkRows,
+            meta: parsed.meta
+          });
+          const response = await postUploadWithRetry(
+            chunkPayload,
+            `ชุดที่ ${chunkIndex + 1}/${chunks.length}`
+          );
+          completedChunks += 1;
+          const pct = 40 + Math.round((completedChunks / chunks.length) * 35);
+          progressBar.style.width = pct + '%';
+          statusText.textContent =
+            `📦 BigQuery รับแล้ว ${completedChunks.toLocaleString()}/${chunks.length.toLocaleString()} ชุด ` +
+            `(${rows.length.toLocaleString()} แถวทั้งหมด)`;
+          return response;
+        });
+        await runWithConcurrency(chunkTasks, UPLOAD_CHUNK_CONCURRENCY);
+
+        progressBar.style.width = '78%';
+        statusText.textContent = '🔗 ได้รับครบทุกชุดแล้ว กำลังตรวจจำนวนและ Merge เข้า BigQuery ครั้งเดียว...';
+        const json = await postUploadWithRetry(JSON.stringify({
+          action: 'upload_commit',
+          sessionId,
+          totalChunks: chunks.length,
+          totalRows: rows.length,
+          meta: parsed.meta
+        }), 'ขั้นตอน Merge');
         const counts = json.counts || {};
         progressBar.style.width = '90%';
         statusText.textContent =
@@ -4549,32 +4932,35 @@ bootstrapDashboard();
 
         const refreshPromise = refreshDashboardAfterUpload();
         progressBar.style.width = '100%';
-        if(hadDashboardBeforeUpload) {
-          setSideBadge(
-            'นำเข้า BigQuery สำเร็จ ' +
-            Number(counts.visible || json.rowsProcessed || 0).toLocaleString() +
-            ' แถว\nกำลังอัปเดต Dashboard เบื้องหลัง…'
-          );
-          closeModal();
-          void refreshPromise.then(refreshed => {
-            if(!refreshed) {
-              setSideBadge('ข้อมูลเข้า BigQuery แล้ว\nDashboard ยังตอบกลับไม่ทัน กรุณากดรีเฟรช');
-            }
-          });
-          return;
-        }
-
         const refreshed = await refreshPromise;
+
+        const now = new Date();
+        const completionTimeStr = now.toLocaleDateString('th-TH', {
+          year: 'numeric', month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        }) + ' น.';
+
+        const successData = {
+          completionTime: completionTimeStr,
+          filename: fileForUpload ? fileForUpload.name : '-',
+          totalRows: Number(counts.visible || json.rowsProcessed || rows.length || 0),
+          inserted: Number(counts.inserted || 0),
+          updated: Number(counts.updated || 0),
+          unchanged: Number(counts.unchanged || 0)
+        };
+
         if (refreshed) {
           statusText.textContent =
             `🎉 นำเข้าสำเร็จและหน้าเว็บอัปเดตแล้ว ` +
             `${Number(counts.visible || json.rowsProcessed || 0).toLocaleString()} แถว`;
           closeModal();
+          showUploadSuccessModal(successData);
         } else {
           progressBar.style.background = '#f59e0b';
           statusText.textContent =
             '✅ ข้อมูลเข้า BigQuery สำเร็จแล้ว แต่หน้าเว็บยังตอบกลับไม่ทัน กรุณากด “ลองอีกครั้ง” บนหน้า Dashboard';
           selectedFile = null;
+          showUploadSuccessModal(successData);
         }
 
       } catch (err) {
@@ -4676,15 +5062,49 @@ bootstrapDashboard();
     return cell ? cell.v : '';
   }
 
-  async function postUploadWithRetry(payload) {
+  function createUploadSessionId() {
+    if(window.crypto && typeof window.crypto.randomUUID === 'function') {
+      return window.crypto.randomUUID().replace(/-/g, '').toLowerCase();
+    }
+    const seed = String(Date.now()) + '|' + String(Math.random()) + '|' + String(performance.now());
+    let out = '';
+    for(let i = 0; i < seed.length; i++) {
+      out += (seed.charCodeAt(i) % 16).toString(16);
+    }
+    return (out + '00000000000000000000000000000000').slice(0, 32);
+  }
+
+  function splitUploadRows(rows) {
+    const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+    const chunks = [];
+    let current = [];
+    let currentBytes = 2;
+    rows.forEach(row => {
+      const encoded = JSON.stringify(row);
+      const rowBytes = (encoder ? encoder.encode(encoded).length : encoded.length * 3) + 1;
+      if(current.length &&
+          (currentBytes + rowBytes > UPLOAD_CHUNK_TARGET_BYTES || current.length >= UPLOAD_CHUNK_MAX_ROWS)) {
+        chunks.push(current);
+        current = [];
+        currentBytes = 2;
+      }
+      current.push(row);
+      currentBytes += rowBytes;
+    });
+    if(current.length) chunks.push(current);
+    return chunks;
+  }
+
+  async function postUploadWithRetry(payload, phaseLabel) {
     let lastError = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 270000);
+      const timeout = setTimeout(() => controller.abort(), 300000);
       try {
         if(attempt > 0) {
-          statusText.textContent = '🔁 การตอบกลับขาดช่วง กำลังตรวจและส่งซ้ำอย่างปลอดภัย...';
-          await sleep(2000);
+          statusText.textContent =
+            `🔁 ${phaseLabel || 'การส่งข้อมูล'} ตอบกลับขาดช่วง กำลังส่งซ้ำอย่างปลอดภัย (${attempt + 1}/3)...`;
+          await sleep(1500 * attempt);
         }
         const res = await fetch(DATA_URL, {
           method:'POST',
@@ -4693,21 +5113,55 @@ bootstrapDashboard();
           cache:'no-store',
           signal:controller.signal
         });
-        if(!res.ok) throw new Error('HTTP ' + res.status);
-        progressBar.style.width = '82%';
-        statusText.textContent = '⏳ ได้รับผลตอบกลับจาก BigQuery กำลังตรวจจำนวนแถว...';
-        const json = await res.json();
+        const responseText = await res.text();
+        let json = null;
+        try {
+          json = JSON.parse(responseText);
+        } catch(_) {
+          const excerpt = responseText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+          const parseError = new Error(
+            `Apps Script ตอบกลับไม่ใช่ JSON${excerpt ? `: ${excerpt}` : ''}`
+          );
+          parseError.code = 'INVALID_SERVER_RESPONSE';
+          parseError.httpStatus = res.status;
+          throw parseError;
+        }
+        if(!res.ok) {
+          const httpError = new Error(
+            `[HTTP_${res.status}] ${json.message || 'Apps Script ตอบกลับด้วยสถานะผิดพลาด'}`
+          );
+          httpError.code = json.code || `HTTP_${res.status}`;
+          httpError.httpStatus = res.status;
+          throw httpError;
+        }
         if(json.status !== 'success') {
           const examples = json.details && Array.isArray(json.details.errors)
             ? json.details.errors.slice(0, 5).map(e => `แถว ${e.row}: ${e.message}`).join(', ')
             : '';
-          throw new Error((json.message || 'เกิดข้อผิดพลาดในการนำเข้า BigQuery') + (examples ? ` — ${examples}` : ''));
+          const missing = json.details && Array.isArray(json.details.missingChunks)
+            ? ` — ขาดชุด ${json.details.missingChunks.join(', ')}`
+            : '';
+          const code = String(json.code || 'UPLOAD_FAILED');
+          const backendError = new Error(
+            `[${code}] ${json.message || 'เกิดข้อผิดพลาดในการนำเข้า BigQuery'}` +
+            (examples ? ` — ${examples}` : '') + missing
+          );
+          backendError.code = code;
+          throw backendError;
         }
         return json;
       } catch(err) {
         lastError = err;
-        const retryable = err && (err.name === 'AbortError' || /^HTTP 5/.test(err.message || '') || /Failed to fetch/i.test(err.message || ''));
-        if(!retryable || attempt === 1) break;
+        const status = Number(err && err.httpStatus || 0);
+        const code = String(err && err.code || '');
+        const retryable = err && (
+          err.name === 'AbortError' || status === 408 || status === 429 || status >= 500 ||
+          ['UPLOAD_BUSY','QUERY_TIMEOUT','QUERY_FAILED','LOAD_TIMEOUT','LOAD_JOB_FAILED',
+            'CHUNK_VERIFY_FAILED','MISSING_CHUNKS','MERGE_RESULT_MISSING',
+            'CHUNK_MANIFEST_WRITE_FAILED','RECEIPT_PERSIST_FAILED','INVALID_SERVER_RESPONSE'].includes(code) ||
+          /Failed to fetch|NetworkError/i.test(err.message || '')
+        );
+        if(!retryable || attempt === 2) break;
       } finally {
         clearTimeout(timeout);
       }
@@ -4729,6 +5183,40 @@ bootstrapDashboard();
 
   function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  function showUploadSuccessModal(data) {
+    const modal = document.getElementById('uploadSuccessModal');
+    if(!modal) return;
+    const timeEl = document.getElementById('succModalTime');
+    const fileEl = document.getElementById('succModalFilename');
+    const rowsEl = document.getElementById('succModalTotalRows');
+    const insEl = document.getElementById('succModalInserted');
+    const updEl = document.getElementById('succModalUpdated');
+    const uncEl = document.getElementById('succModalUnchanged');
+
+    if(timeEl) timeEl.textContent = data.completionTime || '-';
+    if(fileEl) fileEl.textContent = data.filename || '-';
+    if(rowsEl) rowsEl.textContent = (data.totalRows || 0).toLocaleString() + ' แถว';
+    if(insEl) insEl.textContent = (data.inserted || 0).toLocaleString() + ' แถว';
+    if(updEl) updEl.textContent = (data.updated || 0).toLocaleString() + ' แถว';
+    if(uncEl) uncEl.textContent = (data.unchanged || 0).toLocaleString() + ' แถว';
+
+    modal.style.display = 'flex';
+  }
+
+  function closeUploadSuccessModal() {
+    const modal = document.getElementById('uploadSuccessModal');
+    if(modal) modal.style.display = 'none';
+  }
+
+  const btnCloseSucc = document.getElementById('btnCloseUploadSuccess');
+  if(btnCloseSucc) btnCloseSucc.onclick = closeUploadSuccessModal;
+  const succModal = document.getElementById('uploadSuccessModal');
+  if(succModal) {
+    succModal.onclick = (e) => {
+      if(e.target === succModal) closeUploadSuccessModal();
+    };
   }
 
   function escapeHtml(value) {
