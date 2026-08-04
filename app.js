@@ -155,24 +155,63 @@ function saveExcludedSkusToStorage(){
 }
 
 // ===== Productivity Target State & Functions =====
-let prodTarget = 10;
+const DEFAULT_PROD_TARGETS = {
+  overall: 170,
+  fullRack: 170,
+  halfRack: 200,
+  microRack: 170,
+  pickToSort: 170,
+  mezzanine: 170,
+  training: 100
+};
+
+let prodTargets = { ...DEFAULT_PROD_TARGETS };
+let prodTarget = prodTargets.overall;
+const PROD_TARGETS_STORAGE_KEY = 'pick_dashboard_prod_targets_v2';
 const PROD_TARGET_STORAGE_KEY = 'pick_dashboard_prod_target_v1';
 
 function loadProdTargetFromStorage(){
   try {
-    const saved = localStorage.getItem(PROD_TARGET_STORAGE_KEY);
-    if (saved !== null) {
-      const val = Number(saved);
-      if (Number.isFinite(val) && val > 0) prodTarget = val;
+    const savedV2 = localStorage.getItem(PROD_TARGETS_STORAGE_KEY);
+    if (savedV2 !== null) {
+      const parsed = JSON.parse(savedV2);
+      prodTargets = { ...DEFAULT_PROD_TARGETS, ...parsed };
+      prodTarget = prodTargets.overall;
+      return;
+    }
+    const savedV1 = localStorage.getItem(PROD_TARGET_STORAGE_KEY);
+    if (savedV1 !== null) {
+      const val = Number(savedV1);
+      if (Number.isFinite(val) && val > 0) {
+        prodTargets.overall = val;
+        prodTarget = val;
+      }
     }
   } catch(e){}
 }
 
-function saveProdTargetToStorage(val){
+function saveProdTargetsToStorage(targets){
   try {
-    prodTarget = val;
-    localStorage.setItem(PROD_TARGET_STORAGE_KEY, String(val));
+    prodTargets = { ...DEFAULT_PROD_TARGETS, ...targets };
+    prodTarget = prodTargets.overall;
+    localStorage.setItem(PROD_TARGETS_STORAGE_KEY, JSON.stringify(prodTargets));
+    localStorage.setItem(PROD_TARGET_STORAGE_KEY, String(prodTarget));
   } catch(e){}
+}
+
+function saveProdTargetToStorage(val){
+  saveProdTargetsToStorage({ ...prodTargets, overall: val });
+}
+
+function getTargetForZoneOrType(typePick, zone) {
+  const tStr = String(typePick || zone || '').toLowerCase();
+  if (tStr.includes('full rack') || tStr.includes('fullrack')) return prodTargets.fullRack;
+  if (tStr.includes('half rack') || tStr.includes('halfrack')) return prodTargets.halfRack;
+  if (tStr.includes('micro rack') || tStr.includes('microrack')) return prodTargets.microRack;
+  if (tStr.includes('pick to sort') || tStr.includes('pick-to-sort') || tStr.includes('bps')) return prodTargets.pickToSort;
+  if (tStr.includes('mezzanine') || tStr.includes('mezz')) return prodTargets.mezzanine;
+  if (tStr.includes('training') || tStr.includes('train')) return prodTargets.training;
+  return prodTargets.overall || prodTarget;
 }
 
 // ===== Excluded Zones State & Functions =====
@@ -1409,8 +1448,12 @@ function buildControls(){
     + '<div class="systog unittog"><button data-unit="units">📦 หน่วยหยิบ (Units)</button><button data-unit="pcs">🧩 จำนวนชิ้น (Pcs)</button></div>'
     + '<span class="lab">กะ:</span>'
     + '<div class="systog shiftog"><button data-sh="all">ทุกกะ</button><button data-sh="morning">🌅 เช้า</button><button data-sh="night">🌙 ดึก</button></div>'
-    + '<span class="lab">🎯 เป้า Productivity:</span>'
-    + `<div class="datebar" style="padding:4px 8px;"><input type="number" id="prodTargetInput" value="${prodTarget}" min="1" max="500" style="width:58px; font-weight:700; text-align:center;"><span style="font-size:11px; color:#64748b; font-weight:600; margin-left:4px;">${targetUnitTxt}</span></div>`
+    + '<span class="lab">🎯 เป้า Target:</span>'
+    + `<div class="datebar" style="padding:3px 6px; display:inline-flex; align-items:center; gap:4px;">`
+    + `<input type="number" id="prodTargetInput" value="${prodTarget}" min="1" max="1000" style="width:55px; font-weight:700; text-align:center;">`
+    + `<span style="font-size:11px; color:#64748b; font-weight:600; margin-right:4px;">${targetUnitTxt}</span>`
+    + `<button id="btnOpenTargetModal" style="border:0; background:linear-gradient(135deg,#0284c7,#2563eb); color:#fff; padding:4px 10px; border-radius:6px; font-size:11.5px; font-weight:700; cursor:pointer; transition:.15s; display:inline-flex; align-items:center; gap:4px;" title="คลิกเพื่อตั้งค่า Target ละเอียดจำแนกประเภท Rack/Zone">⚙️ ตั้งค่า Target</button>`
+    + `</div>`
     + '<span class="lab">วันที่:</span>'
     + `<div class="datebar"><input type="date" id="dfrom" min="${DMIN}" max="${DMAX}" value="${dfrom}"><span class="sep">→</span><input type="date" id="dto" min="${DMIN}" max="${DMAX}" value="${dto}"></div>`
     + `<div class="datepreset"><button data-all="1">ทั้งหมด</button><button data-range="week">Weekly</button><button data-range="month">Monthly</button>${presetBtns}</div>`
@@ -1428,6 +1471,11 @@ function buildControls(){
         render();
       }
     };
+  }
+
+  const btnTargetModal = bar.querySelector('#btnOpenTargetModal');
+  if (btnTargetModal) {
+    btnTargetModal.onclick = () => openTargetSettingsModal();
   }
 
   const btnPdf = bar.querySelector('#exportPdfBtn');
@@ -3719,10 +3767,11 @@ const builders = {
       const prodValue = isPcs ? (p.avg_pcs_prod || 0) : (p.avg_prod || 0);
       const pickerName = p.name || getPickerName(p.picker);
       const pickerNameText = pickerName && pickerName !== p.picker ? pickerName : '-';
-      const isLow = prodValue < prodTarget;
+      const itemTarget = getTargetForZoneOrType(p.typePick, p.location);
+      const isLow = prodValue < itemTarget;
       const prodBadge = isLow
-        ? `<span style="background:#fee2e2; color:#991b1b; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;">⚠️ ต่ำกว่าเป้า</span>`
-        : `<span style="background:#dcfce7; color:#15803d; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;">✓ ผ่าน</span>`;
+        ? `<span style="background:#fee2e2; color:#991b1b; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;" title="เป้าหมายโซนนี้: ${itemTarget}">⚠️ ต่ำกว่าเป้า (${itemTarget})</span>`
+        : `<span style="background:#dcfce7; color:#15803d; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;" title="เป้าหมายโซนนี้: ${itemTarget}">✓ ผ่าน (${itemTarget})</span>`;
       const prodColor = isLow ? '#dc2626' : '#16a34a';
 
       h += `<tr style="cursor:pointer; ${isLow ? 'background:#fff5f5;' : ''}" onclick="selectPickerDrilldown('${p.picker}')" title="คลิกเพื่อดูรายงานเจาะลึกของ ${escapeZoneHtml(p.picker)}">
@@ -5367,5 +5416,85 @@ bootstrapDashboard();
       if(errors.length >= 100) break;
     }
     return errors;
+  function openTargetSettingsModal() {
+    const modal = document.getElementById('targetSettingsModal');
+    if (!modal) return;
+    
+    const inOverall = document.getElementById('targetInputOverall');
+    const inFull = document.getElementById('targetInputFullRack');
+    const inHalf = document.getElementById('targetInputHalfRack');
+    const inMicro = document.getElementById('targetInputMicroRack');
+    const inPts = document.getElementById('targetInputPickToSort');
+    const inMezz = document.getElementById('targetInputMezzanine');
+    const inTrain = document.getElementById('targetInputTraining');
+
+    if(inOverall) inOverall.value = prodTargets.overall || 170;
+    if(inFull) inFull.value = prodTargets.fullRack || 170;
+    if(inHalf) inHalf.value = prodTargets.halfRack || 200;
+    if(inMicro) inMicro.value = prodTargets.microRack || 170;
+    if(inPts) inPts.value = prodTargets.pickToSort || 170;
+    if(inMezz) inMezz.value = prodTargets.mezzanine || 170;
+    if(inTrain) inTrain.value = prodTargets.training || 100;
+
+    modal.style.display = 'flex';
   }
+
+  function closeTargetSettingsModal() {
+    const modal = document.getElementById('targetSettingsModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function saveTargetSettingsFromModal() {
+    const inOverall = Number(document.getElementById('targetInputOverall')?.value);
+    const inFull = Number(document.getElementById('targetInputFullRack')?.value);
+    const inHalf = Number(document.getElementById('targetInputHalfRack')?.value);
+    const inMicro = Number(document.getElementById('targetInputMicroRack')?.value);
+    const inPts = Number(document.getElementById('targetInputPickToSort')?.value);
+    const inMezz = Number(document.getElementById('targetInputMezzanine')?.value);
+    const inTrain = Number(document.getElementById('targetInputTraining')?.value);
+
+    const updated = {
+      overall: Number.isFinite(inOverall) && inOverall > 0 ? inOverall : DEFAULT_PROD_TARGETS.overall,
+      fullRack: Number.isFinite(inFull) && inFull > 0 ? inFull : DEFAULT_PROD_TARGETS.fullRack,
+      halfRack: Number.isFinite(inHalf) && inHalf > 0 ? inHalf : DEFAULT_PROD_TARGETS.halfRack,
+      microRack: Number.isFinite(inMicro) && inMicro > 0 ? inMicro : DEFAULT_PROD_TARGETS.microRack,
+      pickToSort: Number.isFinite(inPts) && inPts > 0 ? inPts : DEFAULT_PROD_TARGETS.pickToSort,
+      mezzanine: Number.isFinite(inMezz) && inMezz > 0 ? inMezz : DEFAULT_PROD_TARGETS.mezzanine,
+      training: Number.isFinite(inTrain) && inTrain > 0 ? inTrain : DEFAULT_PROD_TARGETS.training
+    };
+
+    saveProdTargetsToStorage(updated);
+    closeTargetSettingsModal();
+    render();
+  }
+
+  function resetTargetSettingsDefaults() {
+    saveProdTargetsToStorage(DEFAULT_PROD_TARGETS);
+    openTargetSettingsModal();
+    render();
+  }
+
+  // Bind modal events
+  (function initTargetModalEvents(){
+    const bind = () => {
+      const btnClose = document.getElementById('btnCloseTargetSettings');
+      const btnSave = document.getElementById('btnSaveTargetSettings');
+      const btnReset = document.getElementById('btnResetTargetDefaults');
+      const modal = document.getElementById('targetSettingsModal');
+
+      if(btnClose) btnClose.onclick = closeTargetSettingsModal;
+      if(btnSave) btnSave.onclick = saveTargetSettingsFromModal;
+      if(btnReset) btnReset.onclick = resetTargetSettingsDefaults;
+      if(modal) {
+        modal.onclick = (e) => {
+          if(e.target === modal) closeTargetSettingsModal();
+        };
+      }
+    };
+    if(document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bind);
+    } else {
+      bind();
+    }
+  })();
 })();
