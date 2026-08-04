@@ -22,6 +22,11 @@ const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
 const DASHBOARD_SCHEMA_VERSION = 'pick-units-v7-resilient-cubes';
 const MAX_UPLOAD_ROWS = 50000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
+const MAX_UPLOAD_CHUNKS = 100;
+const MAX_UPLOAD_CHUNK_ROWS = 8000;
+const UPLOAD_RECEIPT_PREFIX = 'upload_receipt_v1_';
+const UPLOAD_RECEIPT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const UPLOAD_RECEIPT_TABLE = 'pick_upload_receipts';
 const JOB_DEADLINE_MS = 240000;
 // ลดจำนวนรอบเรียก jobs.getQueryResults: ชุดข้อมูลปัจจุบัน ~410k แถว
 // เดิมอ่านครั้งละ 10k ทำให้ต้องเรียก API มากกว่า 40 รอบต่อการเปิดเว็บหนึ่งครั้ง
@@ -31,7 +36,9 @@ const BQ_RESULT_PAGE_ROWS = 30000;
 const MASTER_CACHE_TTL = 21600; // Master อัปเดตรายวัน; ใช้ cache 6 ชม. เพื่อลด cold rebuild ของ Apps Script
 const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่างเดียวกับ revision เพื่อลด cache chunk เก่าค้าง
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v4-gzip-daily-cubes';
+const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_date';
+const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_date';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v5-atomic-bundle';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -62,6 +69,7 @@ function doGet(e) {
     // mode=revision เป็นคำตอบขนาดเล็กสำหรับหน้าเว็บที่มี IndexedDB cache อยู่แล้ว
     // ช่วยไม่ต้องดาวน์โหลด dashboard หลาย MB ซ้ำเมื่อข้อมูล BigQuery ยังไม่เปลี่ยน
     const mode = String(e && e.parameter && e.parameter.mode || '').toLowerCase();
+    const wantsGzipEnvelope = String(e && e.parameter && e.parameter.encoding || '').toLowerCase() === 'gzip';
     const requestScope = getDashboardRequestScope_(e);
     // รายการ SKU รายพนักงานมีจำนวนมากกว่าข้อมูลสรุปหลัก จึงโหลดเฉพาะ
     // เมื่อผู้ใช้เปิดรายละเอียดพนักงานคนนั้น เพื่อไม่ให้หน้าแรกต้องแบกทุก SKU
@@ -71,44 +79,63 @@ function doGet(e) {
     // Item cube มีจำนวนแถวมากที่สุด จึงแยกโหลดเฉพาะเมื่อเปิดหน้าสินค้าหรือรายละเอียด Zone
     // เพื่อลด payload หน้าแรกและหลีกเลี่ยง timeout ระหว่าง Apps Script -> browser
     if (mode === 'item_cube') {
-      const itemRevision = getItemCubeCacheRevision_(e);
+      const itemEpoch = getDashboardDataEpoch_();
+      const itemRevision = getItemCubeCacheRevision_(e, itemEpoch);
       try {
-        const cachedItems = getCached_(itemRevision);
-        if (cachedItems) return textJson_(cachedItems);
+        if (wantsGzipEnvelope) {
+          const encodedItems = getCachedEncoded_(itemRevision);
+          if (encodedItems) return gzipEnvelope_(encodedItems);
+        } else {
+          const cachedItems = getCached_(itemRevision);
+          if (cachedItems) return textJson_(cachedItems);
+        }
       } catch (itemCacheReadErr) {
         console.warn('Item cube cache read failed: ' + itemCacheReadErr);
       }
-      const itemJson = JSON.stringify(buildItemCubeData_(e));
+      const itemJson = JSON.stringify(buildItemCubeData_(e, itemEpoch));
+      let encodedItemJson = null;
       try {
-        setCached_(itemJson, itemRevision);
+        encodedItemJson = setCached_(itemJson, itemRevision);
       } catch (itemCacheWriteErr) {
         console.warn('Item cube cache write failed: ' + itemCacheWriteErr);
       }
+      if (wantsGzipEnvelope && encodedItemJson) return gzipEnvelope_(encodedItemJson);
       return textJson_(itemJson);
     }
     // Time-slot cube แยกจาก payload หลักเช่นเดียวกับ Item เพื่อให้หน้าแรกและหน้าพนักงาน
     // ตอบกลับได้เร็วแม้ Script Cache หมดอายุ
     if (mode === 'slot_cube') {
-      const slotRevision = getSlotCubeCacheRevision_(e, requestScope);
+      const slotEpoch = getDashboardDataEpoch_();
+      const slotRevision = getSlotCubeCacheRevision_(e, requestScope, slotEpoch);
       try {
-        const cachedSlots = getCached_(slotRevision);
-        if (cachedSlots) return textJson_(cachedSlots);
+        if (wantsGzipEnvelope) {
+          const encodedSlots = getCachedEncoded_(slotRevision);
+          if (encodedSlots) return gzipEnvelope_(encodedSlots);
+        } else {
+          const cachedSlots = getCached_(slotRevision);
+          if (cachedSlots) return textJson_(cachedSlots);
+        }
       } catch (slotCacheReadErr) {
         console.warn('Slot cube cache read failed: ' + slotCacheReadErr);
       }
-      const slotJson = JSON.stringify(buildSlotCubeData_(e, requestScope));
+      const slotJson = JSON.stringify(buildSlotCubeData_(e, requestScope, slotEpoch));
+      let encodedSlotJson = null;
       try {
-        setCached_(slotJson, slotRevision);
+        encodedSlotJson = setCached_(slotJson, slotRevision);
       } catch (slotCacheWriteErr) {
         console.warn('Slot cube cache write failed: ' + slotCacheWriteErr);
       }
+      if (wantsGzipEnvelope && encodedSlotJson) return gzipEnvelope_(encodedSlotJson);
       return textJson_(slotJson);
     }
     const revision = getDashboardRevisionToken_(getDataRevision_(), requestScope.key);
     if (mode === 'revision') {
+      const bounds = getOrLoadDashboardBounds_();
       return json_({
         schema_version: DASHBOARD_SCHEMA_VERSION,
-        revision: revision
+        revision: revision,
+        min_date: bounds.minDate,
+        max_date: bounds.maxDate
       });
     }
 
@@ -117,8 +144,13 @@ function doGet(e) {
     const fresh = !!(e && e.parameter && e.parameter.fresh === '1');
     if (!fresh) {
       try {
-        const cached = getCached_(revision);
-        if (cached) return textJson_(cached);
+        if (wantsGzipEnvelope) {
+          const encodedDashboard = getCachedEncoded_(revision);
+          if (encodedDashboard) return gzipEnvelope_(encodedDashboard);
+        } else {
+          const cached = getCached_(revision);
+          if (cached) return textJson_(cached);
+        }
       } catch (cacheReadErr) {
         console.warn('Dashboard cache read failed: ' + cacheReadErr);
       }
@@ -130,12 +162,20 @@ function doGet(e) {
     try {
       dashboardBuildLocked = dashboardBuildLock.tryLock(90000);
       if (!dashboardBuildLocked) {
-        throw new Error('ระบบกำลังเตรียมข้อมูล Dashboard กรุณาลองอีกครั้งในอีกสักครู่');
+        throw uploadError_('DASHBOARD_UPDATE_BUSY', 'ระบบกำลังเตรียมข้อมูล Dashboard กรุณาลองอีกครั้งในอีกสักครู่');
+      }
+      if (getDashboardRevisionToken_(getDataRevision_(), requestScope.key) !== revision) {
+        throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล BigQuery เปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
       }
       if (!fresh) {
         try {
-          const cachedAfterWait = getCached_(revision);
-          if (cachedAfterWait) return textJson_(cachedAfterWait);
+          if (wantsGzipEnvelope) {
+            const encodedAfterWait = getCachedEncoded_(revision);
+            if (encodedAfterWait) return gzipEnvelope_(encodedAfterWait);
+          } else {
+            const cachedAfterWait = getCached_(revision);
+            if (cachedAfterWait) return textJson_(cachedAfterWait);
+          }
         } catch (cacheReadAfterWaitErr) {
           console.warn('Dashboard cache read after wait failed: ' + cacheReadAfterWaitErr);
         }
@@ -144,18 +184,22 @@ function doGet(e) {
       const dataObj = buildDashboardData_(true, requestScope);
       dataObj.meta.data_revision = revision;
       const json = JSON.stringify(dataObj);
+      let encodedJson = null;
       try {
         // กัน GET เก่าที่เริ่มก่อน upload เขียน cache ทับข้อมูลรุ่นใหม่
-        if (getDashboardRevisionToken_(getDataRevision_(), requestScope.key) === revision) setCached_(json, revision);
+        if (getDashboardRevisionToken_(getDataRevision_(), requestScope.key) === revision) {
+          encodedJson = setCached_(json, revision);
+        }
       } catch (cacheWriteErr) {
         console.warn('Dashboard cache write failed: ' + cacheWriteErr);
       }
+      if (wantsGzipEnvelope && encodedJson) return gzipEnvelope_(encodedJson);
       return textJson_(json);
     } finally {
       if (dashboardBuildLocked) dashboardBuildLock.releaseLock();
     }
   } catch (err) {
-    return json_({ error: String(err && err.message || err) });
+    return json_({ error: String(err && err.message || err), code: String(err && err.code || '') });
   }
 }
 
@@ -170,7 +214,25 @@ function getDashboardRefreshBucket_() {
 function getDashboardRevisionToken_(dataRevision, requestScopeKey) {
   // Uploads bump dataRevision immediately. The time bucket also detects data
   // changed outside this endpoint (BigQuery or master Sheets) within 15 minutes.
-  return String(dataRevision || '0') + ':' + getDashboardRefreshBucket_() + ':' + String(requestScopeKey || 'all');
+  return getDashboardDataEpoch_(dataRevision) + ':' + String(requestScopeKey || 'all');
+}
+
+function getDashboardDataEpoch_(dataRevision) {
+  return String(dataRevision == null ? getDataRevision_() : dataRevision) + ':' + getDashboardRefreshBucket_();
+}
+
+function assertDashboardDataEpochStable_(expectedEpoch) {
+  const lock = LockService.getScriptLock();
+  let locked = false;
+  try {
+    locked = lock.tryLock(5000);
+    if (!locked) throw uploadError_('DASHBOARD_UPDATE_BUSY', 'ระบบกำลังอัปเดต BigQuery กรุณาลองใหม่อีกครั้ง');
+    if (getDashboardDataEpoch_() !== String(expectedEpoch || '')) {
+      throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล BigQuery เปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
+    }
+  } finally {
+    if (locked && lock.hasLock()) lock.releaseLock();
+  }
 }
 
 function getDashboardRequestScope_(e) {
@@ -204,19 +266,22 @@ function sqlStringLiteral_(value) {
   return "'" + String(value == null ? '' : value).replace(/'/g, "''") + "'";
 }
 
-function getItemCubeCacheRevision_(e) {
+function getItemCubeCacheRevision_(e, dataEpoch) {
   const params = e && e.parameter || {};
+  const requestScope = getDashboardRequestScope_(e);
   const scope = [
     String(params.system || '').toUpperCase(),
     String(params.from || ''),
     String(params.to || ''),
-    String(params.shift || 'all').toLowerCase()
+    String(params.shift || 'all').toLowerCase(),
+    String(requestScope && requestScope.key || 'all')
   ];
-  return 'item_' + getDataRevision_() + '_' + getDashboardRefreshBucket_() + '_' +
+  const epoch = String(dataEpoch || getDashboardDataEpoch_()).replace(/:/g, '_');
+  return 'item_' + epoch + '_' +
     sha256Hex_(JSON.stringify(scope)).slice(0, 24);
 }
 
-function getSlotCubeCacheRevision_(e, requestScope) {
+function getSlotCubeCacheRevision_(e, requestScope, dataEpoch) {
   const params = e && e.parameter || {};
   const scope = [
     String(params.system || '').toUpperCase(),
@@ -225,22 +290,31 @@ function getSlotCubeCacheRevision_(e, requestScope) {
     String(params.shift || 'all').toLowerCase(),
     String(requestScope && requestScope.key || 'all')
   ];
-  return 'slot_' + getDataRevision_() + '_' + getDashboardRefreshBucket_() + '_' +
+  const epoch = String(dataEpoch || getDashboardDataEpoch_()).replace(/:/g, '_');
+  return 'slot_' + epoch + '_' +
     sha256Hex_(JSON.stringify(scope)).slice(0, 24);
 }
 
-function buildItemCubeData_(e) {
+function buildItemCubeData_(e, dataEpoch) {
   const params = e && e.parameter || {};
   const system = String(params.system || '').toUpperCase();
   const from = String(params.from || '').trim();
   const to = String(params.to || '').trim();
   const shift = String(params.shift || 'all').toLowerCase();
+  const expectedEpoch = String(dataEpoch || getDashboardDataEpoch_());
   if (system !== 'PTT' && system !== 'BPS') throw new Error('ระบบที่ขอไม่ถูกต้อง');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
     throw new Error('ช่วงวันที่ไม่ถูกต้อง');
   }
   if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
 
+  if (getDashboardDataEpoch_() !== expectedEpoch) {
+    throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล BigQuery เปลี่ยนก่อนเริ่มโหลด กรุณาลองใหม่อีกครั้ง');
+  }
+  const scope = getDashboardRequestScope_(e);
+  const excludedSql = scope.excludedSkus.length
+    ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
+    : '';
   const shiftSql = shift === 'morning'
     ? "AND shift_code = 'M'"
     : (shift === 'night' ? "AND shift_code = 'N'" : '');
@@ -250,22 +324,24 @@ function buildItemCubeData_(e) {
     '    IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date,',
     "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
     "    COALESCE(zone, '??') AS zone,",
-    "    COALESCE(CAST(sku AS STRING), '(none)') AS sku,",
+    "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
     '    pcs, pick_qty',
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
+    "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
     '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
     '),',
     'filtered AS (',
     '  SELECT * FROM base',
     '  WHERE shift_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
     '    ' + shiftSql,
+    '    ' + excludedSql,
     ')',
-    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, sku,",
+    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, sku_key,",
     '       SUM(pcs), SUM(pick_qty), COUNT(*)',
     'FROM filtered',
-    'GROUP BY shift_date, shift_code, zone, sku',
-    'ORDER BY shift_date, zone, sku'
+    'GROUP BY shift_date, shift_code, zone, sku_key',
+    'ORDER BY shift_date, zone, sku_key'
   ].join('\n');
 
   const rows = [];
@@ -276,9 +352,11 @@ function buildItemCubeData_(e) {
       Number(r[4]) || 0, Number(r[5]) || 0, Number(r[6]) || 0
     );
   }, JOB_DEADLINE_MS, true);
+  assertDashboardDataEpochStable_(expectedEpoch);
 
   return {
     schema_version: DASHBOARD_SCHEMA_VERSION,
+    data_epoch: expectedEpoch,
     system: system,
     from: from,
     to: to,
@@ -289,18 +367,22 @@ function buildItemCubeData_(e) {
   };
 }
 
-function buildSlotCubeData_(e, requestScope) {
+function buildSlotCubeData_(e, requestScope, dataEpoch) {
   const params = e && e.parameter || {};
   const system = String(params.system || '').toUpperCase();
   const from = String(params.from || '').trim();
   const to = String(params.to || '').trim();
   const shift = String(params.shift || 'all').toLowerCase();
+  const expectedEpoch = String(dataEpoch || getDashboardDataEpoch_());
   if (system !== 'PTT' && system !== 'BPS') throw new Error('ระบบที่ขอไม่ถูกต้อง');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
     throw new Error('ช่วงวันที่ไม่ถูกต้อง');
   }
   if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
 
+  if (getDashboardDataEpoch_() !== expectedEpoch) {
+    throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล BigQuery เปลี่ยนก่อนเริ่มโหลด กรุณาลองใหม่อีกครั้ง');
+  }
   const scope = requestScope || { excludedSkus: [] };
   const excludedSql = scope.excludedSkus.length
     ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
@@ -320,6 +402,7 @@ function buildSlotCubeData_(e, requestScope) {
     '    pcs, pick_qty',
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
+    "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
     '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
     '),',
     'filtered AS (',
@@ -343,9 +426,11 @@ function buildSlotCubeData_(e, requestScope) {
       Number(r[5]) || 0, Number(r[6]) || 0, Number(r[7]) || 0
     );
   }, JOB_DEADLINE_MS, true);
+  assertDashboardDataEpochStable_(expectedEpoch);
 
   return {
     schema_version: DASHBOARD_SCHEMA_VERSION,
+    data_epoch: expectedEpoch,
     system: system,
     from: from,
     to: to,
@@ -388,6 +473,7 @@ function buildPickerItemsData_(e, requestScope) {
     '    pcs, pick_qty',
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
+    "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
     '    AND COALESCE(CAST(picker_id AS STRING), \'(none)\') = ' + sqlStringLiteral_(picker),
     '),',
     'filtered AS (',
@@ -430,6 +516,53 @@ function bumpDataRevision_() {
   );
 }
 
+function getDashboardBounds_() {
+  const properties = PropertiesService.getScriptProperties();
+  return {
+    minDate: properties.getProperty(DASHBOARD_MIN_DATE_PROPERTY) || '',
+    maxDate: properties.getProperty(DASHBOARD_MAX_DATE_PROPERTY) || ''
+  };
+}
+
+function getOrLoadDashboardBounds_() {
+  const existing = getDashboardBounds_();
+  if (existing.minDate && existing.maxDate) return existing;
+
+  try {
+    const rows = bqQueryAll_(dashboardBoundsSql_(), 60000);
+    if (rows.length && rows[0].length >= 2) {
+      setDashboardBounds_(rows[0][0], rows[0][1]);
+      return getDashboardBounds_();
+    }
+  } catch (boundsErr) {
+    console.warn('Dashboard bounds lookup failed: ' + boundsErr);
+  }
+  return existing;
+}
+
+function dashboardBoundsSql_() {
+  return [
+    "SELECT FORMAT_DATE('%Y-%m-%d', MIN(shift_date)),",
+    "       FORMAT_DATE('%Y-%m-%d', MAX(shift_date))",
+    'FROM (',
+    '  SELECT IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date',
+    '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
+    "  WHERE pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
+    "    AND UPPER(category) IN ('PTT','BPS')",
+    ')'
+  ].join('\n');
+}
+
+function setDashboardBounds_(minDate, maxDate) {
+  const minValue = String(minDate || '');
+  const maxValue = String(maxDate || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(minValue) || !/^\d{4}-\d{2}-\d{2}$/.test(maxValue)) return;
+  PropertiesService.getScriptProperties().setProperties({
+    [DASHBOARD_MIN_DATE_PROPERTY]: minValue,
+    [DASHBOARD_MAX_DATE_PROPERTY]: maxValue
+  }, false);
+}
+
 function cachePrefix_(revision) {
   // ผูก cache กับ schema เพื่อไม่ให้ deployment ใหม่อ่าน payload รุ่นเก่า
   return 'dash_' + DASHBOARD_SCHEMA_VERSION + '_' + DASHBOARD_CACHE_FORMAT_VERSION +
@@ -462,6 +595,14 @@ function doPost(e) {
       });
     }
     const postData = JSON.parse(e.postData.contents);
+    if (postData.action === 'upload_chunk' && Array.isArray(postData.rows)) {
+      const chunkResult = uploadChunkToBigQuery_(postData);
+      return json_(Object.assign({ status: 'success' }, chunkResult));
+    }
+    if (postData.action === 'upload_commit') {
+      const commitResult = commitUploadChunks_(postData);
+      return json_(Object.assign({ status: 'success' }, commitResult));
+    }
     if (postData.action === 'upload_rows' && Array.isArray(postData.rows)) {
       const result = uploadToBigQuery_(postData.rows, postData.fmt, postData.meta || {});
       return json_(Object.assign({ status: 'success' }, result));
@@ -573,10 +714,8 @@ function uploadToBigQuery_(rows, fmt, meta) {
       );
     }
     mergeCounts = mergeStage_(stageTable);
-    // Refresh ตาราง Dashboard ให้มีข้อมูลใหม่ทันที ไม่ต้องรอ Trigger กลางคืน
-    try { refreshPickDashboardTable_(); } catch (refreshErr) {
-      console.warn('Dashboard table refresh after upload failed (non-fatal): ' + refreshErr);
-    }
+    // ต้อง Refresh สำเร็จก่อนเปลี่ยน revision เพื่อไม่ให้หน้าเว็บเห็น revision ใหม่แต่ข้อมูลเก่า
+    refreshPickDashboardTable_();
     const previousRevision = getDashboardRevisionToken_(getDataRevision_());
     bumpDataRevision_();
     clearCache_(previousRevision);
@@ -601,6 +740,499 @@ function uploadToBigQuery_(rows, fmt, meta) {
     counts: Object.assign({}, normalized.counts, mergeCounts),
     loadJobId: loadJobId
   };
+}
+
+// อัปโหลดไฟล์ใหญ่แบบหลายคำขอ: แต่ละ chunk เขียนลงตารางชั่วคราวของตัวเองด้วย
+// WRITE_TRUNCATE จึงส่งซ้ำได้อย่างปลอดภัยโดยไม่เพิ่มข้อมูลซ้ำ จากนั้น commit จึง Merge ครั้งเดียว
+function uploadChunkToBigQuery_(request) {
+  ensureUploadService_();
+  validateUploadMeta_(request.meta || {});
+  const envelope = validateUploadChunkEnvelope_(request);
+  const rows = request.rows || [];
+  if (!rows.length) throw uploadError_('EMPTY_CHUNK', 'ชุดข้อมูลที่ส่งมาว่างเปล่า');
+  if (rows.length > MAX_UPLOAD_CHUNK_ROWS) {
+    throw uploadError_(
+      'CHUNK_TOO_LARGE',
+      'ชุดข้อมูลมี ' + rows.length.toLocaleString() + ' แถว เกินขีดจำกัด ' +
+        MAX_UPLOAD_CHUNK_ROWS.toLocaleString() + ' แถวต่อชุด'
+    );
+  }
+
+  const normalized = normalizeUploadRows_(rows, request.fmt);
+  if (normalized.errors.length > 0) {
+    const err = uploadError_(
+      'VALIDATION_FAILED',
+      'ชุดที่ ' + (envelope.chunkIndex + 1) + ' พบข้อมูลไม่ถูกต้อง ' +
+        normalized.errors.length.toLocaleString() + ' จุด'
+    );
+    err.uploadDetails = {
+      chunkIndex: envelope.chunkIndex,
+      counts: normalized.counts,
+      errors: normalized.errors.slice(0, 100)
+    };
+    throw err;
+  }
+
+  const stageTable = uploadChunkTable_(envelope.sessionId, envelope.chunkIndex);
+  const ndjson = normalized.rows.map(function(row) { return JSON.stringify(row); }).join('\n');
+  const blob = Utilities.newBlob(ndjson, 'application/octet-stream', stageTable + '.ndjson');
+  const normalizedBytes = blob.getBytes().length;
+  if (normalizedBytes > MAX_POST_BYTES) {
+    throw uploadError_(
+      'NORMALIZED_CHUNK_TOO_LARGE',
+      'ชุดที่ ' + (envelope.chunkIndex + 1) + ' ใหญ่เกินไปหลังตรวจสอบ กรุณารีเฟรชหน้าเว็บแล้วลองใหม่'
+    );
+  }
+
+  const jobId = 'pick_chunk_' + envelope.sessionId.substring(0, 20) + '_' +
+    envelope.chunkIndex + '_' + Utilities.getUuid().replace(/-/g, '').substring(0, 12);
+  const loadJob = startLoadJob_(stageTable, jobId, blob, 'WRITE_TRUNCATE');
+  const stagedRows = Number(
+    loadJob && loadJob.statistics && loadJob.statistics.load &&
+    loadJob.statistics.load.outputRows || 0
+  );
+  if (stagedRows !== normalized.rows.length) {
+    throw uploadError_(
+      'LOAD_ROW_COUNT_MISMATCH',
+      'ชุดที่ ' + (envelope.chunkIndex + 1) + ' โหลดไม่ครบ (' +
+        stagedRows + '/' + normalized.rows.length + ' แถว)'
+    );
+  }
+  const integrity = getUploadChunkIntegrity_(stageTable);
+  if (integrity.stagedRows !== stagedRows) {
+    throw uploadError_(
+      'CHUNK_VERIFY_FAILED',
+      'จำนวนแถวชุดที่ ' + (envelope.chunkIndex + 1) + ' เปลี่ยนไประหว่างการตรวจสอบ กรุณาส่งชุดเดิมซ้ำอีกครั้ง'
+    );
+  }
+  const chunkManifest = {
+    schema: 'pick-upload-chunk-v1',
+    sessionId: envelope.sessionId,
+    chunkIndex: envelope.chunkIndex,
+    totalChunks: envelope.totalChunks,
+    totalRows: envelope.totalRows,
+    inputRows: rows.length,
+    stagedRows: stagedRows,
+    exactDuplicates: Number(normalized.counts.exactDuplicates || 0),
+    contentHash: integrity.contentHash
+  };
+  setUploadChunkManifest_(stageTable, chunkManifest);
+
+  return {
+    message: 'โหลดชุดที่ ' + (envelope.chunkIndex + 1) + '/' + envelope.totalChunks + ' สำเร็จ',
+    sessionId: envelope.sessionId,
+    chunkIndex: envelope.chunkIndex,
+    totalChunks: envelope.totalChunks,
+    rowsProcessed: stagedRows,
+    normalizedBytes: normalizedBytes,
+    contentHash: chunkManifest.contentHash,
+    counts: normalized.counts,
+    loadJobId: jobId
+  };
+}
+
+function commitUploadChunks_(request) {
+  ensureUploadService_();
+  validateUploadMeta_(request.meta || {});
+  const envelope = validateUploadChunkEnvelope_(request, true);
+  const existingReceipt = getUploadReceipt_(envelope.sessionId);
+  if (existingReceipt) return existingReceipt;
+
+  let lock = null;
+  let consolidated = null;
+  let completed = false;
+  try {
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(120000)) {
+      throw uploadError_('UPLOAD_BUSY', 'มีไฟล์อื่นกำลัง Merge อยู่ กรุณารอสักครู่แล้วกดลองอีกครั้ง');
+    }
+
+    // ตรวจ receipt ซ้ำหลังได้ lock ป้องกันสองคำขอ commit พร้อมกัน
+    const lockedReceipt = getUploadReceipt_(envelope.sessionId);
+    if (lockedReceipt) return lockedReceipt;
+
+    consolidated = consolidateUploadChunks_(
+      envelope.sessionId,
+      envelope.totalChunks,
+      envelope.totalRows
+    );
+    if (consolidated.uniqueRows <= 0) {
+      throw uploadError_('NO_VALID_ROWS', 'ไม่พบข้อมูลที่พร้อม Merge เข้า BigQuery');
+    }
+    if (consolidated.uniqueRows > MAX_UPLOAD_ROWS) {
+      throw uploadError_(
+        'TOO_MANY_ROWS',
+        'ข้อมูลรวมมี ' + consolidated.uniqueRows.toLocaleString() + ' แถว เกินขีดจำกัด ' +
+          MAX_UPLOAD_ROWS.toLocaleString() + ' แถวต่อไฟล์'
+      );
+    }
+
+    const mergeCounts = mergeStage_(consolidated.finalTable);
+    // ถ้าสร้างตาราง Dashboard ไม่สำเร็จ ห้ามเปลี่ยน revision และห้ามลบ stage
+    // ผู้ใช้กดซ้ำได้ ระบบจะ Merge แบบ idempotent แล้วพยายาม Refresh ต่อ
+    refreshPickDashboardTable_();
+    const previousRevision = getDashboardRevisionToken_(getDataRevision_());
+    bumpDataRevision_();
+    clearCache_(previousRevision);
+
+    const result = {
+      message: 'โหลดครบทุกชุดและ Merge เข้า BigQuery สำเร็จ',
+      uploadId: envelope.sessionId,
+      sessionId: envelope.sessionId,
+      filename: String(request.meta && request.meta.filename || ''),
+      rowsProcessed: consolidated.uniqueRows,
+      dashboardRevision: getDashboardRevisionToken_(getDataRevision_()),
+      dashboardBounds: getDashboardBounds_(),
+      counts: Object.assign({
+        received: consolidated.inputRows,
+        valid: consolidated.uniqueRows,
+        duplicates: consolidated.duplicateRows
+      }, mergeCounts)
+    };
+    // ต้องเขียน receipt แบบถาวรก่อนลบ stage เพื่อให้ retry หลัง response หลุด
+    // คืนผลเดิมได้เสมอ แม้ Script Cache ถูกล้างหรือเต็ม
+    persistUploadReceipt_(envelope.sessionId, result);
+    completed = true;
+    return result;
+  } finally {
+    if (lock && lock.hasLock()) lock.releaseLock();
+    if (completed && consolidated) {
+      cleanupUploadTables_(consolidated.chunkTables.concat([consolidated.finalTable]));
+    }
+  }
+}
+
+function ensureUploadService_() {
+  if (typeof BigQuery === 'undefined' || !BigQuery.Jobs || !BigQuery.Tables) {
+    throw uploadError_('BIGQUERY_SERVICE_DISABLED', 'BigQuery API ยังไม่ได้ถูก Enable ใน Apps Script');
+  }
+}
+
+function validateUploadChunkEnvelope_(request, isCommit) {
+  const sessionId = String(request && request.sessionId || '').trim().toLowerCase();
+  const totalChunks = Number(request && request.totalChunks);
+  const chunkIndex = isCommit ? 0 : Number(request && request.chunkIndex);
+  const totalRows = Number(request && request.totalRows || 0);
+  if (!/^[a-f0-9]{24,48}$/.test(sessionId)) {
+    throw uploadError_('INVALID_SESSION', 'รหัสรอบอัปโหลดไม่ถูกต้อง กรุณาเลือกไฟล์แล้วลองใหม่');
+  }
+  if (!Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > MAX_UPLOAD_CHUNKS) {
+    throw uploadError_('INVALID_CHUNK_COUNT', 'จำนวนชุดอัปโหลดไม่ถูกต้อง');
+  }
+  if (!isCommit && (!Number.isInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= totalChunks)) {
+    throw uploadError_('INVALID_CHUNK_INDEX', 'ลำดับชุดอัปโหลดไม่ถูกต้อง');
+  }
+  if (!Number.isInteger(totalRows) || totalRows < 1 || totalRows > MAX_UPLOAD_ROWS) {
+    throw uploadError_('TOO_MANY_ROWS', 'จำนวนแถวรวมของไฟล์ไม่ถูกต้องหรือเกินขีดจำกัด');
+  }
+  return { sessionId: sessionId, totalChunks: totalChunks, chunkIndex: chunkIndex, totalRows: totalRows };
+}
+
+function uploadChunkTable_(sessionId, chunkIndex) {
+  return 'pick_stage_' + sessionId.substring(0, 24) + '_c' + String(chunkIndex).padStart(3, '0');
+}
+
+function uploadChunkCanonicalRowSql_() {
+  return 'TO_JSON_STRING(STRUCT(' +
+    'pickdetailkey, lpn, qty, sku, owner, uom_qty, category, picker_id, location, ' +
+    'pick_ts_source, source_row_number))';
+}
+
+function getUploadChunkIntegrity_(stageTable) {
+  const canonical = uploadChunkCanonicalRowSql_();
+  const rows = bqQueryAll_([
+    'SELECT COUNT(*) AS staged_rows,',
+    "  LOWER(TO_HEX(SHA256(STRING_AGG(" + canonical + ", '\\n' ORDER BY pickdetailkey, source_row_number, " + canonical + ')))) AS content_hash',
+    'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + stageTable + '`'
+  ].join('\n'), JOB_DEADLINE_MS);
+  if (!rows.length || !/^[a-f0-9]{64}$/.test(String(rows[0][1] || '').toLowerCase())) {
+    throw uploadError_('CHUNK_VERIFY_FAILED', 'BigQuery ไม่สามารถตรวจสอบเนื้อหาชุดข้อมูลหลังโหลดได้ กรุณาลองส่งชุดเดิมซ้ำอีกครั้ง');
+  }
+  return {
+    stagedRows: Number(rows[0][0] || 0),
+    contentHash: String(rows[0][1] || '').toLowerCase()
+  };
+}
+
+function consolidateUploadChunks_(sessionId, totalChunks, expectedTotalRows) {
+  const chunkTables = [];
+  const manifests = [];
+  const missing = [];
+  for (let i = 0; i < totalChunks; i++) {
+    const table = uploadChunkTable_(sessionId, i);
+    try {
+      const tableResource = BigQuery.Tables.get(BQ_PROJECT, BQ_DATASET, table);
+      const manifest = parseUploadChunkManifest_(tableResource && tableResource.description);
+      if (!manifest || manifest.sessionId !== sessionId || manifest.chunkIndex !== i ||
+          manifest.totalChunks !== totalChunks || manifest.totalRows !== expectedTotalRows ||
+          !Number.isInteger(manifest.inputRows) || manifest.inputRows < 1 ||
+          !Number.isInteger(manifest.stagedRows) || manifest.stagedRows < 1 ||
+          Number(tableResource.numRows || 0) !== manifest.stagedRows ||
+          !/^[a-f0-9]{64}$/.test(String(manifest.contentHash || ''))) {
+        throw uploadError_(
+          'CHUNK_MANIFEST_MISMATCH',
+          'ข้อมูลกำกับชุดที่ ' + (i + 1) + ' ไม่ครบหรือไม่ตรงกับไฟล์ กรุณาเลือกไฟล์แล้วลองใหม่'
+        );
+      }
+      chunkTables.push(table);
+      manifests.push(manifest);
+    } catch (chunkErr) {
+      if (chunkErr && chunkErr.code === 'CHUNK_MANIFEST_MISMATCH') throw chunkErr;
+      missing.push(i + 1);
+    }
+  }
+  if (missing.length) {
+    const err = uploadError_(
+      'MISSING_CHUNKS',
+      'BigQuery ยังได้รับข้อมูลไม่ครบ ขาดชุดที่ ' + missing.slice(0, 20).join(', ')
+    );
+    err.uploadDetails = { missingChunks: missing };
+    throw err;
+  }
+
+  const inputRows = manifests.reduce(function(sum, manifest) {
+    return sum + manifest.inputRows;
+  }, 0);
+  if (inputRows !== expectedTotalRows) {
+    throw uploadError_(
+      'CHUNK_ROW_COUNT_MISMATCH',
+      'จำนวนแถวที่ BigQuery รับจากทุกชุดไม่ตรงกับไฟล์ (' +
+        inputRows + '/' + expectedTotalRows + ' แถว) กรุณาเลือกไฟล์แล้วลองใหม่'
+    );
+  }
+
+  const verificationUnion = chunkTables.map(function(table, index) {
+    return 'SELECT ' + index + ' AS chunk_index, pickdetailkey, lpn, qty, sku, owner, uom_qty, ' +
+      'category, picker_id, location, pick_ts_source, source_row_number FROM `' +
+      BQ_PROJECT + '.' + BQ_DATASET + '.' + table + '`';
+  }).join('\nUNION ALL\n');
+  const canonical = uploadChunkCanonicalRowSql_();
+  const verificationRows = bqQueryAll_([
+    'SELECT chunk_index, COUNT(*) AS staged_rows,',
+    "       LOWER(TO_HEX(SHA256(STRING_AGG(" + canonical + ", '\\n' ORDER BY pickdetailkey, source_row_number, " + canonical + ')))) AS content_hash',
+    'FROM (' + verificationUnion + ')',
+    'GROUP BY chunk_index',
+    'ORDER BY chunk_index'
+  ].join('\n'), JOB_DEADLINE_MS);
+  const verified = {};
+  verificationRows.forEach(function(row) {
+    verified[Number(row[0])] = {
+      stagedRows: Number(row[1] || 0),
+      contentHash: String(row[2] || '').toLowerCase()
+    };
+  });
+  for (let i = 0; i < manifests.length; i++) {
+    const actual = verified[i];
+    const expected = manifests[i];
+    if (!actual || actual.stagedRows !== expected.stagedRows || actual.contentHash !== expected.contentHash) {
+      const err = uploadError_(
+        'CHUNK_HASH_MISMATCH',
+        'ชุดข้อมูลที่ ' + (i + 1) + ' ไม่ครบหลังโหลดเข้า BigQuery กรุณาเลือกไฟล์แล้วลองใหม่'
+      );
+      err.uploadDetails = {
+        chunkIndex: i,
+        expectedRows: expected.stagedRows,
+        actualRows: actual && actual.stagedRows
+      };
+      throw err;
+    }
+  }
+
+  const unionSql = chunkTables.map(function(table) {
+    return 'SELECT * FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + table + '`';
+  }).join('\nUNION ALL\n');
+  const fingerprint = 'TO_JSON_STRING(STRUCT(lpn, qty, sku, owner, uom_qty, category, picker_id, location, pick_ts_source))';
+  const groupedCte = [
+    'WITH raw AS (' + unionSql + '),',
+    'grouped AS (',
+    '  SELECT pickdetailkey, COUNT(*) AS copies,',
+    '    COUNT(DISTINCT ' + fingerprint + ') AS variants',
+    '  FROM raw GROUP BY pickdetailkey',
+    ')'
+  ].join('\n');
+  const stats = bqQueryAll_(
+    groupedCte + '\nSELECT (SELECT COUNT(*) FROM raw), COUNT(*), ' +
+      'SUM(copies - 1), COUNTIF(variants > 1) FROM grouped',
+    JOB_DEADLINE_MS
+  );
+  if (!stats.length || stats[0].length < 4) {
+    throw uploadError_('CHUNK_VERIFY_FAILED', 'ไม่สามารถตรวจสอบจำนวนแถวรวมก่อน Merge ได้');
+  }
+  const rawRows = Number(stats[0][0] || 0);
+  const uniqueRows = Number(stats[0][1] || 0);
+  const duplicateRows = Math.max(inputRows - uniqueRows, 0);
+  const conflictKeys = Number(stats[0][3] || 0);
+  if (conflictKeys > 0) {
+    const samples = bqQueryAll_(
+      groupedCte + '\nSELECT pickdetailkey FROM grouped WHERE variants > 1 LIMIT 10',
+      JOB_DEADLINE_MS
+    ).map(function(row) { return String(row[0] || ''); }).filter(Boolean);
+    const err = uploadError_(
+      'DUPLICATE_KEY_CONFLICT',
+      'พบ Pick Detail # ซ้ำแต่ข้อมูลไม่เหมือนกัน ' + conflictKeys.toLocaleString() + ' รายการ'
+    );
+    err.uploadDetails = { conflictingKeys: samples };
+    throw err;
+  }
+
+  const finalTable = 'pick_stage_' + sessionId.substring(0, 24) + '_final';
+  const finalRef = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + finalTable + '`';
+  const createSql = [
+    'CREATE OR REPLACE TABLE ' + finalRef,
+    'OPTIONS(expiration_timestamp=TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)) AS',
+    'SELECT * EXCEPT(_row_number) FROM (',
+    '  SELECT raw.*, ROW_NUMBER() OVER (PARTITION BY pickdetailkey ORDER BY source_row_number) AS _row_number',
+    '  FROM (' + unionSql + ') raw',
+    ') WHERE _row_number = 1'
+  ].join('\n');
+  bqQueryAll_(createSql, JOB_DEADLINE_MS);
+  return {
+    finalTable: finalTable,
+    chunkTables: chunkTables,
+    inputRows: inputRows,
+    rawRows: rawRows,
+    uniqueRows: uniqueRows,
+    duplicateRows: duplicateRows
+  };
+}
+
+function cleanupUploadTables_(tables) {
+  (tables || []).forEach(function(table) {
+    try {
+      BigQuery.Tables.remove(BQ_PROJECT, BQ_DATASET, table);
+    } catch (cleanupErr) {
+      console.warn('Temporary upload table cleanup failed (' + table + '): ' + cleanupErr);
+    }
+  });
+}
+
+function uploadReceiptKey_(sessionId) {
+  return UPLOAD_RECEIPT_PREFIX + String(sessionId || '');
+}
+
+function getUploadReceipt_(sessionId) {
+  const key = uploadReceiptKey_(sessionId);
+  try {
+    const cached = CacheService.getScriptCache().get(key);
+    if (cached) return JSON.parse(cached);
+  } catch (_) {}
+
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const raw = properties.getProperty(key);
+    if (raw) {
+      const stored = JSON.parse(raw);
+      const completedAt = Number(stored && stored.completedAt || 0);
+      if (stored && stored.result && completedAt && Date.now() - completedAt <= UPLOAD_RECEIPT_TTL_MS) {
+        try {
+          CacheService.getScriptCache().put(key, JSON.stringify(stored.result), 21600);
+        } catch (_) {}
+        return stored.result;
+      }
+      properties.deleteProperty(key);
+    }
+  } catch (receiptReadErr) {
+    console.warn('Upload receipt read failed: ' + receiptReadErr);
+  }
+
+  const durable = getUploadReceiptFromBigQuery_(sessionId);
+  if (!durable) return null;
+  try {
+    CacheService.getScriptCache().put(key, JSON.stringify(durable), 21600);
+  } catch (_) {}
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      key,
+      JSON.stringify({ completedAt: Date.now(), result: durable })
+    );
+  } catch (_) {}
+  return durable;
+}
+
+function persistUploadReceipt_(sessionId, result) {
+  const key = uploadReceiptKey_(sessionId);
+  const payload = JSON.stringify({ completedAt: Date.now(), result: result });
+  try {
+    persistUploadReceiptToBigQuery_(sessionId, result);
+  } catch (durableReceiptErr) {
+    throw uploadError_(
+      'RECEIPT_PERSIST_FAILED',
+      'BigQuery Merge สำเร็จ แต่ยังบันทึกสถานะยืนยันไม่ได้ กรุณากดลองอีกครั้งเพื่อยืนยันผลเดิม'
+    );
+  }
+  try {
+    PropertiesService.getScriptProperties().setProperty(key, payload);
+  } catch (receiptWriteErr) {
+    console.warn('Script Properties receipt cache failed; BigQuery receipt is durable: ' + receiptWriteErr);
+  }
+  try {
+    CacheService.getScriptCache().put(key, JSON.stringify(result), 21600);
+  } catch (_) {}
+  pruneUploadReceipts_(key);
+}
+
+function getUploadReceiptFromBigQuery_(sessionId) {
+  try {
+    const rows = bqQueryAll_([
+      'SELECT result_b64',
+      'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + UPLOAD_RECEIPT_TABLE + '`',
+      'WHERE session_id = ' + sqlStringLiteral_(sessionId),
+      '  AND completed_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)',
+      'ORDER BY completed_at DESC LIMIT 1'
+    ].join('\n'), 60000);
+    if (!rows.length || !rows[0][0]) return null;
+    const json = Utilities.newBlob(
+      Utilities.base64DecodeWebSafe(String(rows[0][0]))
+    ).getDataAsString('UTF-8');
+    return JSON.parse(json);
+  } catch (err) {
+    console.warn('BigQuery upload receipt read failed: ' + err);
+    return null;
+  }
+}
+
+function persistUploadReceiptToBigQuery_(sessionId, result) {
+  const table = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + UPLOAD_RECEIPT_TABLE + '`';
+  const resultB64 = Utilities.base64EncodeWebSafe(
+    JSON.stringify(result),
+    Utilities.Charset.UTF_8
+  );
+  const sql = [
+    'CREATE TABLE IF NOT EXISTS ' + table + ' (',
+    '  session_id STRING, result_b64 STRING, completed_at TIMESTAMP',
+    ') PARTITION BY DATE(completed_at) CLUSTER BY session_id;',
+    'DELETE FROM ' + table,
+    'WHERE completed_at < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY);',
+    'MERGE ' + table + ' T',
+    'USING (SELECT ' + sqlStringLiteral_(sessionId) + ' AS session_id, ' +
+      sqlStringLiteral_(resultB64) + ' AS result_b64, CURRENT_TIMESTAMP() AS completed_at) S',
+    'ON T.session_id = S.session_id',
+    'WHEN MATCHED THEN UPDATE SET result_b64 = S.result_b64, completed_at = S.completed_at',
+    'WHEN NOT MATCHED THEN INSERT (session_id, result_b64, completed_at)',
+    'VALUES (S.session_id, S.result_b64, S.completed_at);'
+  ].join('\n');
+  bqQueryAll_(sql, JOB_DEADLINE_MS);
+}
+
+function pruneUploadReceipts_(keepKey) {
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const all = properties.getProperties();
+    Object.keys(all).forEach(function(key) {
+      if (key === keepKey || key.indexOf(UPLOAD_RECEIPT_PREFIX) !== 0) return;
+      try {
+        const parsed = JSON.parse(all[key]);
+        const completedAt = Number(parsed && parsed.completedAt || 0);
+        if (!completedAt || Date.now() - completedAt > UPLOAD_RECEIPT_TTL_MS) {
+          properties.deleteProperty(key);
+        }
+      } catch (_) {
+        properties.deleteProperty(key);
+      }
+    });
+  } catch (receiptPruneErr) {
+    console.warn('Upload receipt cleanup failed: ' + receiptPruneErr);
+  }
 }
 
 function validateUploadMeta_(meta) {
@@ -786,7 +1418,7 @@ function sha256Hex_(value) {
   }).join('');
 }
 
-function startLoadJob_(stageTable, jobId, blob) {
+function startLoadJob_(stageTable, jobId, blob, writeDisposition) {
   const job = {
     jobReference: {
       projectId: BQ_PROJECT,
@@ -802,7 +1434,7 @@ function startLoadJob_(stageTable, jobId, blob) {
         },
         sourceFormat: 'NEWLINE_DELIMITED_JSON',
         createDisposition: 'CREATE_IF_NEEDED',
-        writeDisposition: 'WRITE_EMPTY',
+        writeDisposition: writeDisposition || 'WRITE_EMPTY',
         maxBadRecords: 0,
         ignoreUnknownValues: false,
         schema: {
@@ -850,6 +1482,38 @@ function setStageExpiry_(stageTable) {
     );
   } catch (err) {
     console.warn('Could not set stage expiry: ' + err);
+  }
+}
+
+function setUploadChunkManifest_(stageTable, manifest) {
+  const description = 'pick-upload-manifest-v1:' + JSON.stringify(manifest);
+  try {
+    BigQuery.Tables.patch(
+      {
+        expirationTime: String(Date.now() + 24 * 60 * 60 * 1000),
+        description: description
+      },
+      BQ_PROJECT,
+      BQ_DATASET,
+      stageTable
+    );
+  } catch (manifestErr) {
+    throw uploadError_(
+      'CHUNK_MANIFEST_WRITE_FAILED',
+      'โหลดข้อมูลเข้า BigQuery แล้ว แต่บันทึกข้อมูลกำกับชุดไม่สำเร็จ กรุณาลองส่งไฟล์เดิมอีกครั้ง'
+    );
+  }
+}
+
+function parseUploadChunkManifest_(description) {
+  const prefix = 'pick-upload-manifest-v1:';
+  const value = String(description || '');
+  if (value.indexOf(prefix) !== 0) return null;
+  try {
+    const manifest = JSON.parse(value.substring(prefix.length));
+    return manifest && manifest.schema === 'pick-upload-chunk-v1' ? manifest : null;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -926,6 +1590,12 @@ function textJson_(str) {
 // เก็บ/อ่าน JSON ก้อนใหญ่ใน Script Cache แบบ gzip + base64 แล้วแบ่งชิ้น
 // payload เดิม ~646 KB เหลือ ~277 KB หลัง encode ทำให้ CacheService ไม่หลุดบาง chunk ง่าย
 function getCached_(revision) {
+  const encoded = getCachedEncoded_(revision);
+  if (!encoded) return null;
+  const compressed = Utilities.base64Decode(encoded);
+  return Utilities.ungzip(Utilities.newBlob(compressed)).getDataAsString('UTF-8');
+}
+function getCachedEncoded_(revision) {
   const c = CacheService.getScriptCache();
   const prefix = cachePrefix_(revision);
   const n = c.get(prefix + 'n'); if (!n) return null;
@@ -939,9 +1609,7 @@ function getCached_(revision) {
   }
   const joined = parts.join('');
   const codec = c.get(prefix + 'codec');
-  if (codec !== CACHE_CODEC) return joined;
-  const compressed = Utilities.base64Decode(joined);
-  return Utilities.ungzip(Utilities.newBlob(compressed)).getDataAsString('UTF-8');
+  return codec === CACHE_CODEC ? joined : null;
 }
 function setCached_(str, revision) {
   const c = CacheService.getScriptCache();
@@ -958,6 +1626,11 @@ function setCached_(str, revision) {
   c.put(prefix + 'codec', CACHE_CODEC, CACHE_TTL);
   // เขียน n หลังทุก chunk สำเร็จ เพื่อไม่ให้ผู้อ่านเห็น cache ที่ยังไม่ครบ
   c.put(prefix + 'n', String(cnt), CACHE_TTL);
+  return encoded;
+}
+
+function gzipEnvelope_(encoded) {
+  return json_({ encoding: CACHE_CODEC, data: encoded });
 }
 
 function json_(obj) {
@@ -1646,7 +2319,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
     '),',
     'included AS (',
     '  SELECT * FROM base WHERE TRUE ' + excludedSql,
-    '),',
+    ')',
     "SELECT category, FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, picker,",
     '       SUM(pcs), SUM(pick_qty), COUNT(*), MIN(shift_minute), MAX(shift_minute)',
     'FROM included',
@@ -1682,7 +2355,6 @@ function buildDashboardData_(useQueryCache, requestScope) {
     total++;
   }, JOB_DEADLINE_MS, useQueryCache !== false);
   ['PTT','BPS'].forEach(c => sortDates_(sysd[c]));
-
   const compact = function(S) {
     return {
       row_width: 9, item_row_width: 7, slot_row_width: 8,
@@ -1729,7 +2401,9 @@ function refreshPickDashboardTable_() {
     '  pick_qty ' +
     'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.v_pick_enriched` ' +
     'WHERE pick_ts_local IS NOT NULL AND UPPER(category) IN (\'PTT\',\'BPS\')';
-  bqQueryEach_(sql, function() {}, JOB_DEADLINE_MS, false);
+  bqQueryAll_(sql, JOB_DEADLINE_MS);
+  const bounds = bqQueryAll_(dashboardBoundsSql_(), JOB_DEADLINE_MS);
+  if (bounds.length && bounds[0].length >= 2) setDashboardBounds_(bounds[0][0], bounds[0][1]);
   console.log('t_pick_dashboard refreshed successfully');
 }
 

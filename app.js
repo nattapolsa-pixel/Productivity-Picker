@@ -1912,6 +1912,7 @@ async function loadCurrentItemCube(force, system = sys){
       itemCubeLoadState.set(requestKey, {status:'done'});
       if(itemCubeRequestKey() === requestKey){
         aggregateCache.clear();
+        delete built['items'];
         if(!dashboardBundleLoading && currentPage === 'items') render();
         const modal = document.getElementById('zoneDetailModal');
         if(activeZoneDetailCode && modal && modal.style.display !== 'none') openZoneDetailModal(activeZoneDetailCode);
@@ -3859,8 +3860,8 @@ const builders = {
         );
       }
 
-      // แสดง 35 รายการแรกที่ตรงกับคำค้นหา
-      const displayItems = allItems.slice(0, 35);
+      // แสดงรายการสินค้าทั้งหมดที่ตรงกับคำค้นหา (ไม่ตัดสั้นที่ 35 รายการ)
+      const displayItems = allItems;
 
       const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
       const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
