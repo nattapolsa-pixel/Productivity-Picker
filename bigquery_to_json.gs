@@ -319,11 +319,12 @@ function buildItemCubeData_(e, dataEpoch) {
     ? "AND shift_code = 'M'"
     : (shift === 'night' ? "AND shift_code = 'N'" : '');
   const sql = [
-    'WITH base AS (',
+    'WITH base_picks AS (',
     '  SELECT',
     '    IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date,',
     "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
     "    COALESCE(zone, '??') AS zone,",
+    "    COALESCE(owner, '-') AS owner_key,",
     "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
     '    pcs, pick_qty',
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
@@ -331,17 +332,30 @@ function buildItemCubeData_(e, dataEpoch) {
     "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
     '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
     '),',
-    'filtered AS (',
-    '  SELECT * FROM base',
+    'filtered_picks AS (',
+    '  SELECT * FROM base_picks',
     '  WHERE shift_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
     '    ' + shiftSql,
     '    ' + excludedSql,
+    '),',
+    'pick_summary AS (',
+    '  SELECT shift_date, shift_code, zone, owner_key, sku_key,',
+    '         SUM(pcs) AS pcs, SUM(pick_qty) AS pick_qty, COUNT(*) AS cnt',
+    '  FROM filtered_picks',
+    '  GROUP BY shift_date, shift_code, zone, owner_key, sku_key',
     ')',
-    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, sku_key,",
-    '       SUM(pcs), SUM(pick_qty), COUNT(*)',
-    'FROM filtered',
-    'GROUP BY shift_date, shift_code, zone, sku_key',
-    'ORDER BY shift_date, zone, sku_key'
+    'SELECT',
+    '  COALESCE(FORMAT_DATE(\'%Y-%m-%d\', p.shift_date), ' + sqlStringLiteral_(from) + ') AS shift_date,',
+    '  COALESCE(p.shift_code, \'M\') AS shift_code,',
+    '  COALESCE(p.zone, \'-\') AS zone,',
+    '  m.item AS sku_key,',
+    '  COALESCE(p.pcs, 0) AS pcs,',
+    '  COALESCE(p.pick_qty, 0) AS pick_qty,',
+    '  COALESCE(p.cnt, 0) AS cnt',
+    'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + MASTER_CURRENT_TABLE + '` m',
+    'LEFT JOIN pick_summary p',
+    '  ON m.owner = p.owner_key AND m.item = p.sku_key',
+    'ORDER BY m.owner, m.item, shift_date'
   ].join('\n');
 
   const rows = [];
