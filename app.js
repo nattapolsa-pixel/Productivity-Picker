@@ -5416,85 +5416,88 @@ bootstrapDashboard();
       if(errors.length >= 100) break;
     }
     return errors;
-  function openTargetSettingsModal() {
+  }
+})();
+
+// ===== Target Settings Modal Functions =====
+function openTargetSettingsModal() {
+  const modal = document.getElementById('targetSettingsModal');
+  if (!modal) return;
+  
+  const inOverall = document.getElementById('targetInputOverall');
+  const inFull = document.getElementById('targetInputFullRack');
+  const inHalf = document.getElementById('targetInputHalfRack');
+  const inMicro = document.getElementById('targetInputMicroRack');
+  const inPts = document.getElementById('targetInputPickToSort');
+  const inMezz = document.getElementById('targetInputMezzanine');
+  const inTrain = document.getElementById('targetInputTraining');
+
+  if(inOverall) inOverall.value = prodTargets.overall || 170;
+  if(inFull) inFull.value = prodTargets.fullRack || 170;
+  if(inHalf) inHalf.value = prodTargets.halfRack || 200;
+  if(inMicro) inMicro.value = prodTargets.microRack || 170;
+  if(inPts) inPts.value = prodTargets.pickToSort || 170;
+  if(inMezz) inMezz.value = prodTargets.mezzanine || 170;
+  if(inTrain) inTrain.value = prodTargets.training || 100;
+
+  modal.style.display = 'flex';
+}
+
+function closeTargetSettingsModal() {
+  const modal = document.getElementById('targetSettingsModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function saveTargetSettingsFromModal() {
+  const inOverall = Number(document.getElementById('targetInputOverall')?.value);
+  const inFull = Number(document.getElementById('targetInputFullRack')?.value);
+  const inHalf = Number(document.getElementById('targetInputHalfRack')?.value);
+  const inMicro = Number(document.getElementById('targetInputMicroRack')?.value);
+  const inPts = Number(document.getElementById('targetInputPickToSort')?.value);
+  const inMezz = Number(document.getElementById('targetInputMezzanine')?.value);
+  const inTrain = Number(document.getElementById('targetInputTraining')?.value);
+
+  const updated = {
+    overall: Number.isFinite(inOverall) && inOverall > 0 ? inOverall : DEFAULT_PROD_TARGETS.overall,
+    fullRack: Number.isFinite(inFull) && inFull > 0 ? inFull : DEFAULT_PROD_TARGETS.fullRack,
+    halfRack: Number.isFinite(inHalf) && inHalf > 0 ? inHalf : DEFAULT_PROD_TARGETS.halfRack,
+    microRack: Number.isFinite(inMicro) && inMicro > 0 ? inMicro : DEFAULT_PROD_TARGETS.microRack,
+    pickToSort: Number.isFinite(inPts) && inPts > 0 ? inPts : DEFAULT_PROD_TARGETS.pickToSort,
+    mezzanine: Number.isFinite(inMezz) && inMezz > 0 ? inMezz : DEFAULT_PROD_TARGETS.mezzanine,
+    training: Number.isFinite(inTrain) && inTrain > 0 ? inTrain : DEFAULT_PROD_TARGETS.training
+  };
+
+  saveProdTargetsToStorage(updated);
+  closeTargetSettingsModal();
+  render();
+}
+
+function resetTargetSettingsDefaults() {
+  saveProdTargetsToStorage(DEFAULT_PROD_TARGETS);
+  openTargetSettingsModal();
+  render();
+}
+
+// Bind modal events
+(function initTargetModalEvents(){
+  const bind = () => {
+    const btnClose = document.getElementById('btnCloseTargetSettings');
+    const btnSave = document.getElementById('btnSaveTargetSettings');
+    const btnReset = document.getElementById('btnResetTargetDefaults');
     const modal = document.getElementById('targetSettingsModal');
-    if (!modal) return;
-    
-    const inOverall = document.getElementById('targetInputOverall');
-    const inFull = document.getElementById('targetInputFullRack');
-    const inHalf = document.getElementById('targetInputHalfRack');
-    const inMicro = document.getElementById('targetInputMicroRack');
-    const inPts = document.getElementById('targetInputPickToSort');
-    const inMezz = document.getElementById('targetInputMezzanine');
-    const inTrain = document.getElementById('targetInputTraining');
 
-    if(inOverall) inOverall.value = prodTargets.overall || 170;
-    if(inFull) inFull.value = prodTargets.fullRack || 170;
-    if(inHalf) inHalf.value = prodTargets.halfRack || 200;
-    if(inMicro) inMicro.value = prodTargets.microRack || 170;
-    if(inPts) inPts.value = prodTargets.pickToSort || 170;
-    if(inMezz) inMezz.value = prodTargets.mezzanine || 170;
-    if(inTrain) inTrain.value = prodTargets.training || 100;
-
-    modal.style.display = 'flex';
-  }
-
-  function closeTargetSettingsModal() {
-    const modal = document.getElementById('targetSettingsModal');
-    if (modal) modal.style.display = 'none';
-  }
-
-  function saveTargetSettingsFromModal() {
-    const inOverall = Number(document.getElementById('targetInputOverall')?.value);
-    const inFull = Number(document.getElementById('targetInputFullRack')?.value);
-    const inHalf = Number(document.getElementById('targetInputHalfRack')?.value);
-    const inMicro = Number(document.getElementById('targetInputMicroRack')?.value);
-    const inPts = Number(document.getElementById('targetInputPickToSort')?.value);
-    const inMezz = Number(document.getElementById('targetInputMezzanine')?.value);
-    const inTrain = Number(document.getElementById('targetInputTraining')?.value);
-
-    const updated = {
-      overall: Number.isFinite(inOverall) && inOverall > 0 ? inOverall : DEFAULT_PROD_TARGETS.overall,
-      fullRack: Number.isFinite(inFull) && inFull > 0 ? inFull : DEFAULT_PROD_TARGETS.fullRack,
-      halfRack: Number.isFinite(inHalf) && inHalf > 0 ? inHalf : DEFAULT_PROD_TARGETS.halfRack,
-      microRack: Number.isFinite(inMicro) && inMicro > 0 ? inMicro : DEFAULT_PROD_TARGETS.microRack,
-      pickToSort: Number.isFinite(inPts) && inPts > 0 ? inPts : DEFAULT_PROD_TARGETS.pickToSort,
-      mezzanine: Number.isFinite(inMezz) && inMezz > 0 ? inMezz : DEFAULT_PROD_TARGETS.mezzanine,
-      training: Number.isFinite(inTrain) && inTrain > 0 ? inTrain : DEFAULT_PROD_TARGETS.training
-    };
-
-    saveProdTargetsToStorage(updated);
-    closeTargetSettingsModal();
-    render();
-  }
-
-  function resetTargetSettingsDefaults() {
-    saveProdTargetsToStorage(DEFAULT_PROD_TARGETS);
-    openTargetSettingsModal();
-    render();
-  }
-
-  // Bind modal events
-  (function initTargetModalEvents(){
-    const bind = () => {
-      const btnClose = document.getElementById('btnCloseTargetSettings');
-      const btnSave = document.getElementById('btnSaveTargetSettings');
-      const btnReset = document.getElementById('btnResetTargetDefaults');
-      const modal = document.getElementById('targetSettingsModal');
-
-      if(btnClose) btnClose.onclick = closeTargetSettingsModal;
-      if(btnSave) btnSave.onclick = saveTargetSettingsFromModal;
-      if(btnReset) btnReset.onclick = resetTargetSettingsDefaults;
-      if(modal) {
-        modal.onclick = (e) => {
-          if(e.target === modal) closeTargetSettingsModal();
-        };
-      }
-    };
-    if(document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', bind);
-    } else {
-      bind();
+    if(btnClose) btnClose.onclick = closeTargetSettingsModal;
+    if(btnSave) btnSave.onclick = saveTargetSettingsFromModal;
+    if(btnReset) btnReset.onclick = resetTargetSettingsDefaults;
+    if(modal) {
+      modal.onclick = (e) => {
+        if(e.target === modal) closeTargetSettingsModal();
+      };
     }
-  })();
+  };
+  if(document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bind);
+  } else {
+    bind();
+  }
 })();
