@@ -1818,10 +1818,11 @@ function waitForRetry(ms, signal){
 
 async function fetchWithTransientRetry(url, options, retries = 1){
   const transientStatuses = new Set([404, 408, 429, 500, 502, 503, 504]);
+  const reqOptions = Object.assign({ credentials: 'omit' }, options);
   let lastError = null;
   for(let attempt=0; attempt<=retries; attempt++){
     try{
-      const response = await fetch(url, options);
+      const response = await fetch(url, reqOptions);
       if(response.ok || !transientStatuses.has(response.status) || attempt === retries) return response;
       lastError = new Error('HTTP ' + response.status);
     }catch(err){
@@ -5161,6 +5162,7 @@ bootstrapDashboard();
           headers:{'Content-Type':'text/plain;charset=utf-8'},
           body:payload,
           cache:'no-store',
+          credentials:'omit',
           signal:controller.signal
         });
         const responseText = await res.text();
