@@ -4779,11 +4779,11 @@ bootstrapDashboard();
   let selectedFile = null;
   let xlsxLoadPromise = null;
   const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-  const MAX_UPLOAD_ROWS = 50000;
-  const MAX_FILE_BYTES = 25 * 1024 * 1024;
-  const UPLOAD_CHUNK_TARGET_BYTES = 600 * 1024;
-  const UPLOAD_CHUNK_MAX_ROWS = 5000;
-  const UPLOAD_CHUNK_CONCURRENCY = 3;
+  const MAX_UPLOAD_ROWS = 100000;
+  const MAX_FILE_BYTES = 50 * 1024 * 1024;
+  const UPLOAD_CHUNK_TARGET_BYTES = 250 * 1024;
+  const UPLOAD_CHUNK_MAX_ROWS = 1500;
+  const UPLOAD_CHUNK_CONCURRENCY = 1;
   const XLSX_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
   const REQUIRED_HEADERS = [
     {index:1, name:'PICKDETAILKEY'},
@@ -5205,7 +5205,7 @@ bootstrapDashboard();
         const status = Number(err && err.httpStatus || 0);
         const code = String(err && err.code || '');
         const retryable = err && (
-          err.name === 'AbortError' || status === 408 || status === 429 || status >= 500 ||
+          err.name === 'AbortError' || status === 404 || status === 408 || status === 429 || status >= 500 ||
           ['UPLOAD_BUSY','QUERY_TIMEOUT','QUERY_FAILED','LOAD_TIMEOUT','LOAD_JOB_FAILED',
             'CHUNK_VERIFY_FAILED','MISSING_CHUNKS','MERGE_RESULT_MISSING',
             'CHUNK_MANIFEST_WRITE_FAILED','RECEIPT_PERSIST_FAILED','INVALID_SERVER_RESPONSE'].includes(code) ||
