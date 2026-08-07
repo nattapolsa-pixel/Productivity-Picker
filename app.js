@@ -5293,38 +5293,57 @@ const builders = {
       const file = e.target.files && e.target.files[0];
       if(!file) return;
 
+      const isXlsx = file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls');
       const reader = new FileReader();
+
       reader.onload = function(evt){
         try {
-          const text = evt.target.result;
-          const lines = text.split(/\r?\n/);
-          if(lines.length < 2){ alert('ไฟล์ไม่มีข้อมูล'); return; }
+          let matrix = [];
+          if(isXlsx && typeof XLSX !== 'undefined'){
+            const data = new Uint8Array(evt.target.result);
+            const wb = XLSX.read(data, {type: 'array'});
+            const firstSheet = wb.SheetNames[0];
+            matrix = XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], {header: 1, defval: ''});
+          } else {
+            const text = typeof evt.target.result === 'string' ? evt.target.result : new TextDecoder().decode(evt.target.result);
+            matrix = text.split(/\r?\n/).map(line => line.split(','));
+          }
+
+          if(!matrix || matrix.length < 2){ alert('ไฟล์ไม่มีข้อมูล'); return; }
+
+          const header = matrix[0].map(h => String(h||'').trim().toLowerCase());
+          let zIdx = header.findIndex(h => h === 'z' || h === 'zone' || h.includes('โซน'));
+          let locIdx = header.findIndex(h => h === 'loc' || h === 'location' || h.includes('โลเคชั่น'));
+          let allocIdx = header.findIndex(h => h === 'alloc' || h === 'req' || h === 'oqty' || h === 'qty' || h === 'pcs' || h.includes('จำนวน'));
+          let pkQIdx = header.findIndex(h => h === 'pkq' || h === 'pickqty' || h.includes('หน่วยหยิบ'));
+
+          if(zIdx === -1) zIdx = locIdx !== -1 ? locIdx : 8; // fallback col z (8)
+          if(allocIdx === -1) allocIdx = 12; // fallback col alloc (12)
+          if(pkQIdx === -1) pkQIdx = 16; // fallback col pkQ (16)
 
           const customMap = {};
-          // Basic CSV parser assuming headers
-          const header = lines[0].toLowerCase().split(',');
-          let locIdx = header.findIndex(h=>h.includes('location')||h.includes('zone')||h.includes('โลเคชั่น'));
-          let qtyIdx = header.findIndex(h=>h.includes('qty')||h.includes('pcs')||h.includes('จำนวน')||h.includes('pick_qty'));
+          let totalParsedRows = 0;
 
-          if(locIdx === -1) locIdx = 2; // fallback col 3
-          if(qtyIdx === -1) qtyIdx = 6; // fallback col 7
+          for(let i=1; i<matrix.length; i++){
+            const row = matrix[i];
+            if(!row || !row.length) continue;
+            const rawZone = String(row[zIdx] || row[locIdx] || '').trim();
+            if(!rawZone || rawZone.toLowerCase() === 'z' || rawZone.toLowerCase() === 'loc') continue;
 
-          for(let i=1; i<lines.length; i++){
-            if(!lines[i].trim()) continue;
-            const cols = lines[i].split(',');
-            const rawLoc = (cols[locIdx] || '').trim().toUpperCase();
-            const q = Math.max(1, parseInt(cols[qtyIdx], 10)||1);
+            const allocQty = Math.max(0, parseFloat(row[allocIdx]) || 0);
+            const pkQty = Math.max(0, parseFloat(row[pkQIdx]) || 0);
+            const qVal = isPcs ? (allocQty || pkQty || 1) : (pkQty || allocQty || 1);
 
-            if(rawLoc){
-              const zInfo = getZoneInfo(rawLoc);
-              const zName = zInfo.zone || normalizeLocationCode(rawLoc) || 'OTHER';
-              if(!customMap[zName]){
-                const baseProd = zoneMap[zName] ? zoneMap[zName].prodRate : 100;
-                customMap[zName] = { name: zName, prodRate: baseProd, vol: 0, lines: 0 };
-              }
-              customMap[zName].vol += q;
-              customMap[zName].lines += 1;
+            const zInfo = getZoneInfo(rawZone);
+            const zName = zInfo.zone || rawZone;
+
+            if(!customMap[zName]){
+              const baseProd = zoneMap[zName] ? zoneMap[zName].prodRate : 100;
+              customMap[zName] = { name: zName, prodRate: baseProd, vol: 0, lines: 0 };
             }
+            customMap[zName].vol += qVal;
+            customMap[zName].lines += 1;
+            totalParsedRows++;
           }
 
           if(Object.keys(customMap).length > 0){
@@ -5332,9 +5351,9 @@ const builders = {
             SState.userPickersA = {};
             SState.userPickersB = {};
             const txtEl = document.getElementById('simWorkloadSourceTxt');
-            if(txtEl) txtEl.textContent = `📂 ไฟล์ Order สั่งซื้อ: ${file.name} (${Object.keys(customMap).length} โซน)`;
+            if(txtEl) txtEl.textContent = `📂 ไฟล์ Order: ${file.name} (${fmt(totalParsedRows)} รายการ, ${Object.keys(customMap).length} โซน)`;
             calculateSim();
-            alert(`อัปโหลดไฟล์ Order สำเร็จ! ประมวลผลได้ ${Object.keys(customMap).length} โซน`);
+            alert(`อัปโหลดไฟล์ ${file.name} สำเร็จ!\nประมวลผลทั้งหมด ${fmt(totalParsedRows)} รายการ แตกเป็น ${Object.keys(customMap).length} โซนปฏิบัติการ`);
           } else {
             alert('ไม่พบข้อมูล Zone หรือ Qty ในไฟล์');
           }
@@ -5342,8 +5361,11 @@ const builders = {
           alert('ไม่สามารถอ่านไฟล์ได้: ' + err.message);
         }
       };
-      reader.readAsText(file);
+
+      if(isXlsx) reader.readAsArrayBuffer(file);
+      else reader.readAsText(file);
     };
+
 
     // Initial Trigger
     calculateSim();
