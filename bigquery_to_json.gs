@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v10-roster-shifts';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v11-workforce-planner';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -1920,33 +1920,42 @@ function writeMasterCache_(key, value) {
 }
 
 function loadPickerDirectory_() {
-  const cached = readMasterCache_('picker_directory_v2_shift_ab');
-  if (cached && cached.names && cached.affiliations && cached.shiftTeams) return cached;
+  const cacheKey = 'picker_directory_v3_workforce_planner';
+  const cached = readMasterCache_(cacheKey);
+  if (cached && cached.names && cached.affiliations && cached.shiftTeams &&
+      cached.rosterTeams && cached.responsibilities && cached.rosterZones) return cached;
 
+  const empty = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{} };
   try {
     const ss = SpreadsheetApp.openById(PICKER_NAME_SHEET_ID);
     const sh = ss.getSheetByName(PICKER_NAME_TAB);
-    if (!sh) return { names: {}, affiliations: {}, shiftTeams: {} };
+    if (!sh) return empty;
     const lastRow = sh.getLastRow();
-    if (lastRow < PICKER_NAME_START_ROW) return { names: {}, affiliations: {}, shiftTeams: {} };
-    // B:I = รหัสพนักงาน, ชื่อ, ชื่อเล่น, สังกัด, หน้าที่, Zone, Start Date, Team
-    // ใช้ Team เฉพาะ A/B; C/D/ว่างจะไม่ใส่ map เพื่อให้หน้าเว็บ fallback ตามเวลาจริง
+    if (lastRow < PICKER_NAME_START_ROW) return empty;
+
+    // B:I = รหัสพนักงาน, ชื่อ, ชื่อเล่น, สังกัด, หน้าที่รับผิดชอบ, โซน, Start Date, Team
     const values = sh.getRange(PICKER_NAME_START_ROW, 2, lastRow - PICKER_NAME_START_ROW + 1, 8).getDisplayValues();
-    const directory = { names: {}, affiliations: {}, shiftTeams: {} };
+    const directory = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{} };
     values.forEach(row => {
       const id = String(row[0] || '').trim();
+      if (!id) return;
       const name = String(row[1] || '').trim();
       const affiliation = String(row[3] || '').trim();
+      const responsibility = String(row[4] || '').trim();
+      const rosterZone = String(row[5] || '').trim();
       const team = String(row[7] || '').trim().toUpperCase();
-      if (id && name && !directory.names[id]) directory.names[id] = name;
-      if (id && affiliation && !directory.affiliations[id]) directory.affiliations[id] = affiliation;
-      if (id && (team === 'A' || team === 'B') && !directory.shiftTeams[id]) directory.shiftTeams[id] = team;
+      if (name && !directory.names[id]) directory.names[id] = name;
+      if (affiliation && !directory.affiliations[id]) directory.affiliations[id] = affiliation;
+      if (responsibility && !directory.responsibilities[id]) directory.responsibilities[id] = responsibility;
+      if (rosterZone && !directory.rosterZones[id]) directory.rosterZones[id] = rosterZone;
+      if (team && !directory.rosterTeams[id]) directory.rosterTeams[id] = team;
+      if ((team === 'A' || team === 'B') && !directory.shiftTeams[id]) directory.shiftTeams[id] = team;
     });
-    writeMasterCache_('picker_directory_v2_shift_ab', directory);
+    writeMasterCache_(cacheKey, directory);
     return directory;
   } catch (err) {
     console.warn('loadPickerDirectory_ failed: ' + err);
-    return { names: {}, affiliations: {}, shiftTeams: {} };
+    return empty;
   }
 }
 
@@ -2585,6 +2594,9 @@ function buildDashboardData_(useQueryCache, requestScope) {
   const pickerNames = pickerDirectory.names;
   const pickerAffiliations = pickerDirectory.affiliations;
   const pickerShiftTeams = pickerDirectory.shiftTeams || {};
+  const pickerRosterTeams = pickerDirectory.rosterTeams || {};
+  const pickerResponsibilities = pickerDirectory.responsibilities || {};
+  const pickerRosterZones = pickerDirectory.rosterZones || {};
   const zoneMaster = loadZoneMasterMap_();
   const excludedSql = dashboardExclusionSql_(scope, 'owner_key', 'sku_key');
 
@@ -2665,7 +2677,11 @@ function buildDashboardData_(useQueryCache, requestScope) {
             picker_names: pickerNames,
             picker_affiliations: pickerAffiliations,
             picker_shift_teams: pickerShiftTeams,
+            picker_roster_teams: pickerRosterTeams,
+            picker_responsibilities: pickerResponsibilities,
+            picker_roster_zones: pickerRosterZones,
             picker_shift_source: PICKER_NAME_SHEET_ID + '/' + PICKER_NAME_TAB + '!I:I',
+            picker_role_source: PICKER_NAME_SHEET_ID + '/' + PICKER_NAME_TAB + '!F:F',
             zone_master: zoneMaster,
             zone_master_source: ZONE_MASTER_SHEET_ID + '/' + ZONE_MASTER_TAB,
             excluded_items: scope.excludedItems,
@@ -2887,13 +2903,20 @@ function testRun() {
 
   try {
     const directory = loadPickerDirectory_();
-    const teams = directory.shiftTeams || {};
-    const teamValues = Object.keys(teams).map(function(id) { return String(teams[id] || '').toUpperCase(); });
-    const aCount = teamValues.filter(function(v) { return v === 'A'; }).length;
-    const bCount = teamValues.filter(function(v) { return v === 'B'; }).length;
-    if (aCount < 1 || bCount < 1) throw new Error('ไม่พบพนักงาน Team A/B จาก Column I ของชีตบันทึกเวลาทำงาน');
-    pass('Picker Team A/B', 'กะ A=' + aCount.toLocaleString() + ' คน, กะ B=' + bCount.toLocaleString() + ' คน');
-  } catch (err) { fail('Picker Team A/B', err); throw err; }
+    const responsibilities = directory.responsibilities || {};
+    const rosterTeams = directory.rosterTeams || {};
+    let aCount = 0, bCount = 0, flexCount = 0, totalPickers = 0;
+    Object.keys(responsibilities).forEach(function(id) {
+      if (String(responsibilities[id] || '').trim().toUpperCase() !== 'PICKER') return;
+      totalPickers++;
+      const team = String(rosterTeams[id] || '').trim().toUpperCase();
+      if (team === 'A') aCount++;
+      else if (team === 'B') bCount++;
+      else flexCount++;
+    });
+    if (totalPickers < 1 || aCount < 1 || bCount < 1) throw new Error('ไม่พบ roster ที่หน้าที่รับผิดชอบ = Picker ครบทั้ง Team A/B');
+    pass('Picker roster สำหรับ Planner', 'รวม=' + totalPickers.toLocaleString() + ' คน, กะ A=' + aCount.toLocaleString() + ', กะ B=' + bCount.toLocaleString() + ', Flex=' + flexCount.toLocaleString());
+  } catch (err) { fail('Picker roster สำหรับ Planner', err); throw err; }
 
   try {
     const d = buildDashboardData_(true, { excludedItems: [], key: 'test' });
