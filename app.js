@@ -7,7 +7,7 @@
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 // v7 sends only the compact work cube first, then lazy-loads item/time detail in daily chunks.
 // its pick_qty may have the retired Pack Size semantics or row-level format.
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v8-master-owner-item';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v9-item-locations';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -1794,8 +1794,8 @@ function isValidItemCubePayload(payload, system, from, to, shift, expectedEpoch 
   return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
     String(payload.data_epoch || '') === String(expectedEpoch || '') &&
     payload.system === system && payload.from === from && payload.to === to &&
-    payload.shift === shift && Number(payload.row_width) === 8 &&
-    Array.isArray(payload.rows) && payload.rows.length % 8 === 0;
+    payload.shift === shift && Number(payload.row_width) === 9 &&
+    Array.isArray(payload.rows) && payload.rows.length % 9 === 0;
 }
 function dailyCubeRequestKey(kind, system, date, sf){
   return [kind, dashboardDataEpoch(), system, date, sf,
@@ -1914,7 +1914,7 @@ function forEachCurrentItemRow(system, from, to, sf, callback){
   const payload = itemCubePayloadCache.get(itemCubeRequestKey(system, from, to, sf));
   if(payload){
     const rows = payload.rows;
-    const width = payload.row_width || 8;
+    const width = Number(payload.row_width) || 9;
     if(width === 9) {
       for(let offset=0; offset<rows.length; offset+=9){
         const date = String(rows[offset] || '');
@@ -2073,8 +2073,8 @@ async function fetchDailyItemCube(system, date, shift, signal, force){
   if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
       String(payload.data_epoch || '') !== String(requestEpoch || '') ||
       payload.system !== system || payload.from !== date || payload.to !== date ||
-      payload.shift !== shift || Number(payload.row_width) !== 8 ||
-      !Array.isArray(payload.rows) || payload.rows.length % 8 !== 0){
+      payload.shift !== shift || Number(payload.row_width) !== 9 ||
+      !Array.isArray(payload.rows) || payload.rows.length % 9 !== 0){
     throw dashboardTransientError('ข้อมูลสินค้าเปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
   }
   itemCubeDailyPayloadCache.set(dailyKey, payload);

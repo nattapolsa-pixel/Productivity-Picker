@@ -2660,7 +2660,7 @@ function refreshPickDashboardTable_() {
 
   const createSql =
     'CREATE OR REPLACE TABLE ' + target + ' ' +
-    'PARTITION BY pick_date CLUSTER BY category, owner, picker_id, sku, location, zone AS ' + selectSql;
+    'PARTITION BY pick_date CLUSTER BY category, owner, picker_id, sku AS ' + selectSql;
 
   try {
     bqQueryAll_(createSql, JOB_DEADLINE_MS);
@@ -2670,7 +2670,7 @@ function refreshPickDashboardTable_() {
     if (!specChanged) throw err;
 
     // BigQuery ไม่อนุญาต CREATE OR REPLACE เมื่อเปลี่ยน partition/clustering spec
-    // เช่นรุ่นเก่า cluster(category,picker_id) -> รุ่นใหม่ cluster(category,owner,picker_id,sku)
+    // เช่นรุ่นเก่า cluster(category,picker_id) -> รุ่นใหม่ cluster(category,owner,picker_id,sku); location/zone เก็บเป็นคอลัมน์ปกติ
     // t_pick_dashboard เป็น derived table จึงสร้างสำเนาใหม่ให้สำเร็จก่อน แล้วค่อยสลับตารางจริง
     console.warn('Dashboard clustering changed; running one-time safe rebuild for Owner + Item.');
     const rebuildId = DASHBOARD_TABLE + '_rebuild_' + String(Date.now());
@@ -2825,14 +2825,18 @@ function testRun() {
 
   try {
     const schemaCheck = bqQueryAll_([
-      'SELECT COUNTIF(column_name = \'owner\')',
+      'SELECT',
+      '  COUNTIF(column_name = \'owner\') AS owner_col,',
+      '  COUNTIF(column_name = \'location\') AS location_col,',
+      '  COUNTIF(column_name = \'zone\') AS zone_col',
       'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.INFORMATION_SCHEMA.COLUMNS`',
       'WHERE table_name = ' + sqlStringLiteral_(DASHBOARD_TABLE)
     ].join('\n'), 60000);
-    if (!schemaCheck.length || Number(schemaCheck[0][0] || 0) !== 1) {
-      throw new Error('t_pick_dashboard ยังไม่มีคอลัมน์ owner — ให้รัน refreshDashboardTableNow ก่อน (ระบบจะ migrate clustering รุ่นเก่าให้อัตโนมัติ)');
+    if (!schemaCheck.length || Number(schemaCheck[0][0] || 0) !== 1 ||
+        Number(schemaCheck[0][1] || 0) !== 1 || Number(schemaCheck[0][2] || 0) !== 1) {
+      throw new Error('t_pick_dashboard ต้องมี owner + location + zone — ให้รัน refreshDashboardTableNow ก่อน');
     }
-    pass('Dashboard schema', 'พบ owner สำหรับแมป Owner + Item');
+    pass('Dashboard schema', 'พบ owner + location + zone');
   } catch (err) { fail('Dashboard schema', err); throw err; }
 
   try {
@@ -2857,10 +2861,10 @@ function testRun() {
       system: 'PTT', from: testDate, to: testDate, shift: 'all', excluded_items: '[]'
     }};
     const itemCube = buildItemCubeData_(fakeEvent, getDashboardDataEpoch_());
-    if (itemCube.row_width !== 8 || itemCube.rows.length % 8 !== 0) {
-      throw new Error('Item cube รูปแบบไม่ถูกต้อง');
+    if (itemCube.row_width !== 9 || itemCube.rows.length % 9 !== 0) {
+      throw new Error('Item cube v9 ต้องมี 9 ช่อง: Date, Shift, Location, Zone, Owner, Item, Pcs, Units, Lines');
     }
-    pass('Owner + Item mapping', (itemCube.rows.length / 8).toLocaleString() + ' กลุ่มในวันที่ ' + testDate);
+    pass('Owner + Item + Location/Zone mapping', (itemCube.rows.length / 9).toLocaleString() + ' กลุ่มในวันที่ ' + testDate);
   } catch (err) { fail('Owner + Item mapping', err); throw err; }
 
   const summary = '🎉 TEST RUN PASSED — พร้อม Deploy\n' + results.join('\n');
