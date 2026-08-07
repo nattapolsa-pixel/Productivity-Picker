@@ -7,7 +7,7 @@
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 // v7 sends only the compact work cube first, then lazy-loads item/time detail in daily chunks.
 // its pick_qty may have the retired Pack Size semantics or row-level format.
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v7-resilient-cubes';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v8-master-owner-item';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -49,8 +49,8 @@ Chart.defaults.color = '#64748b';
 // ===== state =====
 const emptyData = () => ({
   meta:{schema_version:DASHBOARD_SCHEMA_VERSION},
-  PTT:{row_width:9,item_row_width:7,slot_row_width:8,dates:[],pickers:[],skus:[],rows:[],item_rows:[],slot_rows:[]},
-  BPS:{row_width:9,item_row_width:7,slot_row_width:8,dates:[],pickers:[],skus:[],rows:[],item_rows:[],slot_rows:[]}
+  PTT:{row_width:9,item_row_width:8,slot_row_width:8,dates:[],pickers:[],skus:[],rows:[],item_rows:[],slot_rows:[]},
+  BPS:{row_width:9,item_row_width:8,slot_row_width:8,dates:[],pickers:[],skus:[],rows:[],item_rows:[],slot_rows:[]}
 });
 let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
@@ -72,7 +72,8 @@ let excludedSkuRevision = 0;
 let dashboardCacheRevision = '';
 let activeZoneDetailCode = '';
 const DASHBOARD_TIMEOUT_MS = 180000;
-const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
+const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_items_v2';
+const LEGACY_EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
 const DASHBOARD_CACHE_DB = 'pick_dashboard_cache_v1';
 const DASHBOARD_CACHE_STORE = 'responses';
 // แยก cache ออกจากข้อมูลรุ่นที่เคยคำนวณ Pack Size ใน browser เพื่อไม่ให้ใช้ยอดเก่า
@@ -84,17 +85,34 @@ const DASHBOARD_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function normalizeSkuKey(sku){
   const value = String(sku ?? '').replace(/\u00a0/g, ' ').trim();
-  // BigQuery/CSV บางชุดส่งรหัส SKU เป็นตัวเลขแบบ 123.0 แต่ในรายการยกเว้นเก็บเป็น 123
   return /^\d+\.0+$/.test(value) ? value.slice(0, value.indexOf('.')) : value;
+}
+
+function normalizeOwnerKey(owner){
+  return String(owner ?? '-').replace(/\u00a0/g, ' ').trim().toUpperCase() || '-';
+}
+
+const ITEM_KEY_SEPARATOR = '\u0001';
+let ITEM_MASTER = Object.create(null);
+let ITEM_MASTER_BY_SKU = Object.create(null);
+
+function itemCompositeKey(owner, sku){
+  return normalizeOwnerKey(owner) + ITEM_KEY_SEPARATOR + normalizeSkuKey(sku);
+}
+
+function parseItemCompositeKey(key){
+  const raw = String(key || '');
+  const pos = raw.indexOf(ITEM_KEY_SEPARATOR);
+  return pos >= 0
+    ? {owner:raw.slice(0, pos) || '-', item:raw.slice(pos + 1)}
+    : {owner:'*', item:normalizeSkuKey(raw)};
 }
 
 function skuKeyVariants(sku){
   const key = normalizeSkuKey(sku);
   if(!key) return [];
   const keys = new Set([key]);
-  // รองรับรหัสเดียวกันที่ฝั่งหนึ่งมีเลข 0 นำหน้า และอีกฝั่งไม่มี
   if(/^\d+$/.test(key)) keys.add(key.replace(/^0+(?=\d)/, ''));
-  // รองรับกรณีที่ตัวเลขจาก BigQuery ถูกส่งมาในรูป scientific notation
   if(/^\d+(?:\.\d+)?e[+-]?\d+$/i.test(key)){
     const numeric = Number(key);
     if(Number.isSafeInteger(numeric)) keys.add(String(numeric));
@@ -102,17 +120,58 @@ function skuKeyVariants(sku){
   return [...keys];
 }
 
-function isSkuExcluded(sku){
+function itemKeyVariants(owner, sku){
+  const ownerKey = normalizeOwnerKey(owner);
+  const keys = [];
+  skuKeyVariants(sku).forEach(item => {
+    keys.push(itemCompositeKey(ownerKey, item));
+    keys.push(itemCompositeKey('*', item)); // รองรับรายการยกเว้นรุ่นเก่าที่ไม่มี Owner
+  });
+  return [...new Set(keys)];
+}
+
+function isSkuExcluded(sku, owner='*'){
   if(excludedSkus.size === 0) return false;
-  return skuKeyVariants(sku).some(key => excludedSkus.has(key));
+  return itemKeyVariants(owner, sku).some(key => excludedSkus.has(key));
+}
+
+function currentExcludedItemList(){
+  return [...excludedSkus].map(parseItemCompositeKey)
+    .filter(x => x.owner && x.item)
+    .map(x => ({owner:normalizeOwnerKey(x.owner), item:normalizeSkuKey(x.item)}))
+    .sort((a,b) => a.owner.localeCompare(b.owner) || a.item.localeCompare(b.item));
 }
 
 function currentExcludedSkuList(){
-  return [...excludedSkus].map(normalizeSkuKey).filter(Boolean).sort();
+  // คงชื่อเดิมสำหรับ cache key ภายใน แต่ค่าจริงเป็น Owner + Item
+  return currentExcludedItemList();
 }
 
 function dashboardScopeQuery(){
-  return 'excluded_skus=' + encodeURIComponent(JSON.stringify(currentExcludedSkuList()));
+  return 'excluded_items=' + encodeURIComponent(JSON.stringify(currentExcludedItemList()));
+}
+
+function getItemInfo(owner, sku) {
+  const ownerKey = normalizeOwnerKey(owner);
+  const item = normalizeSkuKey(sku);
+  if (!item) return { key:'', sku:'', item:'', name:'-', owner:ownerKey, inMaster:false, matchStatus:'NOT_IN_MASTER' };
+  let master = null;
+  for(const variant of skuKeyVariants(item)){
+    master = ITEM_MASTER[itemCompositeKey(ownerKey, variant)];
+    if(master) break;
+  }
+  // กรณีข้อมูลกิจกรรมไม่มี Owner ที่เชื่อถือได้ ให้ใช้ชื่อได้เมื่อ SKU นี้มีใน Master เพียง Owner เดียว
+  if(!master){
+    for(const variant of skuKeyVariants(item)){
+      const candidates = ITEM_MASTER_BY_SKU[variant] || [];
+      if(candidates.length === 1){ master = candidates[0]; break; }
+    }
+  }
+  return master ? {...master} : {
+    key:itemCompositeKey(ownerKey, item), sku:item, item, name:item,
+    owner:ownerKey, pickType:'', itemPack:'', pickPackSize:null, casePackSize:null,
+    uomDivisor:null, matchStatus:'NOT_IN_MASTER', inMaster:false
+  };
 }
 
 function formatThaiDateTime(value){
@@ -124,17 +183,20 @@ function formatThaiDateTime(value){
 
 function loadExcludedSkusFromStorage(){
   try{
-    const raw = localStorage.getItem(EXCLUDED_SKUS_STORAGE_KEY);
-    if(!raw){
-      excludedSkus = new Set();
-      excludedSkusSavedAt = null;
-      return;
+    let raw = localStorage.getItem(EXCLUDED_SKUS_STORAGE_KEY);
+    let parsed = raw ? JSON.parse(raw) : null;
+    let keys = [];
+    if(parsed && Array.isArray(parsed.items)){
+      keys = parsed.items.map(x => itemCompositeKey(x.owner, x.item == null ? x.sku : x.item));
+    }else if(Array.isArray(parsed)){
+      keys = parsed.map(x => itemCompositeKey('*', x));
+    }else{
+      const legacyRaw = localStorage.getItem(LEGACY_EXCLUDED_SKUS_STORAGE_KEY);
+      const legacy = legacyRaw ? JSON.parse(legacyRaw) : null;
+      const list = Array.isArray(legacy) ? legacy : (legacy && Array.isArray(legacy.skus) ? legacy.skus : []);
+      keys = list.map(x => itemCompositeKey('*', x));
     }
-    const parsed = JSON.parse(raw);
-    const list = Array.isArray(parsed)
-      ? parsed
-      : (parsed && Array.isArray(parsed.skus) ? parsed.skus : []);
-    excludedSkus = new Set(list.map(normalizeSkuKey).filter(Boolean));
+    excludedSkus = new Set(keys.filter(Boolean));
     excludedSkusSavedAt = parsed && parsed.updatedAt ? parsed.updatedAt : null;
   }catch(_){
     excludedSkus = new Set();
@@ -145,9 +207,9 @@ function loadExcludedSkusFromStorage(){
 function saveExcludedSkusToStorage(){
   try{
     const payload = {
-      version: 1,
+      version: 2,
       updatedAt: new Date().toISOString(),
-      skus: [...excludedSkus].map(normalizeSkuKey).filter(Boolean).sort()
+      items: currentExcludedItemList()
     };
     localStorage.setItem(EXCLUDED_SKUS_STORAGE_KEY, JSON.stringify(payload));
     excludedSkusSavedAt = payload.updatedAt;
@@ -399,13 +461,13 @@ function packedItemRowCount(S){
   return S && Array.isArray(S.item_rows) && width ? Math.floor(S.item_rows.length / width) : 0;
 }
 function packedItemRowData(S, i){
-  if(Number(S && S.item_row_width) !== 7) throw new Error('Dashboard item cube ไม่ตรงกับหน้าเว็บ');
-  const o = i * 7;
+  if(Number(S && S.item_row_width) !== 8) throw new Error('Dashboard item cube ไม่ตรงกับหน้าเว็บ');
+  const o = i * 8;
   return {
     dateIdx:S.item_rows[o], shiftCode:Number(S.item_rows[o+1])||0,
-    zone:S.item_rows[o+2], skuIdx:S.item_rows[o+3],
-    pcs:Number(S.item_rows[o+4])||0, pickQty:readBigQueryPickQty(S.item_rows[o+5]),
-    lines:Number(S.item_rows[o+6])||0
+    zone:S.item_rows[o+2], owner:S.item_rows[o+3], skuIdx:S.item_rows[o+4],
+    pcs:Number(S.item_rows[o+5])||0, pickQty:readBigQueryPickQty(S.item_rows[o+6]),
+    lines:Number(S.item_rows[o+7])||0
   };
 }
 function packedSlotRowCount(S){
@@ -488,22 +550,7 @@ function getPickerAffiliation(code){
   return 'ไม่พบสังกัด';
 }
 
-function getItemInfo(sku) {
-  if (!sku) return { sku: '', name: '-', owner: '-' };
-  const s = String(sku).trim();
-  let m = (typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) ? ITEM_MASTER[s] : null;
 
-  if (!m && typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) {
-    const sNoZero = s.replace(/^0+/, '');
-    m = ITEM_MASTER[sNoZero];
-  }
-
-  return {
-    sku: s,
-    name: m ? (m.name || s) : s,
-    owner: m ? (m.owner || '-') : '-'
-  };
-}
 
 function normalizeLocationCode(value){
   const text = String(value || '').trim().toUpperCase();
@@ -781,15 +828,17 @@ function openZoneDetailModal(zoneCode) {
       const rawLocStr = String(row.zone || '-').trim().toUpperCase();
       if(zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode) return;
       const sku = row.sku;
-      if(isSkuExcluded(sku)) return;
-      const itemInfo = getItemInfo(sku);
-      const skuRec = uniqueSkus.get(sku) || {
-        sku, name:itemInfo.name || sku, owner:itemInfo.owner || zInfo.owner || '-', qty:0, pcs:0, lines:0
+      const owner = normalizeOwnerKey(row.owner);
+      if(isSkuExcluded(sku, owner)) return;
+      const itemInfo = getItemInfo(owner, sku);
+      const itemKey = itemCompositeKey(owner, sku);
+      const skuRec = uniqueSkus.get(itemKey) || {
+        key:itemKey, sku, name:itemInfo.name || sku, owner:itemInfo.owner || owner || zInfo.owner || '-', qty:0, pcs:0, lines:0
       };
       skuRec.qty += row.pickQty;
       skuRec.pcs += row.pcs;
       skuRec.lines += row.lines;
-      uniqueSkus.set(sku, skuRec);
+      uniqueSkus.set(itemKey, skuRec);
     });
     if(!itemRowsReady) void loadCurrentItemCube(false);
 
@@ -1166,16 +1215,21 @@ function aggregate(system, from, to, sf){
     dRec.zones[zone].pcs += pVal; dRec.zones[zone].qty += qVal; dRec.zones[zone].lines += lineVal;
   }
 
-  // Item cube โหลดเฉพาะหน้า Items/รายละเอียด Zone; payload รุ่นเดิมยังใช้เป็น fallback สำหรับ cache/test
+  // Master_Item เป็นฐานสินค้า: เริ่มทุก Owner+Item ที่มีใน Master ด้วยยอด 0
+  Object.values(ITEM_MASTER).forEach(info => {
+    itemMapAll[info.key] = {...info, pcs:0, qty:0, lines:0, hasActivity:false};
+  });
+  // Pick Detail เป็นกิจกรรม นำมาแมปด้วย Owner + Item; รายการที่ไม่มีใน Master ยังแสดงเพื่อตรวจสอบได้
   forEachCurrentItemRow(system, from, to, sf, r => {
     const zone = getZoneInfo(r.zone).zone;
     if(isZoneExcluded(zone)) return;
-    const sku = r.sku;
-    const all = itemMapAll[sku] || (itemMapAll[sku] = {pcs:0,qty:0,lines:0});
-    all.pcs += r.pcs; all.qty += r.pickQty; all.lines += r.lines;
-    if(!isSkuExcluded(sku)) {
-      const item = itemMap[sku] || (itemMap[sku] = {pcs:0,qty:0,lines:0});
-      item.pcs += r.pcs; item.qty += r.pickQty; item.lines += r.lines;
+    const info = getItemInfo(r.owner, r.sku);
+    const key = itemCompositeKey(r.owner, r.sku);
+    const all = itemMapAll[key] || (itemMapAll[key] = {...info, key, owner:normalizeOwnerKey(r.owner), sku:normalizeSkuKey(r.sku), pcs:0,qty:0,lines:0,hasActivity:false});
+    all.pcs += r.pcs; all.qty += r.pickQty; all.lines += r.lines; all.hasActivity = all.hasActivity || r.lines > 0;
+    if(!isSkuExcluded(r.sku, r.owner)) {
+      const item = itemMap[key] || (itemMap[key] = {...all, pcs:0,qty:0,lines:0,hasActivity:false});
+      item.pcs += r.pcs; item.qty += r.pickQty; item.lines += r.lines; item.hasActivity = item.hasActivity || r.lines > 0;
     }
   });
 
@@ -1263,23 +1317,6 @@ function aggregate(system, from, to, sf){
       zone, location
     };
   }).sort((a,b)=>b.qty-a.qty);
-
-  function getItemInfo(sku) {
-    if (!sku) return { sku: '', name: '-', owner: '-' };
-    const s = String(sku).trim();
-    let m = (typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) ? ITEM_MASTER[s] : null;
-
-    if (!m && typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) {
-      const sNoZero = s.replace(/^0+/, '');
-      m = ITEM_MASTER[sNoZero];
-    }
-
-    return {
-      sku: s,
-      name: m ? (m.name || s) : s,
-      owner: m ? (m.owner || '-') : '-'
-    };
-  }
 
   const by_zone = Object.entries(zoneMap).map(([zone,v])=>({
     zone, typePick:v.typePick, owner:v.owner, known:v.known,
@@ -1381,14 +1418,15 @@ function aggregate(system, from, to, sf){
     avg_prod:r1(v.hours ? v.eligibleQty / v.hours : 0),
     avg_pcs_prod:r1(v.hours ? v.eligiblePcs / v.hours : 0)
   })).sort((a,b)=>b.date.localeCompare(a.date) || (b.qty-a.qty) || a.name.localeCompare(b.name));
-  const by_item = Object.entries(itemMap).map(([sku,v])=>{
-    const info = getItemInfo(sku);
-    return { sku, name: info.name, owner: info.owner, pcs: v.pcs, qty: v.qty, lines: v.lines };
-  }).sort((a,b)=>b.qty-a.qty);
-  const by_item_all = Object.entries(itemMapAll).map(([sku,v])=>{
-    const info = getItemInfo(sku);
-    return { sku, name: info.name, owner: info.owner, pcs: v.pcs, qty: v.qty, lines: v.lines, excluded: isSkuExcluded(sku) };
-  }).sort((a,b)=>b.qty-a.qty);
+  const by_item = Object.values(itemMap)
+    .filter(v => v.hasActivity || v.pcs !== 0 || v.qty !== 0 || v.lines !== 0)
+    .map(v => ({...v, excluded:false}))
+    .sort((a,b)=>b.qty-a.qty || b.pcs-a.pcs || a.owner.localeCompare(b.owner) || a.sku.localeCompare(b.sku));
+  const by_item_all = Object.values(itemMapAll).map(v => ({
+    ...v,
+    excluded:isSkuExcluded(v.sku, v.owner),
+    status:!v.inMaster ? 'NOT_IN_MASTER' : (v.hasActivity ? 'ACTIVE' : 'NO_ACTIVITY')
+  })).sort((a,b)=>b.qty-a.qty || b.pcs-a.pcs || Number(b.hasActivity)-Number(a.hasActivity) || a.owner.localeCompare(b.owner) || a.sku.localeCompare(b.sku));
 
   const by_timeslot = Object.keys(slotMap).map(Number).sort((a,b)=>a-b).map(h=>({label:String(h).padStart(2,'0')+':00', pcs:slotMap[h].pcs, qty:slotMap[h].qty, lines:slotMap[h].lines}));
 
@@ -1700,6 +1738,8 @@ let selectedPickerId = '';
 let selectedPickerDate = 'all';
 const pickerItemPayloadCache = new Map();
 const pickerItemLoadState = new Map();
+const itemMasterPayloadCache = new Map();
+const itemMasterLoadState = new Map();
 const itemCubePayloadCache = new Map();
 const itemCubeLoadState = new Map();
 const itemCubeDailyPayloadCache = new Map();
@@ -1721,22 +1761,21 @@ function canonicalCubeScope(system = sys, from = dfrom, to = dto){
     shift: 'all'
   };
 }
-
 function itemCubeRequestKey(system = sys, from = dfrom, to = dto){
   const scope = canonicalCubeScope(system, from, to);
-  return [dashboardDataEpoch(), scope.system, scope.from, scope.to, scope.shift].join('|');
+  return [dashboardDataEpoch(), scope.system, scope.from, scope.to, scope.shift,
+    JSON.stringify(currentExcludedItemList())].join('|');
 }
-
 function isValidItemCubePayload(payload, system, from, to, shift, expectedEpoch = dashboardDataEpoch()){
   return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
     String(payload.data_epoch || '') === String(expectedEpoch || '') &&
     payload.system === system && payload.from === from && payload.to === to &&
-    payload.shift === shift && Number(payload.row_width) === 7 &&
-    Array.isArray(payload.rows) && payload.rows.length % 7 === 0;
+    payload.shift === shift && Number(payload.row_width) === 8 &&
+    Array.isArray(payload.rows) && payload.rows.length % 8 === 0;
 }
-
 function dailyCubeRequestKey(kind, system, date, sf){
-  return [kind, dashboardDataEpoch(), system, date, sf, kind === 'slot' ? JSON.stringify(currentExcludedSkuList()) : ''].join('|');
+  return [kind, dashboardDataEpoch(), system, date, sf,
+    (kind === 'slot' || kind === 'item') ? JSON.stringify(currentExcludedItemList()) : ''].join('|');
 }
 
 function cubeRequestDates(system, from, to){
@@ -1760,34 +1799,112 @@ async function runWithConcurrency(tasks, limit = 3){
   return results;
 }
 
+function itemMasterRequestKey(){
+  return dashboardDataEpoch();
+}
+
+function isValidItemMasterPayload(payload, expectedEpoch = dashboardDataEpoch()){
+  return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
+    String(payload.data_epoch || '') === String(expectedEpoch || '') &&
+    Number(payload.row_width) === 9 && Array.isArray(payload.rows) && payload.rows.length % 9 === 0;
+}
+
+function applyItemMasterPayload(payload){
+  if(!isValidItemMasterPayload(payload)) throw new Error('รูปแบบ Master_Item ไม่ตรงกับหน้าเว็บ');
+  const exact = Object.create(null);
+  const bySku = Object.create(null);
+  for(let o=0; o<payload.rows.length; o+=9){
+    const owner = normalizeOwnerKey(payload.rows[o]);
+    const item = normalizeSkuKey(payload.rows[o+1]);
+    if(!item) continue;
+    const record = {
+      key:itemCompositeKey(owner, item), owner, sku:item, item,
+      name:String(payload.rows[o+2] || item), pickType:String(payload.rows[o+3] || ''),
+      itemPack:String(payload.rows[o+4] || ''),
+      pickPackSize:payload.rows[o+5] == null ? null : Number(payload.rows[o+5]),
+      casePackSize:payload.rows[o+6] == null ? null : Number(payload.rows[o+6]),
+      uomDivisor:payload.rows[o+7] == null ? null : Number(payload.rows[o+7]),
+      matchStatus:String(payload.rows[o+8] || ''), inMaster:true
+    };
+    exact[record.key] = record;
+    (bySku[item] = bySku[item] || []).push(record);
+  }
+  ITEM_MASTER = exact;
+  ITEM_MASTER_BY_SKU = bySku;
+  return Object.keys(exact).length;
+}
+
+async function loadItemMaster(force){
+  if(!DATA_URL || !dashboardCacheRevision) return null;
+  const requestKey = itemMasterRequestKey();
+  const state = itemMasterLoadState.get(requestKey);
+  if(state && state.status === 'loading') return state.promise;
+  if(!force && itemMasterPayloadCache.has(requestKey)){
+    const payload = itemMasterPayloadCache.get(requestKey);
+    applyItemMasterPayload(payload);
+    return payload;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  const task = (async () => {
+    try{
+      if(!force){
+        const cached = await readDashboardCubeCache('itemmaster', requestKey);
+        if(isValidItemMasterPayload(cached)){
+          itemMasterPayloadCache.set(requestKey, cached);
+          applyItemMasterPayload(cached);
+          itemMasterLoadState.set(requestKey, {status:'done'});
+          return cached;
+        }
+      }
+      const query = ['mode=item_master', dashboardResponseEncodingQuery(), 't=' + Date.now()].join('&');
+      const payload = await fetchDashboardCubeJson(
+        DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
+        {cache:'no-store', signal:controller.signal}
+      );
+      if(!isValidItemMasterPayload(payload)) throw dashboardTransientError('Master_Item เปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
+      itemMasterPayloadCache.set(requestKey, payload);
+      applyItemMasterPayload(payload);
+      await writeDashboardCubeCache('itemmaster', requestKey, payload);
+      itemMasterLoadState.set(requestKey, {status:'done'});
+      aggregateCache.clear();
+      delete built['items'];
+      if(!dashboardBundleLoading && (currentPage === 'items' || currentPage === 'pickers')) render();
+      return payload;
+    }catch(err){
+      const message = err && err.name === 'AbortError' ? 'โหลด Master_Item ใช้เวลานานเกิน 1 นาที' : String(err && err.message || err);
+      itemMasterLoadState.set(requestKey, {status:'error', message, code:String(err && err.code || '')});
+      return null;
+    }finally{ clearTimeout(timeout); }
+  })();
+  itemMasterLoadState.set(requestKey, {status:'loading', promise:task});
+  return task;
+}
+
 function hasCurrentItemCube(system = sys, from = dfrom, to = dto, sf = shiftF){
   if(itemCubePayloadCache.has(itemCubeRequestKey(system, from, to, sf))) return true;
   const source = DATA && DATA[system];
   return packedItemRowCount(source) > 0;
 }
-
 function forEachCurrentItemRow(system, from, to, sf, callback){
   const payload = itemCubePayloadCache.get(itemCubeRequestKey(system, from, to, sf));
   if(payload){
     const rows = payload.rows;
-    for(let offset=0; offset<rows.length; offset+=7){
+    for(let offset=0; offset<rows.length; offset+=8){
       const date = String(rows[offset] || '');
       const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
       if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
       callback({
-        date,
-        shift,
-        zone:rows[offset + 2],
-        sku:normalizeSkuKey(rows[offset + 3]) || '(none)',
-        pcs:Number(rows[offset + 4]) || 0,
-        pickQty:readBigQueryPickQty(rows[offset + 5]),
-        lines:Number(rows[offset + 6]) || 0
+        date, shift, zone:rows[offset + 2], owner:normalizeOwnerKey(rows[offset + 3]),
+        sku:normalizeSkuKey(rows[offset + 4]) || '(none)',
+        pcs:Number(rows[offset + 5]) || 0,
+        pickQty:readBigQueryPickQty(rows[offset + 6]),
+        lines:Number(rows[offset + 7]) || 0
       });
     }
     return true;
   }
 
-  // รองรับ payload รุ่นก่อนหน้าและข้อมูลจำลองในชุดทดสอบ
   const source = DATA && DATA[system];
   const count = packedItemRowCount(source);
   for(let i=0; i<count; i++){
@@ -1796,7 +1913,8 @@ function forEachCurrentItemRow(system, from, to, sf, callback){
     const shift = row.shiftCode === 1 ? 'night' : 'morning';
     if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
     callback({
-      date, shift, zone:row.zone, sku:normalizeSkuKey(source.skus[row.skuIdx]) || '(none)',
+      date, shift, zone:row.zone, owner:normalizeOwnerKey(row.owner),
+      sku:normalizeSkuKey(source.skus[row.skuIdx]) || '(none)',
       pcs:row.pcs, pickQty:row.pickQty, lines:row.lines
     });
   }
@@ -1896,6 +2014,7 @@ async function fetchDailyItemCube(system, date, shift, signal, force){
     'to=' + encodeURIComponent(date),
     'shift=' + encodeURIComponent(shift),
     dashboardResponseEncodingQuery(),
+    dashboardScopeQuery(),
     't=' + Date.now()
   ].join('&');
   const payload = await fetchDashboardCubeJson(
@@ -1905,8 +2024,8 @@ async function fetchDailyItemCube(system, date, shift, signal, force){
   if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
       String(payload.data_epoch || '') !== String(requestEpoch || '') ||
       payload.system !== system || payload.from !== date || payload.to !== date ||
-      payload.shift !== shift || Number(payload.row_width) !== 7 ||
-      !Array.isArray(payload.rows) || payload.rows.length % 7 !== 0){
+      payload.shift !== shift || Number(payload.row_width) !== 8 ||
+      !Array.isArray(payload.rows) || payload.rows.length % 8 !== 0){
     throw dashboardTransientError('ข้อมูลสินค้าเปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
   }
   itemCubeDailyPayloadCache.set(dailyKey, payload);
@@ -1931,6 +2050,7 @@ async function loadCurrentItemCube(force, system = sys){
   const timeout = setTimeout(() => controller.abort(), 60000);
   const task = (async () => {
     try{
+      await loadItemMaster(false);
       if(!force){
         const cached = await readDashboardCubeCache('item', requestKey);
         if(isValidItemCubePayload(cached, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)){
@@ -1946,6 +2066,7 @@ async function loadCurrentItemCube(force, system = sys){
         'to=' + encodeURIComponent(requestTo),
         'shift=' + encodeURIComponent(requestShift),
         dashboardResponseEncodingQuery(),
+        dashboardScopeQuery(),
         't=' + Date.now()
       ].join('&');
       const payload = await fetchDashboardCubeJson(
@@ -2152,7 +2273,6 @@ function pickerItemsRequestKey(pickerId){
     dfrom, dto, shiftF, JSON.stringify(currentExcludedSkuList())
   ].join('|');
 }
-
 function applyPickerItemsPayload(pickerId, requestKey, payload){
   if(!A || !A.picker_drilldown) return false;
   const pData = A.picker_drilldown[pickerId];
@@ -2160,7 +2280,7 @@ function applyPickerItemsPayload(pickerId, requestKey, payload){
   Object.values(pData.byDate || {}).forEach(record => { record.skus = {}; });
   const rows = Array.isArray(payload && payload.rows) ? payload.rows : [];
   const width = Number(payload && payload.row_width) || 0;
-  if(width !== 7 || rows.length % width !== 0) throw new Error('รูปแบบรายการ SKU รายพนักงานไม่ถูกต้อง');
+  if(width !== 8 || rows.length % width !== 0) throw new Error('รูปแบบรายการ SKU รายพนักงานไม่ถูกต้อง');
   for(let offset=0; offset<rows.length; offset+=width){
     const date = String(rows[offset] || '');
     const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
@@ -2169,12 +2289,14 @@ function applyPickerItemsPayload(pickerId, requestKey, payload){
     if(!dRec) continue;
     const zone = getZoneInfo(rows[offset + 2]).zone;
     if(isZoneExcluded(zone)) continue;
-    const sku = normalizeSkuKey(rows[offset + 3]) || '(none)';
-    if(isSkuExcluded(sku)) continue;
-    const rec = dRec.skus[sku] || (dRec.skus[sku] = {pcs:0, qty:0, lines:0});
-    rec.pcs += Number(rows[offset + 4]) || 0;
-    rec.qty += Number(rows[offset + 5]) || 0;
-    rec.lines += Number(rows[offset + 6]) || 0;
+    const owner = normalizeOwnerKey(rows[offset + 3]);
+    const sku = normalizeSkuKey(rows[offset + 4]) || '(none)';
+    if(isSkuExcluded(sku, owner)) continue;
+    const key = itemCompositeKey(owner, sku);
+    const rec = dRec.skus[key] || (dRec.skus[key] = {owner, sku, pcs:0, qty:0, lines:0});
+    rec.pcs += Number(rows[offset + 5]) || 0;
+    rec.qty += Number(rows[offset + 6]) || 0;
+    rec.lines += Number(rows[offset + 7]) || 0;
   }
   pData._skuLoadKey = requestKey;
   return true;
@@ -2218,7 +2340,7 @@ async function loadPickerItemsForDrilldown(pickerId, force){
       const payload = await response.json();
       if(payload && payload.error) throw new Error(payload.error);
       if(!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
-          String(payload.picker || '') !== picker || String(payload.system || '') !== sys){
+          String(payload.picker || '') !== picker || String(payload.system || '') !== sys || Number(payload.row_width) !== 8){
         throw new Error('Apps Script ตอบรายการ SKU คนละชุดกับหน้าที่เลือก');
       }
       pickerItemPayloadCache.set(requestKey, payload);
@@ -2937,8 +3059,8 @@ function renderPickerDrilldown(){
     });
 
     // skus
-    Object.entries(dRec.skus || {}).forEach(([sku, v]) => {
-      const kRec = activeSkusMap[sku] || (activeSkusMap[sku] = { pcs: 0, qty: 0, lines: 0 });
+    Object.entries(dRec.skus || {}).forEach(([key, v]) => {
+      const kRec = activeSkusMap[key] || (activeSkusMap[key] = { owner:v.owner, sku:v.sku, pcs:0, qty:0, lines:0 });
       kRec.pcs += v.pcs; kRec.qty += v.qty; kRec.lines += v.lines;
     });
   });
@@ -3098,13 +3220,13 @@ function renderPickerDrilldown(){
       html += `<tr><td colspan="7" class="empty-cell">⏳ กำลังเตรียมโหลดรายการ SKU รายพนักงาน…</td></tr>`;
     }
   }
-  activeSkusList.forEach((sku, idx) => {
-    const kv = activeSkusMap[sku];
-    const info = getItemInfo(sku);
+  activeSkusList.forEach((itemKey, idx) => {
+    const kv = activeSkusMap[itemKey];
+    const info = getItemInfo(kv.owner, kv.sku);
     html += `
           <tr style="border-bottom:1px solid #f1f5f9;">
             <td style="padding:7px 10px;"><span class="rank" style="font-size:11px; width:20px; height:20px;">${idx + 1}</span></td>
-            <td style="padding:7px 10px; font-weight:700; color:#0f172a;">${escapeZoneHtml(sku)}</td>
+            <td style="padding:7px 10px; font-weight:700; color:#0f172a;">${escapeZoneHtml(kv.sku)}</td>
             <td style="padding:7px 10px; color:#334155;"><div style="font-weight:600;">${escapeZoneHtml(info.name)}</div></td>
             <td style="padding:7px 10px;"><span class="pill" style="font-size:11px;">${escapeZoneHtml(info.owner)}</span></td>
             <td style="padding:7px 10px;" class="num" style="font-weight:700; color:#0284c7;">${fmt(kv.pcs)}</td>
@@ -3928,16 +4050,20 @@ const builders = {
         }
       } else {
         displayItems.forEach((x, i) => {
-          const isEx = isSkuExcluded(x.sku);
+          const isEx = isSkuExcluded(x.sku, x.owner);
           const rowBg = isEx ? 'style="background:#fff7ed;"' : '';
           const nameStyle = isEx ? 'style="text-decoration:line-through;color:#94a3b8;"' : '';
-          const statusBadge = isEx 
+          const statusBadge = isEx
             ? '<span style="background:#fee2e2;color:#991b1b;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">🚫 ยกเว้นอยู่</span>'
-            : '<span style="background:#dcfce7;color:#166534;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">✅ UOM จาก BigQuery</span>';
+            : (!x.inMaster
+              ? '<span style="background:#fee2e2;color:#991b1b;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">⚠️ ไม่พบใน Master</span>'
+              : (!x.hasActivity
+                ? '<span style="background:#f1f5f9;color:#475569;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">○ ยังไม่มีการหยิบ</span>'
+                : '<span style="background:#dcfce7;color:#166534;padding:3px 9px;border-radius:6px;font-size:11.5px;font-weight:600;">✅ แมป Master แล้ว</span>'));
 
           const btnAction = isEx
-            ? `<button onclick="toggleExcludeSku('${x.sku}')" style="border:0;background:#dcfce7;color:#15803d;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">✅ นำกลับมาคำนวณ</button>`
-            : `<button onclick="toggleExcludeSku('${x.sku}')" style="border:0;background:#fee2e2;color:#b91c1c;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">🚫 ยกเว้นคำนวณ</button>`;
+            ? `<button onclick="toggleExcludeSku(decodeURIComponent('${encodeURIComponent(x.owner)}'),decodeURIComponent('${encodeURIComponent(x.sku)}'))" style="border:0;background:#dcfce7;color:#15803d;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">✅ นำกลับมาคำนวณ</button>`
+            : `<button onclick="toggleExcludeSku(decodeURIComponent('${encodeURIComponent(x.owner)}'),decodeURIComponent('${encodeURIComponent(x.sku)}'))" style="border:0;background:#fee2e2;color:#b91c1c;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">🚫 ยกเว้นคำนวณ</button>`;
 
           const pcsCellStyle = isPcs ? 'font-weight:700;color:#0284c7;background:#f0f9ff;' : 'font-weight:600;color:#0f766e;';
           const qtyCellStyle = !isPcs ? 'font-weight:700;color:#4338ca;background:#eef2ff;' : 'font-weight:600;color:#4338ca;';
@@ -4037,17 +4163,21 @@ function exportPDF() {
   window.print();
 }
 
-window.toggleExcludeSku = function(sku) {
-  const key = normalizeSkuKey(sku);
-  const variants = skuKeyVariants(key);
-  if (variants.some(k => excludedSkus.has(k))) {
-    variants.forEach(k => excludedSkus.delete(k));
-  } else if (key) {
-    excludedSkus.add(key);
-  }
+window.toggleExcludeSku = function(owner, sku) {
+  const ownerKey = normalizeOwnerKey(owner);
+  const item = normalizeSkuKey(sku);
+  const key = itemCompositeKey(ownerKey, item);
+  const wildcardKeys = skuKeyVariants(item).map(v => itemCompositeKey('*', v));
+  if (excludedSkus.has(key)) excludedSkus.delete(key);
+  else if(wildcardKeys.some(k => excludedSkus.has(k))) wildcardKeys.forEach(k => excludedSkus.delete(k));
+  else if(item) excludedSkus.add(key);
   saveExcludedSkusToStorage();
   invalidateAggregationCache();
   dashboardCacheRevision = '';
+  itemCubePayloadCache.clear();
+  itemCubeLoadState.clear();
+  slotCubePayloadCache.clear();
+  slotCubeLoadState.clear();
   void loadData(false);
 };
 
@@ -4056,45 +4186,31 @@ window.clearExcludedSkus = function() {
   saveExcludedSkusToStorage();
   invalidateAggregationCache();
   dashboardCacheRevision = '';
+  itemCubePayloadCache.clear(); itemCubeLoadState.clear();
+  slotCubePayloadCache.clear(); slotCubeLoadState.clear();
   void loadData(false);
 };
-
 function renderExcludedBadges() {
   const bar = document.getElementById('excludedBar');
   const badgeContainer = document.getElementById('excludedBadges');
   const countBadge = document.getElementById('excludedCountBadge');
   const savedAtBadge = document.getElementById('excludedSavedAt');
   const btnClear = document.getElementById('btnClearExcluded');
-
-  if (btnClear && !btnClear._bound) {
-    btnClear._bound = true;
-    btnClear.addEventListener('click', clearExcludedSkus);
-  }
-
+  if (btnClear && !btnClear._bound) { btnClear._bound = true; btnClear.addEventListener('click', clearExcludedSkus); }
   if (!bar || !badgeContainer || !countBadge) return;
-
-  if (excludedSkus.size === 0) {
-    bar.style.display = 'none';
-    if (savedAtBadge) savedAtBadge.textContent = '';
-    return;
-  }
-
+  if (excludedSkus.size === 0) { bar.style.display = 'none'; if (savedAtBadge) savedAtBadge.textContent = ''; return; }
   bar.style.display = 'block';
   countBadge.textContent = excludedSkus.size.toLocaleString();
-  if (savedAtBadge) {
-    savedAtBadge.textContent = excludedSkusSavedAt
-      ? `บันทึกล่าสุด: ${formatThaiDateTime(excludedSkusSavedAt)}`
-      : 'รายการนี้จะถูกจำไว้ในเครื่องนี้อัตโนมัติ';
-  }
-
+  if (savedAtBadge) savedAtBadge.textContent = excludedSkusSavedAt ? `บันทึกล่าสุด: ${formatThaiDateTime(excludedSkusSavedAt)}` : 'รายการนี้จะถูกจำไว้ในเครื่องนี้อัตโนมัติ';
   let h = '';
-  excludedSkus.forEach(sku => {
-    const info = (typeof ITEM_MASTER !== 'undefined' && ITEM_MASTER) ? ITEM_MASTER[sku] : null;
-    const name = info ? (info.name || sku) : sku;
+  excludedSkus.forEach(key => {
+    const parsed = parseItemCompositeKey(key);
+    const info = getItemInfo(parsed.owner, parsed.item);
+    const name = info.name || parsed.item;
     const displayLabel = name.length > 28 ? name.slice(0, 26) + '…' : name;
     h += `<div style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #fdba74;color:#c2410c;padding:5px 12px;border-radius:20px;font-size:12.5px;font-weight:500;box-shadow:0 2px 6px rgba(249,115,22,0.12);">
-      <span><b>${sku}</b> · ${displayLabel}</span>
-      <button onclick="toggleExcludeSku('${sku}')" style="border:0;background:#ffedd5;color:#c2410c;width:18px;height:18px;border-radius:50%;cursor:pointer;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;line-height:1;" title="นำกลับมาคำนวณ">✕</button>
+      <span><b>${escapeZoneHtml(parsed.owner)} / ${escapeZoneHtml(parsed.item)}</b> · ${escapeZoneHtml(displayLabel)}</span>
+      <button onclick="toggleExcludeSku(decodeURIComponent('${encodeURIComponent(parsed.owner)}'),decodeURIComponent('${encodeURIComponent(parsed.item)}'))" style="border:0;background:#ffedd5;color:#c2410c;width:18px;height:18px;border-radius:50%;cursor:pointer;font-weight:700;font-size:11px;display:flex;align-items:center;justify-content:center;line-height:1;" title="นำกลับมาคำนวณ">✕</button>
     </div>`;
   });
   badgeContainer.innerHTML = h;
@@ -4110,10 +4226,10 @@ function show(page){
   document.getElementById('ptitle').textContent = TITLES[page];
   if(!built[page]){ builders[page](); built[page] = true; }
 }
-
 function preloadAllCubes(){
   if(!hasLiveData || !dfrom || !dto) return;
-  if(!hasCurrentSlotCube()) setTimeout(() => void loadCurrentSlotCube(false), 50);
+  setTimeout(() => void loadItemMaster(false), 20);
+  if(!hasCurrentSlotCube()) setTimeout(() => void loadCurrentSlotCube(false), 60);
   if(!hasCurrentItemCube()) setTimeout(() => void loadCurrentItemCube(false), 100);
 }
 
@@ -4141,6 +4257,7 @@ function clearDashboardState(){
   DATA = emptyData();
   dashboardCacheRevision = '';
   aggregateCache.clear();
+  ITEM_MASTER = Object.create(null); ITEM_MASTER_BY_SKU = Object.create(null);
   prepareZoneMaster();
   ALL_DATES = []; DMIN = ''; DMAX = ''; dfrom = ''; dto = '';
   datePresetMode = 'all';
@@ -4390,17 +4507,18 @@ async function clearDashboardResponseCache(){
 
 function dashboardPayloadRowCount(payload){
   const validSource = source =>
-    source && Number(source.row_width) === 9 && Number(source.item_row_width) === 7 && Number(source.slot_row_width) === 8 &&
+    source && Number(source.row_width) === 9 && Number(source.item_row_width) === 8 && Number(source.slot_row_width) === 8 &&
     Array.isArray(source.dates) && Array.isArray(source.pickers) && Array.isArray(source.skus) &&
     Array.isArray(source.rows) && source.rows.length % 9 === 0 &&
-    Array.isArray(source.item_rows) && source.item_rows.length % 7 === 0 &&
+    Array.isArray(source.item_rows) && source.item_rows.length % 8 === 0 &&
     Array.isArray(source.slot_rows) && source.slot_rows.length % 8 === 0;
   const validSchema = payload && payload.meta &&
     payload.meta.schema_version === DASHBOARD_SCHEMA_VERSION;
-  const payloadExclusions = payload && payload.meta && Array.isArray(payload.meta.excluded_skus)
-    ? payload.meta.excluded_skus.map(normalizeSkuKey).filter(Boolean).sort()
+  const payloadExclusions = payload && payload.meta && Array.isArray(payload.meta.excluded_items)
+    ? payload.meta.excluded_items.map(x => ({owner:normalizeOwnerKey(x.owner), item:normalizeSkuKey(x.item)}))
+      .filter(x => x.owner && x.item).sort((a,b)=>a.owner.localeCompare(b.owner)||a.item.localeCompare(b.item))
     : [];
-  const validScope = JSON.stringify(payloadExclusions) === JSON.stringify(currentExcludedSkuList());
+  const validScope = JSON.stringify(payloadExclusions) === JSON.stringify(currentExcludedItemList());
   if(!validSchema || !validScope || !validSource(payload.PTT) || !validSource(payload.BPS)) {
     throw new Error('รูปแบบข้อมูล BigQuery เป็นคนละรุ่นกับหน้าเว็บ กรุณากดรีเฟรชอีกครั้ง');
   }
@@ -4456,64 +4574,43 @@ function restoreDashboardRuntime(snapshot){
   hasLiveData = snapshot.hasLiveData;
   prepareZoneMaster();
 }
-
 async function restoreCurrentCubePairFromCache(){
   const scope = canonicalCubeScope(sys, dfrom, dto);
   const itemKey = itemCubeRequestKey(sys, scope.from, scope.to, scope.shift);
   const slotKey = slotCubeRequestKey(sys, scope.from, scope.to, scope.shift);
-  const [itemPayload, slotPayload] = await Promise.all([
+  const masterKey = itemMasterRequestKey();
+  const [masterPayload, itemPayload, slotPayload] = await Promise.all([
+    readDashboardCubeCache('itemmaster', masterKey),
     readDashboardCubeCache('item', itemKey),
     readDashboardCubeCache('slot', slotKey)
   ]);
-  if(!isValidItemCubePayload(itemPayload, sys, scope.from, scope.to, scope.shift) ||
-      !isValidSlotCubePayload(slotPayload, sys, scope.from, scope.to, scope.shift)) {
-    return false;
+  if(isValidItemMasterPayload(masterPayload)){
+    itemMasterPayloadCache.set(masterKey, masterPayload); applyItemMasterPayload(masterPayload);
   }
-  itemCubePayloadCache.set(itemKey, itemPayload);
-  itemCubeLoadState.set(itemKey, {status:'done'});
-  slotCubePayloadCache.set(slotKey, slotPayload);
-  slotCubeLoadState.set(slotKey, {status:'done'});
+  if(isValidItemCubePayload(itemPayload, sys, scope.from, scope.to, scope.shift)){
+    itemCubePayloadCache.set(itemKey, itemPayload); itemCubeLoadState.set(itemKey, {status:'done'});
+  }
+  if(isValidSlotCubePayload(slotPayload, sys, scope.from, scope.to, scope.shift)){
+    slotCubePayloadCache.set(slotKey, slotPayload); slotCubeLoadState.set(slotKey, {status:'done'});
+  }
   return true;
 }
-
 async function ensureDashboardBundleReady(force, totalRows, source){
-  dashboardBundleLoading = true;
-  try{
-    let cubesReady = hasCurrentItemCube() && hasCurrentSlotCube();
-    if(!cubesReady && !force) cubesReady = await restoreCurrentCubePairFromCache();
-    if(!cubesReady){
-      const [itemPayload, slotPayload] = await Promise.all([
-        hasCurrentItemCube()
-          ? Promise.resolve(itemCubePayloadCache.get(itemCubeRequestKey()) || DATA[sys])
-          : loadCurrentItemCube(force, sys),
-        hasCurrentSlotCube()
-          ? Promise.resolve(slotCubePayloadCache.get(slotCubeRequestKey()) || DATA[sys])
-          : loadCurrentSlotCube(force, sys)
-      ]);
-      if(!itemPayload || !slotPayload){
-        const itemState = itemCubeLoadState.get(itemCubeRequestKey());
-        const slotState = slotCubeLoadState.get(slotCubeRequestKey());
-        const reasons = [itemState && itemState.message, slotState && slotState.message].filter(Boolean);
-        const error = new Error(reasons.join(' / ') || 'ข้อมูลสินค้าและช่วงเวลายังโหลดไม่ครบ');
-        error.code = [itemState && itemState.code, slotState && slotState.code].find(Boolean) || '';
-        throw error;
-      }
-    }
-    dashboardBundleLoading = false;
-    finalizeDashboardBundle(totalRows, source);
-
-    // เตรียมอีกระบบไว้เบื้องหลัง เมื่อสลับ PTT/BPS จะไม่ต้องรอนานอีกรอบ
-    const otherSystem = sys === 'PTT' ? 'BPS' : 'PTT';
-    setTimeout(() => {
-      void Promise.all([
-        loadCurrentItemCube(false, otherSystem),
-        loadCurrentSlotCube(false, otherSystem)
-      ]);
-    }, 800);
-    return true;
-  }finally{
-    dashboardBundleLoading = false;
-  }
+  dashboardBundleLoading = false;
+  // แสดง Main Dashboard ทันที ไม่รอ Item/Time cube เพื่อไม่ย้อนกลับไปใช้ข้อมูลรอบเก่า
+  finalizeDashboardBundle(totalRows, source);
+  setTimeout(() => {
+    void Promise.all([
+      loadItemMaster(force),
+      loadCurrentItemCube(force, sys),
+      loadCurrentSlotCube(force, sys)
+    ]);
+  }, 30);
+  const otherSystem = sys === 'PTT' ? 'BPS' : 'PTT';
+  setTimeout(() => {
+    void Promise.all([loadCurrentItemCube(false, otherSystem), loadCurrentSlotCube(false, otherSystem)]);
+  }, 1000);
+  return true;
 }
 
 function applyDashboardPayload(payload, previous, source, options){
@@ -4541,26 +4638,15 @@ function applyDashboardPayload(payload, previous, source, options){
   }
   return totalRows;
 }
-
 async function restoreDashboardFromCache(){
   const record = await readDashboardResponseCache();
   if(!record) return false;
   try{
     const payload = JSON.parse(record.body);
     const previous = {sys, shiftF, dfrom, dto, datePresetMode, trendMode};
-    const rows = applyDashboardPayload(payload, previous, 'cache', {deferReady:true});
-    if(rows <= 0) {
-      void clearDashboardResponseCache();
-      return false;
-    }
-    dashboardBundleLoading = true;
-    const cubeReady = await restoreCurrentCubePairFromCache();
-    dashboardBundleLoading = false;
-    if(!cubeReady){
-      clearDashboardState();
-      return false;
-    }
-    finalizeDashboardBundle(rows, 'cache');
+    const rows = applyDashboardPayload(payload, previous, 'cache', {deferReady:false});
+    if(rows <= 0) { void clearDashboardResponseCache(); return false; }
+    preloadAllCubes();
     return true;
   }catch(err){
     console.warn('Dashboard cache ใช้งานไม่ได้ จะโหลดจาก BigQuery ใหม่:', err);
@@ -4667,6 +4753,7 @@ async function loadDataOnce(force, transientAttempt = 0){
           dto = previous.dto && previous.dto >= DMIN && previous.dto <= DMAX ? previous.dto : DMAX;
           showLoading(true, 'กำลังดึงข้อมูลพนักงาน สินค้า และช่วงเวลาพร้อมกัน…');
           earlyCubePromise = Promise.all([
+            loadItemMaster(force),
             loadCurrentItemCube(force, sys),
             loadCurrentSlotCube(force, sys)
           ]);
@@ -4714,7 +4801,7 @@ async function loadDataOnce(force, transientAttempt = 0){
 
     applyDashboardPayload(j, previous, 'live', {deferReady:true});
     showLoading(true, 'กำลังเตรียมข้อมูลพนักงาน สินค้า และช่วงเวลาให้พร้อมกัน…');
-    if(earlyCubePromise) await earlyCubePromise;
+    if(earlyCubePromise) void earlyCubePromise.catch(() => null);
     await ensureDashboardBundleReady(force, totalRows, 'live');
     await writeDashboardResponseCache(body, j);
     return {ok:true, rows:totalRows};

@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v7-resilient-cubes';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v8-master-owner-item';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -38,7 +38,7 @@ const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_date';
 const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_date';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v5-atomic-bundle';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v6-master-owner-item';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -75,6 +75,31 @@ function doGet(e) {
     // เมื่อผู้ใช้เปิดรายละเอียดพนักงานคนนั้น เพื่อไม่ให้หน้าแรกต้องแบกทุก SKU
     if (mode === 'picker_items') {
       return json_(buildPickerItemsData_(e, requestScope));
+    }
+    // Master_Item เป็นฐานรายการสินค้า โหลดแยกหนึ่งครั้ง แล้วหน้าเว็บแมปด้วย Owner + Item
+    if (mode === 'item_master') {
+      const masterEpoch = getDashboardDataEpoch_();
+      const masterRevision = getItemMasterCacheRevision_(masterEpoch);
+      try {
+        if (wantsGzipEnvelope) {
+          const encodedMaster = getCachedEncoded_(masterRevision);
+          if (encodedMaster) return gzipEnvelope_(encodedMaster);
+        } else {
+          const cachedMaster = getCached_(masterRevision);
+          if (cachedMaster) return textJson_(cachedMaster);
+        }
+      } catch (masterCacheReadErr) {
+        console.warn('Item master cache read failed: ' + masterCacheReadErr);
+      }
+      const masterJson = JSON.stringify(buildItemMasterData_(masterEpoch));
+      let encodedMasterJson = null;
+      try {
+        encodedMasterJson = setCached_(masterJson, masterRevision);
+      } catch (masterCacheWriteErr) {
+        console.warn('Item master cache write failed: ' + masterCacheWriteErr);
+      }
+      if (wantsGzipEnvelope && encodedMasterJson) return gzipEnvelope_(encodedMasterJson);
+      return textJson_(masterJson);
     }
     // Item cube มีจำนวนแถวมากที่สุด จึงแยกโหลดเฉพาะเมื่อเปิดหน้าสินค้าหรือรายละเอียด Zone
     // เพื่อลด payload หน้าแรกและหลีกเลี่ยง timeout ระหว่าง Apps Script -> browser
@@ -236,34 +261,85 @@ function assertDashboardDataEpochStable_(expectedEpoch) {
 }
 
 function getDashboardRequestScope_(e) {
-  let requested = [];
+  const params = e && e.parameter || {};
+  let requestedItems = [];
+  let legacySkus = [];
   try {
-    const raw = String(e && e.parameter && e.parameter.excluded_skus || '[]');
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) requested = parsed;
+    const parsed = JSON.parse(String(params.excluded_items || '[]'));
+    if (Array.isArray(parsed)) requestedItems = parsed;
+  } catch (_) {}
+  try {
+    const parsedLegacy = JSON.parse(String(params.excluded_skus || '[]'));
+    if (Array.isArray(parsedLegacy)) legacySkus = parsedLegacy;
   } catch (_) {}
 
   const seen = {};
-  const excludedSkus = [];
-  requested.slice(0, 500).forEach(function(value) {
-    let key = String(value == null ? '' : value).replace(/\u00a0/g, ' ').trim();
-    if (/^\d+\.0+$/.test(key)) key = key.slice(0, key.indexOf('.'));
-    if (!key || key.length > 80 || seen[key]) return;
-    seen[key] = true;
-    excludedSkus.push(key);
+  const excludedItems = [];
+  const addItem = function(ownerValue, itemValue) {
+    const owner = String(ownerValue == null ? '' : ownerValue).replace(/\u00a0/g, ' ').trim().toUpperCase();
+    let item = String(itemValue == null ? '' : itemValue).replace(/\u00a0/g, ' ').trim();
+    if (/^\d+\.0+$/.test(item)) item = item.slice(0, item.indexOf('.'));
+    if (!owner || !item || owner.length > 80 || item.length > 80) return;
+    const composite = owner + '\u0001' + item;
+    if (seen[composite]) return;
+    seen[composite] = true;
+    excludedItems.push({ owner: owner, item: item });
+  };
+
+  requestedItems.slice(0, 500).forEach(function(value) {
+    if (value && typeof value === 'object') {
+      addItem(value.owner, value.item == null ? value.sku : value.item);
+      return;
+    }
+    const raw = String(value == null ? '' : value);
+    const separator = raw.indexOf('\u0001') >= 0 ? '\u0001' : '|';
+    const pos = raw.indexOf(separator);
+    if (pos > 0) addItem(raw.slice(0, pos), raw.slice(pos + separator.length));
   });
-  excludedSkus.sort();
+  // รายการยกเว้นรุ่นเก่าใช้เฉพาะ SKU: เก็บเป็น Owner=* เพื่อให้ยังทำงานได้ทุก Owner
+  legacySkus.slice(0, 500).forEach(function(value) { addItem('*', value); });
+
+  excludedItems.sort(function(a, b) {
+    return a.owner.localeCompare(b.owner) || a.item.localeCompare(b.item);
+  });
   const digest = Utilities.computeDigest(
     Utilities.DigestAlgorithm.SHA_256,
-    JSON.stringify(excludedSkus),
+    JSON.stringify(excludedItems),
     Utilities.Charset.UTF_8
   );
   const key = Utilities.base64EncodeWebSafe(digest).replace(/=+$/, '').slice(0, 16);
-  return { excludedSkus: excludedSkus, key: key };
+  return { excludedItems: excludedItems, excludedSkus: [], key: key };
 }
 
 function sqlStringLiteral_(value) {
   return "'" + String(value == null ? '' : value).replace(/'/g, "''") + "'";
+}
+
+
+function dashboardExclusionSql_(scope, ownerExpression, itemExpression) {
+  const items = scope && Array.isArray(scope.excludedItems) ? scope.excludedItems : [];
+  if (!items.length) return '';
+  const wildcardItems = [];
+  const exact = [];
+  items.forEach(function(entry) {
+    const owner = String(entry && entry.owner || '').trim().toUpperCase();
+    const item = String(entry && entry.item || '').trim();
+    if (!owner || !item) return;
+    if (owner === '*') wildcardItems.push(item);
+    else exact.push('(' + ownerExpression + ' = ' + sqlStringLiteral_(owner) +
+      ' AND ' + itemExpression + ' = ' + sqlStringLiteral_(item) + ')');
+  });
+  const conditions = [];
+  if (wildcardItems.length) {
+    conditions.push(itemExpression + ' NOT IN (' + wildcardItems.map(sqlStringLiteral_).join(',') + ')');
+  }
+  if (exact.length) conditions.push('NOT (' + exact.join(' OR ') + ')');
+  return conditions.length ? 'AND ' + conditions.join(' AND ') : '';
+}
+
+function getItemMasterCacheRevision_(dataEpoch) {
+  const epoch = String(dataEpoch || getDashboardDataEpoch_()).replace(/:/g, '_');
+  return 'item_master_' + epoch;
 }
 
 function getItemCubeCacheRevision_(e, dataEpoch) {
@@ -295,6 +371,36 @@ function getSlotCubeCacheRevision_(e, requestScope, dataEpoch) {
     sha256Hex_(JSON.stringify(scope)).slice(0, 24);
 }
 
+function buildItemMasterData_(dataEpoch) {
+  const expectedEpoch = String(dataEpoch || getDashboardDataEpoch_());
+  if (getDashboardDataEpoch_() !== expectedEpoch) {
+    throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล Master เปลี่ยนก่อนเริ่มโหลด กรุณาลองใหม่อีกครั้ง');
+  }
+  const sql = [
+    'SELECT owner, item, COALESCE(description, item), COALESCE(pick_type, \'\'),',
+    '       COALESCE(item_pack, \'\'), pick_pack_size, case_pack_size, uom_divisor, match_status',
+    'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + MASTER_CURRENT_TABLE + '`',
+    'ORDER BY owner, item'
+  ].join('\n');
+  const rows = [];
+  bqQueryEach_(sql, function(r) {
+    rows.push(
+      String(r[0] || '-'), String(r[1] || '(none)'), String(r[2] || r[1] || '(none)'),
+      String(r[3] || ''), String(r[4] || ''),
+      r[5] == null ? null : Number(r[5]), r[6] == null ? null : Number(r[6]),
+      r[7] == null ? null : Number(r[7]), String(r[8] || '')
+    );
+  }, JOB_DEADLINE_MS, true);
+  assertDashboardDataEpochStable_(expectedEpoch);
+  return {
+    schema_version: DASHBOARD_SCHEMA_VERSION,
+    data_epoch: expectedEpoch,
+    row_width: 9,
+    rows: rows,
+    generated: new Date().toISOString()
+  };
+}
+
 function buildItemCubeData_(e, dataEpoch) {
   const params = e && e.parameter || {};
   const system = String(params.system || '').toUpperCase();
@@ -307,14 +413,12 @@ function buildItemCubeData_(e, dataEpoch) {
     throw new Error('ช่วงวันที่ไม่ถูกต้อง');
   }
   if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
-
   if (getDashboardDataEpoch_() !== expectedEpoch) {
     throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล BigQuery เปลี่ยนก่อนเริ่มโหลด กรุณาลองใหม่อีกครั้ง');
   }
+
   const scope = getDashboardRequestScope_(e);
-  const excludedSql = scope.excludedSkus.length
-    ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
-    : '';
+  const excludedSql = dashboardExclusionSql_(scope, 'owner_key', 'sku_key');
   const shiftSql = shift === 'morning'
     ? "AND shift_code = 'M'"
     : (shift === 'night' ? "AND shift_code = 'N'" : '');
@@ -324,7 +428,7 @@ function buildItemCubeData_(e, dataEpoch) {
     '    IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date,',
     "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
     "    COALESCE(zone, '??') AS zone,",
-    "    COALESCE(owner, '-') AS owner_key,",
+    "    UPPER(COALESCE(owner, '-')) AS owner_key,",
     "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
     '    pcs, pick_qty',
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
@@ -337,33 +441,20 @@ function buildItemCubeData_(e, dataEpoch) {
     '  WHERE shift_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
     '    ' + shiftSql,
     '    ' + excludedSql,
-    '),',
-    'pick_summary AS (',
-    '  SELECT shift_date, shift_code, zone, owner_key, sku_key,',
-    '         SUM(pcs) AS pcs, SUM(pick_qty) AS pick_qty, COUNT(*) AS cnt',
-    '  FROM filtered_picks',
-    '  GROUP BY shift_date, shift_code, zone, owner_key, sku_key',
     ')',
-    'SELECT',
-    '  COALESCE(FORMAT_DATE(\'%Y-%m-%d\', p.shift_date), ' + sqlStringLiteral_(from) + ') AS shift_date,',
-    '  COALESCE(p.shift_code, \'M\') AS shift_code,',
-    '  COALESCE(p.zone, \'-\') AS zone,',
-    '  m.item AS sku_key,',
-    '  COALESCE(p.pcs, 0) AS pcs,',
-    '  COALESCE(p.pick_qty, 0) AS pick_qty,',
-    '  COALESCE(p.cnt, 0) AS cnt',
-    'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + MASTER_CURRENT_TABLE + '` m',
-    'LEFT JOIN pick_summary p',
-    '  ON m.owner = p.owner_key AND m.item = p.sku_key',
-    'ORDER BY m.owner, m.item, shift_date'
+    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, owner_key, sku_key,",
+    '       SUM(pcs), SUM(pick_qty), COUNT(*)',
+    'FROM filtered_picks',
+    'GROUP BY shift_date, shift_code, zone, owner_key, sku_key',
+    'ORDER BY shift_date, zone, owner_key, sku_key'
   ].join('\n');
 
   const rows = [];
   bqQueryEach_(sql, function(r) {
     rows.push(
       String(r[0] || ''), r[1] === 'N' ? 1 : 0,
-      String(r[2] || '??'), String(r[3] || '(none)'),
-      Number(r[4]) || 0, Number(r[5]) || 0, Number(r[6]) || 0
+      String(r[2] || '??'), String(r[3] || '-'), String(r[4] || '(none)'),
+      Number(r[5]) || 0, Number(r[6]) || 0, Number(r[7]) || 0
     );
   }, JOB_DEADLINE_MS, true);
   assertDashboardDataEpochStable_(expectedEpoch);
@@ -375,7 +466,7 @@ function buildItemCubeData_(e, dataEpoch) {
     from: from,
     to: to,
     shift: shift,
-    row_width: 7,
+    row_width: 8,
     rows: rows,
     generated: new Date().toISOString()
   };
@@ -397,10 +488,8 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
   if (getDashboardDataEpoch_() !== expectedEpoch) {
     throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล BigQuery เปลี่ยนก่อนเริ่มโหลด กรุณาลองใหม่อีกครั้ง');
   }
-  const scope = requestScope || { excludedSkus: [] };
-  const excludedSql = scope.excludedSkus.length
-    ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
-    : '';
+  const scope = requestScope || { excludedItems: [] };
+  const excludedSql = dashboardExclusionSql_(scope, 'owner_key', 'sku_key');
   const shiftSql = shift === 'morning'
     ? "AND shift_code = 'M'"
     : (shift === 'night' ? "AND shift_code = 'N'" : '');
@@ -411,6 +500,7 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
     "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
     "    COALESCE(zone, '??') AS zone,",
     "    COALESCE(picker_id, '(none)') AS picker,",
+    "    UPPER(COALESCE(owner, '-')) AS owner_key,",
     "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
     '    CAST(DIV(tmin, 60) AS INT64) AS hour_of_day,',
     '    pcs, pick_qty',
@@ -469,10 +559,8 @@ function buildPickerItemsData_(e, requestScope) {
   }
   if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
 
-  const scope = requestScope || { excludedSkus: [] };
-  const excludedSql = scope.excludedSkus.length
-    ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
-    : '';
+  const scope = requestScope || { excludedItems: [] };
+  const excludedSql = dashboardExclusionSql_(scope, 'owner_key', 'sku_key');
   const shiftSql = shift === 'morning'
     ? "AND shift_code = 'M'"
     : (shift === 'night' ? "AND shift_code = 'N'" : '');
@@ -482,6 +570,7 @@ function buildPickerItemsData_(e, requestScope) {
     '    IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date,',
     "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
     "    COALESCE(zone, '??') AS zone,",
+    "    UPPER(COALESCE(owner, '-')) AS owner_key,",
     "    COALESCE(CAST(sku AS STRING), '(none)') AS sku,",
     "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
     '    pcs, pick_qty',
@@ -496,19 +585,19 @@ function buildPickerItemsData_(e, requestScope) {
     '    ' + shiftSql,
     '    ' + excludedSql,
     ')',
-    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, sku,",
+    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, owner_key, sku,",
     '       SUM(pcs), SUM(pick_qty), COUNT(*)',
     'FROM filtered',
-    'GROUP BY shift_date, shift_code, zone, sku',
-    'ORDER BY shift_date, zone, sku'
+    'GROUP BY shift_date, shift_code, zone, owner_key, sku',
+    'ORDER BY shift_date, zone, owner_key, sku'
   ].join('\n');
 
   const rows = [];
   bqQueryEach_(sql, function(r) {
     rows.push(
       String(r[0] || ''), r[1] === 'N' ? 1 : 0,
-      String(r[2] || '??'), String(r[3] || '(none)'),
-      Number(r[4]) || 0, Number(r[5]) || 0, Number(r[6]) || 0
+      String(r[2] || '??'), String(r[3] || '-'), String(r[4] || '(none)'),
+      Number(r[5]) || 0, Number(r[6]) || 0, Number(r[7]) || 0
     );
   }, JOB_DEADLINE_MS, true);
 
@@ -516,9 +605,9 @@ function buildPickerItemsData_(e, requestScope) {
     schema_version: DASHBOARD_SCHEMA_VERSION,
     picker: picker,
     system: system,
-    row_width: 7,
+    row_width: 8,
     rows: rows,
-    excluded_skus: scope.excludedSkus,
+    excluded_items: scope.excludedItems || [],
     generated: new Date().toISOString()
   };
 }
@@ -2456,14 +2545,12 @@ function promotePickMasterStage_(snapshotDate) {
 
 function buildDashboardData_(useQueryCache, requestScope) {
   const currentDate = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
-  const scope = requestScope || { excludedSkus: [], key: 'all' };
+  const scope = requestScope || { excludedItems: [], key: 'all' };
   const pickerDirectory = loadPickerDirectory_();
   const pickerNames = pickerDirectory.names;
   const pickerAffiliations = pickerDirectory.affiliations;
   const zoneMaster = loadZoneMasterMap_();
-  const excludedSql = scope.excludedSkus.length
-    ? 'AND sku_key NOT IN (' + scope.excludedSkus.map(sqlStringLiteral_).join(',') + ')'
-    : '';
+  const excludedSql = dashboardExclusionSql_(scope, 'owner_key', 'sku_key');
 
   // Payload หลักส่งเฉพาะ W = วัน/กะ/Zone/Picker สำหรับ KPI, Productivity, OT และหน้าพนักงาน
   // มิติ Item และ Time-slot แยกเป็น mode=item_cube / mode=slot_cube และโหลดเป็นรายวันเมื่อเปิดหน้า
@@ -2476,6 +2563,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
     "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
     '    COALESCE(zone, \'??\') AS zone,',
     '    COALESCE(picker_id, \'(none)\') AS picker,',
+    "    UPPER(COALESCE(owner, '-')) AS owner_key,",
     "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
     '    CASE WHEN tmin >= 1140 THEN tmin - 1140 WHEN tmin < 420 THEN tmin + 300 ELSE tmin - 420 END AS shift_minute,',
     '    pcs, pick_qty',
@@ -2523,7 +2611,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
   ['PTT','BPS'].forEach(c => sortDates_(sysd[c]));
   const compact = function(S) {
     return {
-      row_width: 9, item_row_width: 7, slot_row_width: 8,
+      row_width: 9, item_row_width: 8, slot_row_width: 8,
       dates: S.dates, pickers: S.pickers, skus: S.skus,
       rows: S.rows, item_rows: S.item_rows, slot_rows: S.slot_rows
     };
@@ -2542,7 +2630,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
             picker_affiliations: pickerAffiliations,
             zone_master: zoneMaster,
             zone_master_source: ZONE_MASTER_SHEET_ID + '/' + ZONE_MASTER_TAB,
-            excluded_skus: scope.excludedSkus,
+            excluded_items: scope.excludedItems,
             recent_days: RECENT_DAYS, rows: total, input_lines: inputLines },
     PTT: compact(sysd.PTT),
     BPS: compact(sysd.BPS)
@@ -2553,24 +2641,72 @@ function buildDashboardData_(useQueryCache, requestScope) {
 // Refresh t_pick_dashboard — เรียกหลัง sync master สำเร็จ เพื่อให้ยอด pick_qty อัปเดต
 // -----------------------------------------------------------------------------
 function refreshPickDashboardTable_() {
-  const sql =
-    'CREATE OR REPLACE TABLE `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '` ' +
-    'PARTITION BY pick_date CLUSTER BY category, picker_id AS ' +
+  const target = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`';
+  const selectSql =
     'SELECT ' +
-    '  UPPER(category)   AS category, ' +
+    '  UPPER(category) AS category, ' +
     '  DATE(pick_ts_local) AS pick_date, ' +
     '  zone, ' +
     '  picker_id, ' +
+    "  UPPER(COALESCE(owner, '-')) AS owner, " +
     '  sku, ' +
     '  CAST(EXTRACT(HOUR FROM pick_ts_local)*60 + EXTRACT(MINUTE FROM pick_ts_local) AS INT64) AS tmin, ' +
-    '  qty  AS pcs, ' +
+    '  qty AS pcs, ' +
     '  pick_qty ' +
     'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.v_pick_enriched` ' +
     'WHERE pick_ts_local IS NOT NULL AND UPPER(category) IN (\'PTT\',\'BPS\')';
-  bqQueryAll_(sql, JOB_DEADLINE_MS);
+
+  const createSql =
+    'CREATE OR REPLACE TABLE ' + target + ' ' +
+    'PARTITION BY pick_date CLUSTER BY category, owner, picker_id, sku AS ' + selectSql;
+
+  try {
+    bqQueryAll_(createSql, JOB_DEADLINE_MS);
+  } catch (err) {
+    const msg = String(err && (err.message || err) || '');
+    const specChanged = /different partitioning spec|cannot replace a table with a different partitioning spec/i.test(msg);
+    if (!specChanged) throw err;
+
+    // BigQuery ไม่อนุญาต CREATE OR REPLACE เมื่อเปลี่ยน partition/clustering spec
+    // เช่นรุ่นเก่า cluster(category,picker_id) -> รุ่นใหม่ cluster(category,owner,picker_id,sku)
+    // t_pick_dashboard เป็น derived table จึงสร้างสำเนาใหม่ให้สำเร็จก่อน แล้วค่อยสลับตารางจริง
+    console.warn('Dashboard clustering changed; running one-time safe rebuild for Owner + Item.');
+    const rebuildId = DASHBOARD_TABLE + '_rebuild_' + String(Date.now());
+    const rebuild = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + rebuildId + '`';
+    let rebuildCreated = false;
+    try {
+      const rebuildSql =
+        'CREATE TABLE ' + rebuild + ' ' +
+        'PARTITION BY pick_date CLUSTER BY category, owner, picker_id, sku AS ' + selectSql;
+      bqQueryAll_(rebuildSql, JOB_DEADLINE_MS);
+      rebuildCreated = true;
+
+      const verify = bqQueryAll_(
+        'SELECT COUNT(*) AS rows, COUNTIF(owner IS NULL) AS null_owner FROM ' + rebuild,
+        JOB_DEADLINE_MS
+      );
+      if (!verify.length) throw new Error('ตรวจตาราง Dashboard ที่สร้างใหม่ไม่สำเร็จ');
+
+      // ตาราง rebuild สร้างผ่านแล้ว จึงค่อยลบตารางรุ่นเก่าและสร้าง target ด้วย spec ใหม่
+      bqQueryAll_('DROP TABLE IF EXISTS ' + target, JOB_DEADLINE_MS);
+      bqQueryAll_(
+        'CREATE TABLE ' + target + ' ' +
+        'PARTITION BY pick_date CLUSTER BY category, owner, picker_id, sku AS ' +
+        'SELECT * FROM ' + rebuild,
+        JOB_DEADLINE_MS
+      );
+      console.log('One-time Dashboard clustering migration completed: rows=' + String(verify[0][0] || 0));
+    } finally {
+      if (rebuildCreated) {
+        try { bqQueryAll_('DROP TABLE IF EXISTS ' + rebuild, JOB_DEADLINE_MS); }
+        catch (cleanupErr) { console.warn('Dashboard rebuild cleanup failed: ' + cleanupErr); }
+      }
+    }
+  }
+
   const bounds = bqQueryAll_(dashboardBoundsSql_(), JOB_DEADLINE_MS);
   if (bounds.length && bounds[0].length >= 2) setDashboardBounds_(bounds[0][0], bounds[0][1]);
-  console.log('t_pick_dashboard refreshed successfully');
+  console.log('t_pick_dashboard refreshed successfully with Owner + Item');
 }
 
 // เรียกจาก Editor เพื่อ Refresh ตาราง Dashboard ด้วยตนเอง
@@ -2585,7 +2721,7 @@ function refreshDashboardTableNow() {
 function sortDates_(S) {
   const order = S.dates.map((d, i) => [d, i]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
   const remap = {}; order.forEach((o, ni) => remap[o[1]] = ni);
-  [[S.rows, 9], [S.item_rows, 7], [S.slot_rows, 8]].forEach(function(entry) {
+  [[S.rows, 9], [S.item_rows, 8], [S.slot_rows, 8]].forEach(function(entry) {
     const rows = entry[0], width = entry[1];
     for (let i = 0; i < rows.length; i += width) rows[i] = remap[rows[i]];
   });
@@ -2659,7 +2795,73 @@ function bqQueryAll_(sql, deadlineMs) {
 
 // รันเพื่อทดสอบใน Editor (ดูผลใน Execution log)
 function testRun() {
-  const d = buildDashboardData_();
-  Logger.log('rows=%s  PTT dates=%s  BPS dates=%s', d.meta.rows,
-             JSON.stringify(d.PTT.dates), JSON.stringify(d.BPS.dates));
+  const results = [];
+  const pass = function(name, detail) {
+    const line = '✅ PASS: ' + name + (detail ? ' — ' + detail : '');
+    results.push(line); Logger.log(line);
+  };
+  const fail = function(name, err) {
+    const line = '❌ FAIL: ' + name + ' — ' + String(err && (err.message || err) || err);
+    results.push(line); Logger.log(line);
+  };
+
+  try {
+    if (typeof BigQuery === 'undefined' || !BigQuery.Jobs || !BigQuery.Tables) {
+      throw new Error('BigQuery API ยังไม่ได้ Enable');
+    }
+    pass('BigQuery API');
+  } catch (err) { fail('BigQuery API', err); throw err; }
+
+  try {
+    const csv = '"KEY001","LPN001",24,"000123","OWNER A",1,"PTT","P001","AA01","2026-08-07 08:00:00",3';
+    const parsed = parseUploadCsvRows_(csv, 1, 'csv-v1');
+    if (parsed.length !== 1 || parsed[0].length !== 11 || parsed[0][3] !== '000123') {
+      throw new Error('CSV parser ไม่รักษา 11 คอลัมน์หรือเลขศูนย์นำหน้า');
+    }
+    pass('CSV parser', '11 คอลัมน์และรหัส 000123 ถูกต้อง');
+  } catch (err) { fail('CSV parser', err); throw err; }
+
+  try {
+    const schemaCheck = bqQueryAll_([
+      'SELECT COUNTIF(column_name = \'owner\')',
+      'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.INFORMATION_SCHEMA.COLUMNS`',
+      'WHERE table_name = ' + sqlStringLiteral_(DASHBOARD_TABLE)
+    ].join('\n'), 60000);
+    if (!schemaCheck.length || Number(schemaCheck[0][0] || 0) !== 1) {
+      throw new Error('t_pick_dashboard ยังไม่มีคอลัมน์ owner — ให้รัน refreshDashboardTableNow ก่อน (ระบบจะ migrate clustering รุ่นเก่าให้อัตโนมัติ)');
+    }
+    pass('Dashboard schema', 'พบ owner สำหรับแมป Owner + Item');
+  } catch (err) { fail('Dashboard schema', err); throw err; }
+
+  try {
+    const epoch = getDashboardDataEpoch_();
+    const master = buildItemMasterData_(epoch);
+    if (master.row_width !== 9 || master.rows.length % 9 !== 0 || master.rows.length === 0) {
+      throw new Error('Master_Item payload ว่างหรือรูปแบบไม่ถูกต้อง');
+    }
+    pass('Master_Item', (master.rows.length / 9).toLocaleString() + ' รายการ');
+  } catch (err) { fail('Master_Item', err); throw err; }
+
+  try {
+    const d = buildDashboardData_(true, { excludedItems: [], key: 'test' });
+    pass('Dashboard query', 'PTT=' + d.PTT.dates.length + ' วัน, BPS=' + d.BPS.dates.length + ' วัน');
+  } catch (err) { fail('Dashboard query', err); throw err; }
+
+  try {
+    const bounds = getOrLoadDashboardBounds_();
+    const testDate = bounds.maxDate;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(testDate)) throw new Error('ไม่พบวันที่ล่าสุด');
+    const fakeEvent = { parameter: {
+      system: 'PTT', from: testDate, to: testDate, shift: 'all', excluded_items: '[]'
+    }};
+    const itemCube = buildItemCubeData_(fakeEvent, getDashboardDataEpoch_());
+    if (itemCube.row_width !== 8 || itemCube.rows.length % 8 !== 0) {
+      throw new Error('Item cube รูปแบบไม่ถูกต้อง');
+    }
+    pass('Owner + Item mapping', (itemCube.rows.length / 8).toLocaleString() + ' กลุ่มในวันที่ ' + testDate);
+  } catch (err) { fail('Owner + Item mapping', err); throw err; }
+
+  const summary = '🎉 TEST RUN PASSED — พร้อม Deploy\n' + results.join('\n');
+  Logger.log(summary);
+  return { status: 'success', message: 'TEST RUN PASSED', checks: results };
 }
