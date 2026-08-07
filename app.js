@@ -1217,18 +1217,42 @@ function aggregate(system, from, to, sf){
 
   // Master_Item เป็นฐานสินค้า: เริ่มทุก Owner+Item ที่มีใน Master ด้วยยอด 0
   Object.values(ITEM_MASTER).forEach(info => {
-    itemMapAll[info.key] = {...info, pcs:0, qty:0, lines:0, hasActivity:false};
+    itemMapAll[info.key] = {
+      ...info, pcs:0, qty:0, lines:0, hasActivity:false,
+      locations: new Set(), zones: new Set()
+    };
   });
   // Pick Detail เป็นกิจกรรม นำมาแมปด้วย Owner + Item; รายการที่ไม่มีใน Master ยังแสดงเพื่อตรวจสอบได้
   forEachCurrentItemRow(system, from, to, sf, r => {
-    const zone = getZoneInfo(r.zone).zone;
-    if(isZoneExcluded(zone)) return;
+    const rawLoc = r.location || r.zone;
+    const zInfo = getZoneInfo(rawLoc);
+    const locName = (zInfo.known && zInfo.location) ? zInfo.location : (rawLoc || '');
+    const zoneName = zInfo.zone || r.zone || locName;
+    if(isZoneExcluded(zoneName)) return;
+
     const info = getItemInfo(r.owner, r.sku);
     const key = itemCompositeKey(r.owner, r.sku);
-    const all = itemMapAll[key] || (itemMapAll[key] = {...info, key, owner:normalizeOwnerKey(r.owner), sku:normalizeSkuKey(r.sku), pcs:0,qty:0,lines:0,hasActivity:false});
+    const all = itemMapAll[key] || (itemMapAll[key] = {
+      ...info, key, owner:normalizeOwnerKey(r.owner), sku:normalizeSkuKey(r.sku),
+      pcs:0, qty:0, lines:0, hasActivity:false,
+      locations: new Set(), zones: new Set()
+    });
+    if(!all.locations) all.locations = new Set();
+    if(!all.zones) all.zones = new Set();
+    if(locName && locName !== '-' && locName !== '??') all.locations.add(locName);
+    if(zoneName && zoneName !== '-' && zoneName !== '??') all.zones.add(zoneName);
+
     all.pcs += r.pcs; all.qty += r.pickQty; all.lines += r.lines; all.hasActivity = all.hasActivity || r.lines > 0;
     if(!isSkuExcluded(r.sku, r.owner)) {
-      const item = itemMap[key] || (itemMap[key] = {...all, pcs:0,qty:0,lines:0,hasActivity:false});
+      const item = itemMap[key] || (itemMap[key] = {
+        ...all, pcs:0, qty:0, lines:0, hasActivity:false,
+        locations: new Set(), zones: new Set()
+      });
+      if(!item.locations) item.locations = new Set();
+      if(!item.zones) item.zones = new Set();
+      if(locName && locName !== '-' && locName !== '??') item.locations.add(locName);
+      if(zoneName && zoneName !== '-' && zoneName !== '??') item.zones.add(zoneName);
+
       item.pcs += r.pcs; item.qty += r.pickQty; item.lines += r.lines; item.hasActivity = item.hasActivity || r.lines > 0;
     }
   });
@@ -1890,16 +1914,38 @@ function forEachCurrentItemRow(system, from, to, sf, callback){
   const payload = itemCubePayloadCache.get(itemCubeRequestKey(system, from, to, sf));
   if(payload){
     const rows = payload.rows;
+    const width = payload.row_width || 8;
+    if(width === 9) {
+      for(let offset=0; offset<rows.length; offset+=9){
+        const date = String(rows[offset] || '');
+        const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+        if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
+        callback({
+          date, shift,
+          location: rows[offset + 2],
+          zone: rows[offset + 3],
+          owner: normalizeOwnerKey(rows[offset + 4]),
+          sku: normalizeSkuKey(rows[offset + 5]) || '(none)',
+          pcs: Number(rows[offset + 6]) || 0,
+          pickQty: readBigQueryPickQty(rows[offset + 7]),
+          lines: Number(rows[offset + 8]) || 0
+        });
+      }
+      return true;
+    }
     for(let offset=0; offset<rows.length; offset+=8){
       const date = String(rows[offset] || '');
       const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
       if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
       callback({
-        date, shift, zone:rows[offset + 2], owner:normalizeOwnerKey(rows[offset + 3]),
-        sku:normalizeSkuKey(rows[offset + 4]) || '(none)',
-        pcs:Number(rows[offset + 5]) || 0,
-        pickQty:readBigQueryPickQty(rows[offset + 6]),
-        lines:Number(rows[offset + 7]) || 0
+        date, shift,
+        location: rows[offset + 2],
+        zone: rows[offset + 2],
+        owner: normalizeOwnerKey(rows[offset + 3]),
+        sku: normalizeSkuKey(rows[offset + 4]) || '(none)',
+        pcs: Number(rows[offset + 5]) || 0,
+        pickQty: readBigQueryPickQty(rows[offset + 6]),
+        lines: Number(rows[offset + 7]) || 0
       });
     }
     return true;
@@ -1913,9 +1959,12 @@ function forEachCurrentItemRow(system, from, to, sf, callback){
     const shift = row.shiftCode === 1 ? 'night' : 'morning';
     if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
     callback({
-      date, shift, zone:row.zone, owner:normalizeOwnerKey(row.owner),
-      sku:normalizeSkuKey(source.skus[row.skuIdx]) || '(none)',
-      pcs:row.pcs, pickQty:row.pickQty, lines:row.lines
+      date, shift,
+      location: row.zone,
+      zone: row.zone,
+      owner: normalizeOwnerKey(row.owner),
+      sku: normalizeSkuKey(source.skus[row.skuIdx]) || '(none)',
+      pcs: row.pcs, pickQty: row.pickQty, lines: row.lines
     });
   }
   return count > 0;

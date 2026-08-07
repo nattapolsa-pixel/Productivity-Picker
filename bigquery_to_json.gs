@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v8-master-owner-item';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v9-item-locations';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -427,7 +427,8 @@ function buildItemCubeData_(e, dataEpoch) {
     '  SELECT',
     '    IF(tmin < 420, DATE_SUB(pick_date, INTERVAL 1 DAY), pick_date) AS shift_date,',
     "    IF(tmin >= 420 AND tmin < 1140, 'M', 'N') AS shift_code,",
-    "    COALESCE(zone, '??') AS zone,",
+    "    COALESCE(location, zone, '??') AS location_key,",
+    "    COALESCE(zone, '??') AS zone_key,",
     "    UPPER(COALESCE(owner, '-')) AS owner_key,",
     "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
     '    pcs, pick_qty',
@@ -442,19 +443,19 @@ function buildItemCubeData_(e, dataEpoch) {
     '    ' + shiftSql,
     '    ' + excludedSql,
     ')',
-    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, owner_key, sku_key,",
+    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, location_key, zone_key, owner_key, sku_key,",
     '       SUM(pcs), SUM(pick_qty), COUNT(*)',
     'FROM filtered_picks',
-    'GROUP BY shift_date, shift_code, zone, owner_key, sku_key',
-    'ORDER BY shift_date, zone, owner_key, sku_key'
+    'GROUP BY shift_date, shift_code, location_key, zone_key, owner_key, sku_key',
+    'ORDER BY shift_date, location_key, zone_key, owner_key, sku_key'
   ].join('\n');
 
   const rows = [];
   bqQueryEach_(sql, function(r) {
     rows.push(
       String(r[0] || ''), r[1] === 'N' ? 1 : 0,
-      String(r[2] || '??'), String(r[3] || '-'), String(r[4] || '(none)'),
-      Number(r[5]) || 0, Number(r[6]) || 0, Number(r[7]) || 0
+      String(r[2] || '??'), String(r[3] || '??'), String(r[4] || '-'), String(r[5] || '(none)'),
+      Number(r[6]) || 0, Number(r[7]) || 0, Number(r[8]) || 0
     );
   }, JOB_DEADLINE_MS, true);
   assertDashboardDataEpochStable_(expectedEpoch);
@@ -466,7 +467,7 @@ function buildItemCubeData_(e, dataEpoch) {
     from: from,
     to: to,
     shift: shift,
-    row_width: 8,
+    row_width: 9,
     rows: rows,
     generated: new Date().toISOString()
   };
@@ -2646,7 +2647,8 @@ function refreshPickDashboardTable_() {
     'SELECT ' +
     '  UPPER(category) AS category, ' +
     '  DATE(pick_ts_local) AS pick_date, ' +
-    '  zone, ' +
+    "  COALESCE(location, zone, '??') AS location, " +
+    "  COALESCE(zone, '??') AS zone, " +
     '  picker_id, ' +
     "  UPPER(COALESCE(owner, '-')) AS owner, " +
     '  sku, ' +
@@ -2658,7 +2660,7 @@ function refreshPickDashboardTable_() {
 
   const createSql =
     'CREATE OR REPLACE TABLE ' + target + ' ' +
-    'PARTITION BY pick_date CLUSTER BY category, owner, picker_id, sku AS ' + selectSql;
+    'PARTITION BY pick_date CLUSTER BY category, owner, picker_id, sku, location, zone AS ' + selectSql;
 
   try {
     bqQueryAll_(createSql, JOB_DEADLINE_MS);
@@ -2682,7 +2684,7 @@ function refreshPickDashboardTable_() {
       rebuildCreated = true;
 
       const verify = bqQueryAll_(
-        'SELECT COUNT(*) AS rows, COUNTIF(owner IS NULL) AS null_owner FROM ' + rebuild,
+        'SELECT COUNT(*) AS row_count, COUNTIF(owner IS NULL) AS null_owner_count FROM ' + rebuild,
         JOB_DEADLINE_MS
       );
       if (!verify.length) throw new Error('ตรวจตาราง Dashboard ที่สร้างใหม่ไม่สำเร็จ');
