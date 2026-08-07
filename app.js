@@ -4588,6 +4588,58 @@ const builders = {
   <p class="sub">แสดงแต่ละวันว่า Productivity ถึงเป้าหมายหรือไม่</p>
   <div id="rptTargetRows"></div>
 </div>
+
+<!-- ── Section 6: Item / SKU Analysis ─────────────────────────────────────── -->
+<div style="margin-bottom:28px;">
+  <div class="rpt-section-title">📦 วิเคราะห์รายสินค้า (SKU)</div>
+
+  <!-- insight cards row -->
+  <div id="rptItemInsights" style="margin-bottom:18px;"></div>
+
+  <!-- chart + table row -->
+  <div class="rpt-row3" style="margin-bottom:18px;">
+    <div class="rpt-card">
+      <h4>🏆 Top 10 สินค้าที่หยิบเยอะสุด</h4>
+      <p class="sub">เรียงตามปริมาณ${volLabel} (แท่งสีเขียว = หยิบสูงสุด)</p>
+      <div style="height:280px;position:relative;"><canvas id="rptItemChart"></canvas></div>
+    </div>
+    <div class="rpt-card">
+      <h4>🥧 สัดส่วนปริมาณ Top 5</h4>
+      <p class="sub">กระจุกตัวแค่ไหน</p>
+      <div style="height:200px;position:relative;"><canvas id="rptItemPieChart"></canvas></div>
+      <div id="rptItemConcentration" style="margin-top:12px;"></div>
+    </div>
+  </div>
+
+  <!-- detail table -->
+  <div class="rpt-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+      <div>
+        <h4 style="margin:0 0 2px;">📋 ตารางสินค้าทั้งหมด</h4>
+        <p class="sub" style="margin:0;">เรียงจากปริมาณมากสุด · แสดง SKU, ชื่อ, Owner, ปริมาณ, Location</p>
+      </div>
+      <input id="rptItemSearch" type="text" placeholder="🔍 ค้นหา SKU / ชื่อ / Owner…"
+        style="padding:8px 14px;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;outline:none;font-family:inherit;min-width:220px;"
+        oninput="window._rptItemFilter(this.value)" />
+    </div>
+    <div style="overflow-x:auto;">
+      <table id="rptItemTable" style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#f8fafc;">
+          <th style="padding:10px 12px;text-align:left;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;">ลำดับ</th>
+          <th style="padding:10px 12px;text-align:left;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;">SKU</th>
+          <th style="padding:10px 12px;text-align:left;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;">ชื่อสินค้า</th>
+          <th style="padding:10px 12px;text-align:left;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;">Owner</th>
+          <th style="padding:10px 12px;text-align:right;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;">ปริมาณ</th>
+          <th style="padding:10px 12px;text-align:right;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;">Lines</th>
+          <th style="padding:10px 12px;text-align:left;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;">Location</th>
+          <th style="padding:10px 12px;text-align:left;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;">Zone</th>
+          <th style="padding:10px 12px;text-align:left;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;">%รวม</th>
+        </tr></thead>
+        <tbody id="rptItemTbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
 `;
 
     // ── Render charts ──────────────────────────────────────────────────────
@@ -4691,8 +4743,140 @@ const builders = {
       trHtml += '</div>';
       targetRowsEl.innerHTML = trHtml;
     }
+
+    // ── Item / SKU analysis ────────────────────────────────────────────────
+    const byItem = A.by_item || [];
+    const topItems = byItem.slice(0, 10);
+    const totalItemVol = byItem.reduce((s, x) => s + (isPcs ? x.pcs : x.qty), 0) || 1;
+    const top5Vol = byItem.slice(0, 5).reduce((s, x) => s + (isPcs ? x.pcs : x.qty), 0);
+    const top5Pct = Math.round(top5Vol / totalItemVol * 100);
+    const top1 = byItem[0];
+    const top1Vol = top1 ? (isPcs ? top1.pcs : top1.qty) : 0;
+    const top1Pct = Math.round(top1Vol / totalItemVol * 100);
+    const uniqueSKUs = byItem.length;
+    const avgVolPerSKU = uniqueSKUs ? Math.round(totalItemVol / uniqueSKUs) : 0;
+
+    // Item insights cards
+    const itemInsightsEl = document.getElementById('rptItemInsights');
+    if(itemInsightsEl){
+      let iiHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">';
+      if(top1){
+        iiHtml += `<div class="insight-box good">
+          <div class="icon">🥇</div>
+          <div class="text"><strong>สินค้าหยิบเยอะสุด:</strong> ${escapeZoneHtml(top1.name||top1.sku)} (${escapeZoneHtml(top1.owner)})<br>ปริมาณ <strong>${fmt(top1Vol)} ${volLabel}</strong> · คิดเป็น <strong>${top1Pct}%</strong> ของทั้งหมด<br>Location: ${escapeZoneHtml(top1.locationStr||'-')} · Zone: ${escapeZoneHtml(top1.zoneStr||'-')}</div>
+        </div>`;
+      }
+      iiHtml += `<div class="insight-box ${top5Pct>=80?'warn':'info'}">
+        <div class="icon">${top5Pct>=80?'⚠️':'📊'}</div>
+        <div class="text"><strong>ความกระจุกตัวของสินค้า:</strong> Top 5 SKU คิดเป็น <strong>${top5Pct}%</strong> ของปริมาณทั้งหมด<br>${top5Pct>=80?'สินค้าส่วนใหญ่กระจุกใน SKU น้อยมาก ควรบริหารความเสี่ยง':'การกระจายค่อนข้างดี'}</div>
+      </div>`;
+      iiHtml += `<div class="insight-box neutral">
+        <div class="icon">🔢</div>
+        <div class="text"><strong>SKU ที่มีกิจกรรม:</strong> <strong>${uniqueSKUs}</strong> รายการ<br>เฉลี่ย ${fmt(avgVolPerSKU)} ${volLabel} ต่อ SKU</div>
+      </div>`;
+      iiHtml += '</div>';
+      itemInsightsEl.innerHTML = iiHtml;
+    }
+
+    // Top 10 items horizontal bar chart
+    const itemChartCanvas = document.getElementById('rptItemChart');
+    if(itemChartCanvas && topItems.length > 0){
+      const itemVols = topItems.map(x => isPcs ? x.pcs : x.qty);
+      const maxItemVol = Math.max(1, ...itemVols);
+      const iColors = itemVols.map((v,i) => i===0?'#10b981':v/maxItemVol>=0.6?'#6366f1':'rgba(99,102,241,0.55)');
+      const iLabels = topItems.map(x => {
+        const n = (x.name || x.sku || '').length > 22 ? (x.name || x.sku).slice(0,21)+'…' : (x.name || x.sku);
+        return n || x.sku;
+      });
+      new Chart(itemChartCanvas, {
+        type:'bar',
+        data:{
+          labels: iLabels,
+          datasets:[{
+            label:volLabel, data:itemVols,
+            backgroundColor:iColors, borderRadius:6,
+            datalabels:{anchor:'end',align:'end',formatter:fmt,color:'#334155',font:{weight:'700',size:10}}
+          }]
+        },
+        options:{
+          indexAxis:'y', maintainAspectRatio:false,
+          layout:{padding:{right:60}},
+          plugins:{legend:{display:false},datalabels:{display:true}},
+          scales:{x:{grid:{color:'#f1f5f9'},ticks:{callback:fmt}},y:{grid:{display:false},ticks:{font:{size:11}}}}
+        }
+      });
+    }
+
+    // Top 5 pie chart
+    const itemPieCanvas = document.getElementById('rptItemPieChart');
+    const top5Items = byItem.slice(0,5);
+    const restVol = Math.max(0, totalItemVol - top5Vol);
+    if(itemPieCanvas && top5Items.length > 0){
+      const pieLabels = [...top5Items.map(x=>(x.name||x.sku||'').slice(0,18)), restVol>0?'อื่นๆ':''].filter(Boolean);
+      const pieData  = [...top5Items.map(x=>isPcs?x.pcs:x.qty), restVol>0?restVol:null].filter(v=>v!==null);
+      const pieColors = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#cbd5e1'];
+      new Chart(itemPieCanvas, {
+        type:'doughnut',
+        data:{labels:pieLabels, datasets:[{data:pieData, backgroundColor:pieColors, borderWidth:2, borderColor:'#fff'}]},
+        options:{maintainAspectRatio:false, plugins:{legend:{position:'bottom',labels:{font:{size:10},boxWidth:10}},datalabels:{display:false}}}
+      });
+      const conEl = document.getElementById('rptItemConcentration');
+      if(conEl) conEl.innerHTML = `<div style="font-size:12.5px;color:#475569;text-align:center;padding:8px;background:#f8fafc;border-radius:8px;">Top 5 SKU รวมกัน <strong style="color:${top5Pct>=70?'#ef4444':'#10b981'}">${top5Pct}%</strong> ของปริมาณทั้งหมด</div>`;
+    }
+
+    // Item table with search
+    const itemTbody = document.getElementById('rptItemTbody');
+    window._rptAllItems = byItem;
+    window._rptItemField = volField;
+    window._rptItemTotalVol = totalItemVol;
+    window._rptItemIsPcs = isPcs;
+    window._rptItemVolLabel = volLabel;
+    window._rptItemFilter = function(q){
+      const term = (q||'').toLowerCase();
+      const items = window._rptAllItems || [];
+      const totalV = window._rptItemTotalVol || 1;
+      const fld = window._rptItemField || 'qty';
+      const filtered = term ? items.filter(x=>
+        (x.sku||'').toLowerCase().includes(term)||
+        (x.name||'').toLowerCase().includes(term)||
+        (x.owner||'').toLowerCase().includes(term)||
+        (x.locationStr||'').toLowerCase().includes(term)||
+        (x.zoneStr||'').toLowerCase().includes(term)
+      ) : items;
+      const tBody = document.getElementById('rptItemTbody');
+      if(!tBody) return;
+      let cumPct = 0;
+      tBody.innerHTML = filtered.slice(0,200).map((x,i)=>{
+        const vol = x[fld] || 0;
+        const pct = Math.round(vol/totalV*100);
+        cumPct += pct;
+        const rowBg = i % 2 === 0 ? '#fff' : '#f8fafc';
+        const barW = Math.min(100, Math.round(vol/Math.max(1,filtered[0][fld]||1)*100));
+        return `<tr style="background:${rowBg};border-bottom:1px solid #f1f5f9;">
+          <td style="padding:9px 12px;color:#94a3b8;font-size:12px;">${i+1}</td>
+          <td style="padding:9px 12px;"><code style="font-size:12px;font-weight:700;color:#6366f1;">${escapeZoneHtml(x.sku||'-')}</code></td>
+          <td style="padding:9px 12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:#0f172a;" title="${escapeZoneHtml(x.name||'')}">${escapeZoneHtml((x.name||'-').length>28?(x.name||'-').slice(0,27)+'…':x.name||'-')}</td>
+          <td style="padding:9px 12px;"><span style="background:#eff6ff;color:#1d4ed8;padding:2px 8px;border-radius:6px;font-size:11.5px;font-weight:600;">${escapeZoneHtml(x.owner||'-')}</span></td>
+          <td style="padding:9px 12px;text-align:right;">
+            <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">
+              <div style="width:50px;height:6px;background:#f1f5f9;border-radius:3px;overflow:hidden;"><div style="height:100%;width:${barW}%;background:#6366f1;border-radius:3px;"></div></div>
+              <span style="font-weight:700;color:#334155;">${fmt(vol)}</span>
+            </div>
+          </td>
+          <td style="padding:9px 12px;text-align:right;color:#64748b;">${fmt(x.lines||0)}</td>
+          <td style="padding:9px 12px;font-size:12px;color:#334155;">${escapeZoneHtml(x.locationStr||'-')}</td>
+          <td style="padding:9px 12px;"><span style="background:#f0fdf4;color:#15803d;padding:2px 8px;border-radius:6px;font-size:11.5px;font-weight:600;">${escapeZoneHtml(x.zoneStr||'-')}</span></td>
+          <td style="padding:9px 12px;text-align:right;">
+            <span style="font-size:12px;color:${pct>=10?'#ef4444':pct>=5?'#f59e0b':'#10b981'};font-weight:700;">${pct}%</span>
+          </td>
+        </tr>`;
+      }).join('');
+      if(filtered.length > 200) tBody.innerHTML += `<tr><td colspan="9" style="text-align:center;padding:12px;color:#94a3b8;font-size:12px;">แสดง 200 รายการแรกจาก ${filtered.length} รายการ — กรุณาใช้ช่องค้นหาเพื่อกรองข้อมูล</td></tr>`;
+    };
+    window._rptItemFilter('');
   }
 };
+
 
 
 function renderTargetVsActualChart() {
