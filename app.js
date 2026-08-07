@@ -1510,10 +1510,35 @@ function sysTotals(system, from, to, sf){
 function ensureStyles(){
   if(document.getElementById('dash-style')) return;
   const st = document.createElement('style'); st.id = 'dash-style';
-  st.textContent = '.sysbar{display:flex;align-items:center;gap:12px 16px;margin:-6px 0 20px;flex-wrap:wrap}.sysbar .lab{font-size:13px;color:#64748b;font-weight:500}.systog{display:inline-flex;background:#eef2ff;border-radius:12px;padding:4px}.systog button{border:0;background:transparent;font-family:inherit;font-size:13px;font-weight:600;color:#64748b;padding:9px 16px;border-radius:9px;cursor:pointer;transition:.2s}.systog button.active{color:#fff;box-shadow:0 6px 14px -6px rgba(14,165,233,.6)}.systog button.active[data-sys="PTT"]{background:linear-gradient(90deg,#0ea5e9,#6366f1)}.systog button.active[data-sys="BPS"]{background:linear-gradient(90deg,#f59e0b,#f97316)}.shiftog button.active{background:linear-gradient(90deg,#8b5cf6,#6366f1)}.unittog button.active{background:linear-gradient(90deg,#14b8a6,#0ea5e9);color:#fff;box-shadow:0 6px 14px -6px rgba(20,184,166,.6)}'
-    + '.datebar{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:6px 10px;box-shadow:0 8px 20px -16px rgba(30,41,59,.4)}.datebar input[type=date]{font-family:inherit;font-size:13px;color:#1e293b;border:1px solid #e2e8f0;border-radius:8px;padding:6px 8px;background:#f8fafc}.datebar input[type=date]:focus{outline:0;border-color:#6366f1}.datebar .sep{color:#94a3b8;font-size:13px}'
-    + '.datepreset{display:inline-flex;gap:6px;flex-wrap:wrap}.datepreset button{border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12.5px;font-weight:500;color:#475569;padding:7px 12px;border-radius:9px;cursor:pointer;transition:.18s}.datepreset button:hover{border-color:#6366f1;color:#4338ca}.datepreset button.active{background:linear-gradient(90deg,#6366f1,#8b5cf6);border-color:transparent;color:#fff}.datepreset button[data-range]{background:#f8fafc;color:#0f766e;border-color:#ccfbf1}.datepreset button[data-range].active{background:linear-gradient(90deg,#0d9488,#14b8a6);color:#fff}'
-    + '.refreshbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12.5px;font-weight:600;color:#0e7490;padding:7px 12px;border-radius:9px;cursor:pointer;transition:.18s}.refreshbtn:hover{border-color:#14b8a6;background:#f0fdfa}.freshtxt{font-size:11.5px;color:#94a3b8}'
+  st.textContent = '.sysbar{display:flex;align-items:center;gap:12px 16px;margin:-6px 0 20px;flex-wrap:wrap}.sysbar .lab{font-size:13px;color:#64748b;font-weight:600;display:inline-flex;align-items:center;gap:4px}'
+    + '.systog{display:inline-flex;background:#f1f5f9;border-radius:12px;padding:4px;border:1px solid #e2e8f0}'
+    + '.systog button{border:0;background:transparent;font-family:inherit;font-size:13px;font-weight:600;color:#64748b;padding:8px 16px;border-radius:9px;cursor:pointer;transition:all .2s}'
+    + '.systog button:hover{color:#1e293b}'
+    + '.systog button.active{color:#fff;box-shadow:0 6px 14px -6px rgba(14,165,233,.6)}'
+    + '.systog button.active[data-sys="PTT"]{background:linear-gradient(135deg,#0ea5e9,#2563eb)}'
+    + '.systog button.active[data-sys="BPS"]{background:linear-gradient(135deg,#f59e0b,#ea580c)}'
+    + '.shiftog button.active{background:linear-gradient(135deg,#8b5cf6,#6366f1)}'
+    + '.unittog button.active{background:linear-gradient(135deg,#0d9488,#0284c7);color:#fff;box-shadow:0 6px 14px -6px rgba(13,148,136,.6)}'
+    + '.datebar{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:6px 10px;box-shadow:0 4px 12px -8px rgba(30,41,59,.15)}'
+    + '.datebar input[type=date]{font-family:inherit;font-size:12.5px;font-weight:600;color:#1e293b;border:1px solid #e2e8f0;border-radius:8px;padding:5px 8px;background:#f8fafc;cursor:pointer}'
+    + '.datebar input[type=date]:focus{outline:0;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.15)}'
+    + '.datebar .sep{color:#94a3b8;font-size:13px;font-weight:700}'
+    + '.datepreset{display:inline-flex;align-items:center;gap:10px;flex-wrap:nowrap;max-width:100%}'
+    + '.preset-range-group{display:inline-flex;background:#f1f5f9;border-radius:12px;padding:3px;border:1px solid #e2e8f0;flex-shrink:0}'
+    + '.preset-range-group button{border:0;background:transparent;font-family:inherit;font-size:12px;font-weight:600;color:#475569;padding:6px 12px;border-radius:9px;cursor:pointer;transition:all .2s}'
+    + '.preset-range-group button:hover{color:#1e293b;background:rgba(255,255,255,0.6)}'
+    + '.preset-range-group button.active{background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;font-weight:700;box-shadow:0 4px 12px -2px rgba(99,102,241,0.4)}'
+    + '.quick-day-track{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,rgba(255,255,255,0.95),rgba(248,250,252,0.95));backdrop-filter:blur(8px);border:1px solid #cbd5e1;border-radius:12px;padding:4px 8px;overflow-x:auto;max-width:620px;scroll-behavior:smooth;box-shadow:0 4px 12px -8px rgba(15,23,42,0.12)}'
+    + '.quick-day-track::-webkit-scrollbar{height:4px}'
+    + '.quick-day-track::-webkit-scrollbar-track{background:transparent}'
+    + '.quick-day-track::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}'
+    + '.quick-day-track::-webkit-scrollbar-thumb:hover{background:#6366f1}'
+    + '.quick-day-track button{border:1px solid #e2e8f0;background:#fff;font-family:inherit;font-size:12px;font-weight:600;color:#475569;padding:5px 11px;border-radius:8px;cursor:pointer;transition:all .18s cubic-bezier(0.4,0,0.2,1);white-space:nowrap;flex-shrink:0}'
+    + '.quick-day-track button:hover{border-color:#818cf8;color:#4338ca;background:#f5f3ff;transform:translateY(-1px);box-shadow:0 4px 10px -2px rgba(99,102,241,0.15)}'
+    + '.quick-day-track button.active{background:linear-gradient(135deg,#6366f1,#4338ca);border-color:transparent;color:#fff;font-weight:700;box-shadow:0 6px 14px -3px rgba(99,102,241,0.45);transform:translateY(-1px) scale(1.02)}'
+    + '.refreshbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid #cbd5e1;background:#fff;font-family:inherit;font-size:12px;font-weight:600;color:#0369a1;padding:7px 14px;border-radius:10px;cursor:pointer;transition:all .18s;box-shadow:0 2px 6px -2px rgba(0,0,0,0.05)}'
+    + '.refreshbtn:hover{border-color:#0284c7;background:#f0fdfa;transform:translateY(-1px)}'
+    + '.freshtxt{font-size:11.5px;color:#94a3b8}'
     + '#loadov{position:fixed;inset:0;background:#f8fafc;display:flex;align-items:center;justify-content:center;z-index:999}#loadov .sp{width:38px;height:38px;border:4px solid #e2e8f0;border-top-color:#6366f1;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}#loadov .msg{margin-left:14px;font-size:14px;color:#475569;font-weight:500}';
   document.head.appendChild(st);
 }
@@ -1521,7 +1546,9 @@ function ensureStyles(){
 function buildControls(){
   ensureStyles();
   const old = document.querySelector('.sysbar'); if(old) old.remove();
-  const presetBtns = ALL_DATES.map(d=>`<button data-d="${d}">${d.slice(8)+'/'+d.slice(5,7)}</button>`).join('');
+  const rangeBtns = `<div class="preset-range-group"><button data-all="1">ทั้งหมด</button><button data-range="week">Weekly</button><button data-range="month">Monthly</button></div>`;
+  const quickDays = `<div class="quick-day-track">${ALL_DATES.map(d=>`<button data-d="${d}">${d.slice(8)+'/'+d.slice(5,7)}</button>`).join('')}</div>`;
+  const datePresetGroup = `<div class="datepreset">${rangeBtns}${quickDays}</div>`;
   const bar = document.createElement('div'); bar.className = 'sysbar';
   const targetUnitTxt = unitMode === 'pcs' ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
   bar.innerHTML =
@@ -1539,7 +1566,7 @@ function buildControls(){
     + `</div>`
     + '<span class="lab">วันที่:</span>'
     + `<div class="datebar"><input type="date" id="dfrom" min="${DMIN}" max="${DMAX}" value="${dfrom}"><span class="sep">→</span><input type="date" id="dto" min="${DMIN}" max="${DMAX}" value="${dto}"></div>`
-    + `<div class="datepreset"><button data-all="1">ทั้งหมด</button><button data-range="week">Weekly</button><button data-range="month">Monthly</button>${presetBtns}</div>`
+    + datePresetGroup
     + '<button class="refreshbtn" id="refreshBtn">↻ รีเฟรช</button>'
     + '<button class="refreshbtn" id="exportPdfBtn" style="color:#4338ca; border-color:#c7d2fe; background:#eef2ff;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:15px;height:15px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> 📄 Export PDF</button>'
     + '<span class="freshtxt" id="freshTxt"></span>';
@@ -1615,7 +1642,13 @@ function buildControls(){
       if(r) r.classList.add('active');
       return;
     }
-    if(datePresetMode === 'day' && dfrom===dto){ const m=bar.querySelector(`.datepreset button[data-d="${dfrom}"]`); if(m) m.classList.add('active'); }
+    if(datePresetMode === 'day' && dfrom===dto){
+      const m=bar.querySelector(`.datepreset button[data-d="${dfrom}"]`);
+      if(m) {
+        m.classList.add('active');
+        m.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      }
+    }
   }
   function applyDates(){ if(dfrom > dto){ const t=dfrom; dfrom=dto; dto=t; fromEl.value=dfrom; toEl.value=dto; } setPresetActive(); render(); }
   fromEl.onchange = () => { datePresetMode = 'custom'; dfrom = fromEl.value || DMIN; applyDates(); };
