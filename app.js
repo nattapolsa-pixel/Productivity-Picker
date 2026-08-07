@@ -1224,10 +1224,14 @@ function aggregate(system, from, to, sf){
   });
   // Pick Detail เป็นกิจกรรม นำมาแมปด้วย Owner + Item; รายการที่ไม่มีใน Master ยังแสดงเพื่อตรวจสอบได้
   forEachCurrentItemRow(system, from, to, sf, r => {
-    const rawLoc = r.location || r.zone;
-    const zInfo = getZoneInfo(rawLoc);
-    const locName = (zInfo.known && zInfo.location) ? zInfo.location : (rawLoc || '');
-    const zoneName = zInfo.zone || r.zone || locName;
+    // Location ต้องเก็บค่าจริงจาก Pick Detail/BigQuery ห้ามส่งผ่าน normalizeLocationCode()
+    // เพราะฟังก์ชันนั้นตั้งใจใช้หา Zone master และจะตัดเหลือ 2 ตัวแรก
+    const locName = String(r.location || '').trim().toUpperCase();
+    const rawZone = String(r.zone || '').trim().toUpperCase();
+    const zInfo = getZoneInfo(locName || rawZone);
+    const zoneName = (rawZone && rawZone !== '-' && rawZone !== '??')
+      ? rawZone
+      : (zInfo.zone || normalizeLocationCode(locName));
     if(isZoneExcluded(zoneName)) return;
 
     const info = getItemInfo(r.owner, r.sku);
@@ -1442,12 +1446,29 @@ function aggregate(system, from, to, sf){
     avg_prod:r1(v.hours ? v.eligibleQty / v.hours : 0),
     avg_pcs_prod:r1(v.hours ? v.eligiblePcs / v.hours : 0)
   })).sort((a,b)=>b.date.localeCompare(a.date) || (b.qty-a.qty) || a.name.localeCompare(b.name));
+  function finalizeItemLocationFields(v){
+    const locations = v.locations instanceof Set
+      ? [...v.locations]
+      : (Array.isArray(v.locations) ? [...v.locations] : []);
+    const zones = v.zones instanceof Set
+      ? [...v.zones]
+      : (Array.isArray(v.zones) ? [...v.zones] : []);
+    const cleanLocations = [...new Set(locations.map(x=>String(x||'').trim().toUpperCase()).filter(x=>x && x!=='-' && x!=='??'))].sort();
+    const cleanZones = [...new Set(zones.map(x=>String(x||'').trim().toUpperCase()).filter(x=>x && x!=='-' && x!=='??'))].sort();
+    return {
+      ...v,
+      locations:cleanLocations,
+      zones:cleanZones,
+      locationStr:cleanLocations.length ? cleanLocations.join(', ') : '-',
+      zoneStr:cleanZones.length ? cleanZones.join(', ') : '-'
+    };
+  }
   const by_item = Object.values(itemMap)
     .filter(v => v.hasActivity || v.pcs !== 0 || v.qty !== 0 || v.lines !== 0)
-    .map(v => ({...v, excluded:false}))
+    .map(v => ({...finalizeItemLocationFields(v), excluded:false}))
     .sort((a,b)=>b.qty-a.qty || b.pcs-a.pcs || a.owner.localeCompare(b.owner) || a.sku.localeCompare(b.sku));
   const by_item_all = Object.values(itemMapAll).map(v => ({
-    ...v,
+    ...finalizeItemLocationFields(v),
     excluded:isSkuExcluded(v.sku, v.owner),
     status:!v.inMaster ? 'NOT_IN_MASTER' : (v.hasActivity ? 'ACTIVE' : 'NO_ACTIVITY')
   })).sort((a,b)=>b.qty-a.qty || b.pcs-a.pcs || Number(b.hasActivity)-Number(a.hasActivity) || a.owner.localeCompare(b.owner) || a.sku.localeCompare(b.sku));
@@ -4120,10 +4141,10 @@ const builders = {
           const qtyCellStyle = !isPcs ? 'font-weight:700;color:#4338ca;background:#eef2ff;' : 'font-weight:600;color:#4338ca;';
 
           const locPill = x.locationStr && x.locationStr !== '-' 
-            ? `<span class="pill" style="background:#f8fafc;color:#0f172a;border:1px solid #cbd5e1;font-family:monospace;font-weight:600;">${x.locationStr}</span>`
+            ? `<span class="pill" style="background:#f8fafc;color:#0f172a;border:1px solid #cbd5e1;font-family:monospace;font-weight:600;">${escapeZoneHtml(x.locationStr)}</span>`
             : '<span style="color:#94a3b8;">-</span>';
           const zonePill = x.zoneStr && x.zoneStr !== '-'
-            ? `<span class="pill" style="background:#e0f2fe;color:#0369a1;font-weight:700;">${x.zoneStr}</span>`
+            ? `<span class="pill" style="background:#e0f2fe;color:#0369a1;font-weight:700;">${escapeZoneHtml(x.zoneStr)}</span>`
             : '<span style="color:#94a3b8;">-</span>';
 
           h += `<tr ${rowBg}>
