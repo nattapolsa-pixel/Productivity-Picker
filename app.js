@@ -1,13 +1,13 @@
 /* Pick Productivity Dashboard — ดึงข้อมูลสดจาก BigQuery (ผ่าน Apps Script Web App)
    Productivity คิดจาก "ชั่วโมงกะ (ปกติ) + OT" ไม่ใช่ช่วงหยิบชิ้นแรก–สุดท้าย
-   กะเช้า 07:00–16:00 (OT 16:30–19:00) · กะดึก 19:00–04:00 (OT 04:30–07:00)
+   กะ A / กะ B ใช้ Team จาก Sheet บันทึกเวลาทำงาน; ถ้า Team ไม่ใช่ A/B ใช้เวลาจริงเป็น fallback
    แยก 2 ระบบ PTT / BPS · ทุก KPI/กราฟคำนวณสดตามช่วงวันที่ + กะ ที่เลือก */
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 // v7 sends only the compact work cube first, then lazy-loads item/time detail in daily chunks.
 // its pick_qty may have the retired Pack Size semantics or row-level format.
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v9-item-locations';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v10-roster-shifts';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -18,7 +18,7 @@ const ZONE_LAYOUT_CONFIG = (typeof window !== 'undefined' && window.ZONE_LAYOUT)
 const REG_HOURS = 9;     // ชั่วโมงทำงานปกติต่อกะ (07:00–16:00 / 19:00–04:00). ถ้าหักพักเที่ยงให้ใช้ 8
 const OT_MAX    = 2.5;   // OT สูงสุดต่อกะ (ชม.)
 const MIN_PRODUCTIVE_HOURS = 3; // งานต่ำกว่านี้ไม่นับใน Productivity
-// OT นับเป็นบล็อกละ 30 นาทีที่ทำครบ เริ่มนับจาก 16:30 (เช้า) / 04:30 (ดึก)
+// OT ยังอิงเวลาจริงเดิม: เริ่มนับ 16:30 สำหรับช่วงกลางวัน / 04:30 สำหรับช่วงกลางคืน
 // ====================================
 
 const fmt = n => Number(n).toLocaleString('en-US');
@@ -39,8 +39,8 @@ const ZONE_TYPE_COLORS = Object.freeze({
   'on floor':'#475569',
   '-':'#94a3b8'
 });
-const TITLES = {overview:'ภาพรวม',prod:'Productivity',zones:'โซน & ผังคลัง',typebreak:'Activity by Type Pick',pickers:'พนักงาน (Picker)',time:'ช่วงเวลา',items:'สินค้า (Items)',report:'📊 สรุปผล & Insights'};
-const SHIFT_LABEL = {morning:'🌅 เช้า', night:'🌙 ดึก', '-':'-'};
+const TITLES = {overview:'ภาพรวม',prod:'Productivity',zones:'โซน & ผังคลัง',typebreak:'Activity by Type Pick',pickers:'พนักงาน (Picker)',time:'ช่วงเวลา',items:'สินค้า (Items)',report:'📊 สรุปผล & Insights',simulator:'🎮 วางแผนกำลังคน & OT'};
+const SHIFT_LABEL = {morning:'🅰️ กะ A', night:'🅱️ กะ B', '-':'-'};
 
 Chart.register(ChartDataLabels);
 Chart.defaults.font.family = "'Prompt',sans-serif";
@@ -419,9 +419,9 @@ function rangeForPeriod(mode, baseDate){
   return {from:base, to:base};
 }
 function shiftOf(ds, t){
-  if(t >= 420 && t < 1140) return {sh:'morning', sd:ds,            sm:t-420};   // 07:00–18:59 -> กะเช้า
-  if(t >= 1140)            return {sh:'night',   sd:ds,            sm:t-1140};  // 19:00–23:59 -> กะดึก (วันนี้)
-  return                          {sh:'night',   sd:addDays(ds,-1), sm:t+300};  // 00:00–06:59 -> กะดึกของ "คืนก่อน"
+  if(t >= 420 && t < 1140) return {sh:'morning', sd:ds,            sm:t-420};   // fallback กะ A: 07:00–18:59
+  if(t >= 1140)            return {sh:'night',   sd:ds,            sm:t-1140};  // fallback กะ B: 19:00–23:59
+  return                          {sh:'night',   sd:addDays(ds,-1), sm:t+300};  // fallback กะ B: 00:00–06:59 ของวันกะก่อน
 }
 // OT = จำนวนบล็อก 30 นาทีที่ทำครบ นับจากนาทีที่ 570 (16:30/04:30) ต้นกะ, สูงสุด OT_MAX
 function otHours(maxSm){ if(maxSm <= 570) return 0; return Math.min(OT_MAX, Math.floor((maxSm - 570)/30) * 0.5); }
@@ -495,7 +495,10 @@ function prepShifts(){
     for(let i=0;i<count;i++) {
       const offset = i * 9;
       const dateIdx = S.rows[offset];
-      const sh = Number(S.rows[offset + 1]) === 1 ? 'night' : 'morning';
+      const timeShift = Number(S.rows[offset + 1]) === 1 ? 'night' : 'morning';
+      const pickerIdx = Number(S.rows[offset + 3]) || 0;
+      const pickerId = String(S.pickers[pickerIdx] || '').trim();
+      const sh = getPickerRosterShift(pickerId, timeShift);
       S._sh[i] = {
         sd:S.dates[dateIdx], sh,
         sm:Number(S.rows[offset + 7]) || 0,
@@ -551,6 +554,25 @@ function getPickerAffiliation(code){
 }
 
 
+
+function getPickerRosterShift(code, fallbackShift='morning'){
+  const s = String(code || '').trim();
+  const fallback = fallbackShift === 'night' ? 'night' : 'morning';
+  if(!s) return fallback;
+  const map = DATA && DATA.meta && DATA.meta.picker_shift_teams;
+  if(map && typeof map === 'object'){
+    const raw = map[s] != null ? map[s] : map[s.replace(/^0+/, '')];
+    const team = String(raw == null ? '' : raw).trim().toUpperCase();
+    if(team === 'A') return 'morning';
+    if(team === 'B') return 'night';
+  }
+  // Team อื่น (เช่น C/D), ช่องว่าง หรือหาไม่พบ -> ใช้ช่วงเวลาจริงเดิม
+  return fallback;
+}
+
+function getPickerRosterTeam(code, fallbackShift='morning'){
+  return getPickerRosterShift(code, fallbackShift) === 'night' ? 'B' : 'A';
+}
 
 function normalizeLocationCode(value){
   const text = String(value || '').trim().toUpperCase();
@@ -1677,7 +1699,7 @@ function buildControls(){
     + '<span class="lab">หน่วยที่แสดง:</span>'
     + '<div class="systog unittog"><button data-unit="units">📦 หน่วยหยิบ (Units)</button><button data-unit="pcs">🧩 จำนวนชิ้น (Pcs)</button></div>'
     + '<span class="lab">กะ:</span>'
-    + '<div class="systog shiftog"><button data-sh="all">ทุกกะ</button><button data-sh="morning">🌅 เช้า</button><button data-sh="night">🌙 ดึก</button></div>'
+    + '<div class="systog shiftog"><button data-sh="all">ทุกกะ</button><button data-sh="morning">🅰️ กะ A</button><button data-sh="night">🅱️ กะ B</button></div>'
     + '<span class="lab">🎯 เป้า Target:</span>'
     + `<div class="datebar" style="padding:3px 6px; display:inline-flex; align-items:center; gap:4px;">`
     + `<input type="number" id="prodTargetInput" value="${prodTarget}" min="1" max="1000" style="width:55px; font-weight:700; text-align:center;">`
@@ -2422,13 +2444,15 @@ function forEachCurrentSlotRow(system, from, to, sf, callback){
     const rows = payload.rows;
     for(let offset=0; offset<rows.length; offset+=8){
       const date = String(rows[offset] || '');
-      const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+      const timeShift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+      const picker = String(rows[offset + 3] || '(none)');
+      const shift = getPickerRosterShift(picker, timeShift);
       if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
       callback({
         date,
         shift,
         zone:rows[offset + 2],
-        picker:String(rows[offset + 3] || '(none)'),
+        picker,
         hour:Number(rows[offset + 4]) || 0,
         pcs:Number(rows[offset + 5]) || 0,
         pickQty:readBigQueryPickQty(rows[offset + 6]),
@@ -2443,10 +2467,12 @@ function forEachCurrentSlotRow(system, from, to, sf, callback){
   for(let i=0; i<count; i++){
     const row = packedSlotRowData(source, i);
     const date = source.dates[row.dateIdx];
-    const shift = row.shiftCode === 1 ? 'night' : 'morning';
+    const timeShift = row.shiftCode === 1 ? 'night' : 'morning';
+    const picker = String(source.pickers[row.pickerIdx] || '(none)');
+    const shift = getPickerRosterShift(picker, timeShift);
     if(date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
     callback({
-      date, shift, zone:row.zone, picker:String(source.pickers[row.pickerIdx] || '(none)'),
+      date, shift, zone:row.zone, picker,
       hour:row.hour, pcs:row.pcs, pickQty:row.pickQty, lines:row.lines
     });
   }
@@ -2571,7 +2597,8 @@ function applyPickerItemsPayload(pickerId, requestKey, payload){
   if(width !== 8 || rows.length % width !== 0) throw new Error('รูปแบบรายการ SKU รายพนักงานไม่ถูกต้อง');
   for(let offset=0; offset<rows.length; offset+=width){
     const date = String(rows[offset] || '');
-    const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+    const timeShift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+    const shift = getPickerRosterShift(pickerId, timeShift);
     if(shiftF !== 'all' && shift !== shiftF) continue;
     const dRec = pData.byDate && pData.byDate[date];
     if(!dRec) continue;
@@ -3958,7 +3985,7 @@ const builders = {
       new Chart(shiftEl, {
         type: 'bar',
         data: {
-          labels: ['☀️ กะวัน (07:00–16:00)', '🌙 กะดึก (19:00–04:00)'],
+          labels: ['🅰️ กะ A', '🅱️ กะ B'],
           datasets: [{
             label: unitTxt,
             data: [dayVol, nightVol],
@@ -4874,8 +4901,455 @@ const builders = {
       if(filtered.length > 200) tBody.innerHTML += `<tr><td colspan="9" style="text-align:center;padding:12px;color:#94a3b8;font-size:12px;">แสดง 200 รายการแรกจาก ${filtered.length} รายการ — กรุณาใช้ช่องค้นหาเพื่อกรองข้อมูล</td></tr>`;
     };
     window._rptItemFilter('');
+  },
+
+  simulator(){
+    const el = document.getElementById('simulatorPage');
+    if(!el) return;
+    const isPcs = unitMode === 'pcs';
+    const volLabel = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
+    const prodUnit = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+
+    // State initialized once or retained
+    if(!window._simState){
+      window._simState = {
+        shiftARatio: 50,
+        shiftBRatio: 50,
+        targetHours: 8.0,
+        customWorkload: null,
+        userPickersA: {},
+        userPickersB: {}
+      };
+    }
+    const SState = window._simState;
+
+    // Build zone list & productivity map
+    const zoneMap = {};
+    (A.by_zone_prod || A.by_zone || []).forEach(z => {
+      if(!z.name || z.name === '-' || z.name === 'ไม่พบใน Zone_V2') return;
+      const prod = isPcs ? (z.avg_pcs_prod || z.mean_pcs_prod || 0) : (z.avg_prod || z.mean_prod || 0);
+      const vol  = isPcs ? (z.pcs || 0) : (z.qty || 0);
+      const lines = z.lines || 0;
+      zoneMap[z.name] = {
+        name: z.name,
+        prodRate: prod > 0 ? prod : 100, // default fallback 100 if 0
+        vol: vol,
+        lines: lines
+      };
+    });
+
+    // Handle custom uploaded order workload if present
+    const isCustom = !!SState.customWorkload;
+    const activeWorkload = isCustom ? SState.customWorkload : zoneMap;
+
+    // HTML Skeleton
+    el.innerHTML = `
+<style>
+.sim-hero{background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:20px;padding:24px;color:#fff;margin-bottom:24px;box-shadow:0 10px 30px rgba(15,23,42,0.15);}
+.sim-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-top:20px;background:rgba(255,255,255,0.06);padding:18px;border-radius:16px;backdrop-filter:blur(10px);}
+.sim-card{background:#fff;border-radius:18px;padding:22px;box-shadow:0 2px 16px rgba(15,23,42,0.07);border:1px solid #f1f5f9;margin-bottom:24px;}
+.sim-card h4{margin:0 0 4px;font-size:16px;font-weight:800;color:#0f172a;}
+.sim-card .sub{font-size:12.5px;color:#64748b;margin:0 0 18px;}
+.sim-table{width:100%;border-collapse:collapse;font-size:13px;}
+.sim-table th{background:#f8fafc;padding:11px 12px;text-align:left;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;}
+.sim-table td{padding:10px 12px;border-bottom:1px solid #f1f5f9;vertical-align:middle;}
+.sim-input-num{width:64px;padding:6px 8px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:13px;font-weight:700;text-align:center;outline:none;}
+.sim-input-num:focus{border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.15);}
+.sim-badge{padding:4px 10px;border-radius:8px;font-size:11.5px;font-weight:700;display:inline-flex;align-items:center;gap:4px;}
+.sim-badge.ok{background:#dcfce7;color:#15803d;}
+.sim-badge.warn{background:#fff7ed;color:#c2410c;}
+.sim-badge.ot{background:#fee2e2;color:#b91c1c;}
+.sim-slider{width:100%;accent-color:#10b981;cursor:pointer;}
+</style>
+
+<!-- ── Section 1: Hero Header & Control Bar ──────────────────────────────────────────── -->
+<div class="sim-hero">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;">
+    <div>
+      <div style="font-size:22px;font-weight:800;display:flex;align-items:center;gap:10px;">
+        <span>🎮 เครื่องมือจำลองการจัดกำลังคน & OT</span>
+        <span style="background:#10b981;color:#fff;font-size:12px;padding:3px 10px;border-radius:12px;font-weight:700;">Simulated Solver</span>
+      </div>
+      <div style="font-size:13px;color:#cbd5e1;margin-top:4px;">
+        คำนวณจำนวนคนและวางแผนอนุมัติ OT รายโซน สำหรับ <b>🅰️ กะ A</b> และ <b>🅱️ กะ B</b> จากยอด Order จริง
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button id="btnSimResetWorkload" onclick="window._simResetWorkload()" style="border:0;background:rgba(255,255,255,0.15);color:#fff;padding:8px 14px;border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer;">
+        🔄 ใช้ยอดช่วงเวลาปัจจุบัน
+      </button>
+      <button id="btnSimUploadOrder" onclick="document.getElementById('simFileInput').click()" style="border:0;background:linear-gradient(90deg,#059669,#10b981);color:#fff;padding:8px 16px;border-radius:10px;font-size:12.5px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(16,185,129,0.3);">
+        📂 อัปโหลดไฟล์ Order สั่งซื้อใหม่
+      </button>
+      <input type="file" id="simFileInput" accept=".csv,.xlsx,.xls" style="display:none;" onchange="window._simHandleOrderFile(event)" />
+    </div>
+  </div>
+
+  <div class="sim-controls">
+    <div>
+      <div style="font-size:12.5px;font-weight:700;color:#94a3b8;margin-bottom:6px;">📊 แหล่งข้อมูล Workload:</div>
+      <div style="font-size:14px;font-weight:700;color:#38bdf8;" id="simWorkloadSourceTxt">
+        ${isCustom ? '📂 ไฟล์ Order สั่งซื้อที่อัปโหลด' : '📦 ยอดรวมจากช่วงเวลาที่เลือกในระบบ'}
+      </div>
+    </div>
+    <div>
+      <div style="display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;color:#94a3b8;margin-bottom:6px;">
+        <span>⚖️ สัดส่วนกระจายงาน (กะ A / กะ B):</span>
+        <span style="color:#10b981;" id="simShiftRatioTxt">🅰️ กะ A ${SState.shiftARatio}% : 🅱️ กะ B ${SState.shiftBRatio}%</span>
+      </div>
+      <input type="range" class="sim-slider" min="0" max="100" value="${SState.shiftARatio}" oninput="window._simUpdateShiftRatio(this.value)" />
+    </div>
+    <div>
+      <div style="font-size:12.5px;font-weight:700;color:#94a3b8;margin-bottom:6px;">⏱️ ชั่วโมงทำงานมาตรฐานต่อกะ:</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="number" step="0.5" min="1" max="12" value="${SState.targetHours}" class="sim-input-num" style="width:80px;background:#0f172a;color:#fff;border-color:#334155;" onchange="window._simUpdateTargetHours(this.value)" />
+        <span style="font-size:13px;color:#cbd5e1;">ชั่วโมง (เป้าหมาย 0 OT = ไม่เกิน 8 ชม.)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Section 2: Summary KPI Cards ──────────────────────────────────────────── -->
+<div id="simKpiSummary" style="margin-bottom:24px;"></div>
+
+<!-- ── Section 3: Smart 0-OT Recommendation Solver ────────────────────────── -->
+<div class="sim-card">
+  <h4>🎯 1. แนะนำจำนวนพนักงานสำหรับเป้าหมาย 0 OT (Zero OT Solver)</h4>
+  <p class="sub">ระบบคำนวณจำนวนคนในแต่ละ Zone สำหรับ <b>🅰️ กะ A</b> และ <b>🅱️ กะ B</b> เพื่อให้ทำงานจบใน ${SState.targetHours} ชม. โดยไม่ต้องเปิด OT</p>
+  <div style="overflow-x:auto;">
+    <table class="sim-table">
+      <thead>
+        <tr>
+          <th>Zone</th>
+          <th style="text-align:right;">Workload รวม (${volLabel})</th>
+          <th style="text-align:right;">ความเร็ว (${prodUnit})</th>
+          <th style="text-align:right;background:#e0e7ff;color:#3730a3;">🅰️ งานกะ A (${SState.shiftARatio}%)</th>
+          <th style="text-align:center;background:#e0e7ff;color:#3730a3;">🅰️ คนที่ต้องการ (กะ A)</th>
+          <th style="text-align:right;background:#fae8ff;color:#86198f;">🅱️ งานกะ B (${SState.shiftBRatio}%)</th>
+          <th style="text-align:center;background:#fae8ff;color:#86198f;">🅱️ คนที่ต้องการ (กะ B)</th>
+          <th style="text-align:center;">คนรวม (0 OT)</th>
+        </tr>
+      </thead>
+      <tbody id="simZeroOtTbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Section 4: Live Interactive Simulator & OT Calculator ──────────────── -->
+<div class="sim-card">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+    <h4>🎮 2. เครื่องมือจำลองการใส่จำนวนคนจริง (Live Headcount Simulator)</h4>
+    <button onclick="window._simFillZeroOtHeadcount()" style="border:0;background:#e0e7ff;color:#3730a3;padding:6px 14px;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;">
+      🪄 เติมจำนวนคน 0 OT ให้อัตโนมัติ
+    </button>
+  </div>
+  <p class="sub">ทดลองปรับใส่จำนวนคนที่มีจริงในแต่ละกะ ระบบจะคำนวณเวลาเสร็จงานและชั่วโมง OT ที่ต้องอนุมัติทันที</p>
+  <div style="overflow-x:auto;">
+    <table class="sim-table">
+      <thead>
+        <tr>
+          <th>Zone</th>
+          <th style="text-align:center;background:#f0fdf4;">🅰️ ใส่คน กะ A</th>
+          <th style="text-align:right;background:#f0fdf4;">เวลาที่ใช้ (กะ A)</th>
+          <th style="text-align:center;background:#f0fdf4;">สถานะ OT กะ A</th>
+          <th style="text-align:center;background:#faf5ff;">🅱️ ใส่คน กะ B</th>
+          <th style="text-align:right;background:#faf5ff;">เวลาที่ใช้ (กะ B)</th>
+          <th style="text-align:center;background:#faf5ff;">สถานะ OT กะ B</th>
+          <th style="text-align:right;">OT รวมประจำ Zone</th>
+        </tr>
+      </thead>
+      <tbody id="simLiveTbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Section 5: Cross-Zone Balancing Advice ─────────────────────────────── -->
+<div class="sim-card" style="margin-bottom:0;">
+  <h4>💡 3. ข้อแนะนำการบริหารกำลังคน & โยกย้ายพนักงาน (Cross-Zone Advice)</h4>
+  <p class="sub">วิเคราะห์โซนคอขวดและโซนที่เสร็จเร็วกว่ากำหนด เพื่อแนะการโยกคนข้ามโซนลด OT</p>
+  <div id="simAdviceBox"></div>
+</div>
+`;
+
+    // Render Logic Functions
+    function calculateSim() {
+      const ratioA = SState.shiftARatio / 100;
+      const ratioB = SState.shiftBRatio / 100;
+      const tHours = SState.targetHours;
+
+      let totalWorkload = 0;
+      let totalZeroOtA = 0;
+      let totalZeroOtB = 0;
+
+      let userTotalA = 0;
+      let userTotalB = 0;
+      let userTotalOtHours = 0;
+
+      const zones = Object.keys(activeWorkload).sort();
+
+      let zeroOtHtml = '';
+      let liveHtml = '';
+      const adviceItems = [];
+
+      zones.forEach(zName => {
+        const z = activeWorkload[zName];
+        const vol = z.vol || 0;
+        const rate = z.prodRate || 100;
+        totalWorkload += vol;
+
+        const volA = Math.round(vol * ratioA);
+        const volB = vol - volA; // remainder to B
+
+        // Needed pickers for 0 OT (rounded up)
+        const reqA = Math.ceil(volA / (tHours * rate)) || 0;
+        const reqB = Math.ceil(volB / (tHours * rate)) || 0;
+        totalZeroOtA += reqA;
+        totalZeroOtB += reqB;
+
+        // Render 0 OT row
+        zeroOtHtml += `<tr>
+          <td><b>${escapeZoneHtml(zName)}</b></td>
+          <td style="text-align:right;font-weight:700;">${fmt(vol)}</td>
+          <td style="text-align:right;color:#64748b;">${fmt(Math.round(rate))}</td>
+          <td style="text-align:right;background:#f5f3ff;color:#4338ca;font-weight:600;">${fmt(volA)}</td>
+          <td style="text-align:center;background:#f5f3ff;"><span style="background:#4338ca;color:#fff;font-weight:800;padding:3px 10px;border-radius:10px;font-size:13px;">${reqA} คน</span></td>
+          <td style="text-align:right;background:#fdf4ff;color:#7e22ce;font-weight:600;">${fmt(volB)}</td>
+          <td style="text-align:center;background:#fdf4ff;"><span style="background:#7e22ce;color:#fff;font-weight:800;padding:3px 10px;border-radius:10px;font-size:13px;">${reqB} คน</span></td>
+          <td style="text-align:center;font-weight:800;color:#0f172a;">${reqA + reqB} คน</td>
+        </tr>`;
+
+        // User assigned headcount
+        const userA = Number(SState.userPickersA[zName] ?? reqA);
+        const userB = Number(SState.userPickersB[zName] ?? reqB);
+        userTotalA += userA;
+        userTotalB += userB;
+
+        // Hours & OT calculation
+        const hoursA = userA > 0 ? (volA / (userA * rate)) : (volA > 0 ? 99 : 0);
+        const hoursB = userB > 0 ? (volB / (userB * rate)) : (volB > 0 ? 99 : 0);
+
+        const otA = Math.max(0, hoursA - tHours);
+        const otB = Math.max(0, hoursB - tHours);
+        const otZoneTotal = otA + otB;
+        userTotalOtHours += (otA * userA) + (otB * userB);
+
+        // Badge formats
+        const badgeA = userA === 0 && volA > 0
+          ? `<span class="sim-badge ot">⚠️ ไม่มีคน</span>`
+          : (hoursA <= tHours
+            ? `<span class="sim-badge ok">✅ 0 OT (${Math.round(hoursA*10)/10}h)</span>`
+            : `<span class="sim-badge ot">⚠️ OT +${Math.round(otA*10)/10}h</span>`);
+
+        const badgeB = userB === 0 && volB > 0
+          ? `<span class="sim-badge ot">⚠️ ไม่มีคน</span>`
+          : (hoursB <= tHours
+            ? `<span class="sim-badge ok">✅ 0 OT (${Math.round(hoursB*10)/10}h)</span>`
+            : `<span class="sim-badge ot">⚠️ OT +${Math.round(otB*10)/10}h</span>`);
+
+        // Check advice (Cross-zone balancing)
+        if(hoursA > tHours + 0.5) adviceItems.push({type:'ot', shift:'🅰️ กะ A', zone:zName, hours:hoursA, ot:otA});
+        else if(hoursA > 0 && hoursA < tHours - 1.5 && userA > 1) adviceItems.push({type:'spare', shift:'🅰️ กะ A', zone:zName, hours:hoursA, spareTime:tHours - hoursA});
+
+        if(hoursB > tHours + 0.5) adviceItems.push({type:'ot', shift:'🅱️ กะ B', zone:zName, hours:hoursB, ot:otB});
+        else if(hoursB > 0 && hoursB < tHours - 1.5 && userB > 1) adviceItems.push({type:'spare', shift:'🅱️ กะ B', zone:zName, hours:hoursB, spareTime:tHours - hoursB});
+
+        // Render Live simulator row
+        liveHtml += `<tr>
+          <td><b>${escapeZoneHtml(zName)}</b></td>
+          <td style="text-align:center;background:#f0fdf4;">
+            <input type="number" min="0" max="99" value="${userA}" class="sim-input-num" onchange="window._simSetUserPicker('${escapeZoneHtml(zName)}','A',this.value)" />
+          </td>
+          <td style="text-align:right;background:#f0fdf4;font-weight:700;color:${hoursA>tHours?'#b91c1c':'#15803d'};">
+            ${userA>0?Math.round(hoursA*10)/10+' ชม.':'-'}
+          </td>
+          <td style="text-align:center;background:#f0fdf4;">${badgeA}</td>
+          <td style="text-align:center;background:#faf5ff;">
+            <input type="number" min="0" max="99" value="${userB}" class="sim-input-num" onchange="window._simSetUserPicker('${escapeZoneHtml(zName)}','B',this.value)" />
+          </td>
+          <td style="text-align:right;background:#faf5ff;font-weight:700;color:${hoursB>tHours?'#b91c1c':'#7e22ce'};">
+            ${userB>0?Math.round(hoursB*10)/10+' ชม.':'-'}
+          </td>
+          <td style="text-align:center;background:#faf5ff;">${badgeB}</td>
+          <td style="text-align:right;font-weight:800;color:${otZoneTotal>0?'#b91c1c':'#15803d'};">
+            ${otZoneTotal>0?'+'+Math.round(otZoneTotal*10)/10+' ชม./คน':'0 ชม.'}
+          </td>
+        </tr>`;
+      });
+
+      // Update Tbodys
+      const zOtEl = document.getElementById('simZeroOtTbody'); if(zOtEl) zOtEl.innerHTML = zeroOtHtml;
+      const liveEl = document.getElementById('simLiveTbody'); if(liveEl) liveEl.innerHTML = liveHtml;
+
+      // Update KPI Cards
+      const kpiEl = document.getElementById('simKpiSummary');
+      if(kpiEl){
+        kpiEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
+          <div style="background:#fff;border-radius:16px;padding:18px;border:1px solid #e2e8f0;box-shadow:0 2px 10px rgba(0,0,0,0.04);">
+            <div style="font-size:12px;font-weight:700;color:#64748b;">📦 Workload รวมทั้งหมด</div>
+            <div style="font-size:26px;font-weight:900;color:#0f172a;margin-top:4px;">${fmt(totalWorkload)} <span style="font-size:13px;color:#64748b;">${volLabel}</span></div>
+            <div style="font-size:11.5px;color:#94a3b8;margin-top:4px;">${zones.length} โซนปฏิบัติการ</div>
+          </div>
+          <div style="background:#fff;border-radius:16px;padding:18px;border:1px solid #c7d2fe;box-shadow:0 2px 10px rgba(99,102,241,0.08);">
+            <div style="font-size:12px;font-weight:700;color:#4338ca;">🎯 คนที่ต้องการเพื่อ 0 OT</div>
+            <div style="font-size:26px;font-weight:900;color:#4338ca;margin-top:4px;">${totalZeroOtA + totalZeroOtB} <span style="font-size:13px;">คน</span></div>
+            <div style="font-size:11.5px;color:#6366f1;margin-top:4px;">🅰️ กะ A: ${totalZeroOtA} คน | 🅱️ กะ B: ${totalZeroOtB} คน</div>
+          </div>
+          <div style="background:#fff;border-radius:16px;padding:18px;border:1px solid #bbf7d0;box-shadow:0 2px 10px rgba(16,185,129,0.08);">
+            <div style="font-size:12px;font-weight:700;color:#15803d;">👷 คนที่ใส่ทดลองจริง</div>
+            <div style="font-size:26px;font-weight:900;color:#15803d;margin-top:4px;">${userTotalA + userTotalB} <span style="font-size:13px;">คน</span></div>
+            <div style="font-size:11.5px;color:#16a34a;margin-top:4px;">🅰️ กะ A: ${userTotalA} คน | 🅱️ กะ B: ${userTotalB} คน</div>
+          </div>
+          <div style="background:#fff;border-radius:16px;padding:18px;border:1px solid ${userTotalOtHours>0?'#fecaca':'#bbf7d0'};box-shadow:0 2px 10px rgba(0,0,0,0.04);">
+            <div style="font-size:12px;font-weight:700;color:${userTotalOtHours>0?'#b91c1c':'#15803d'};">⚠️ OT รวมประมาณการ</div>
+            <div style="font-size:26px;font-weight:900;color:${userTotalOtHours>0?'#b91c1c':'#15803d'};margin-top:4px;">${Math.round(userTotalOtHours*10)/10} <span style="font-size:13px;">คน-ชม.</span></div>
+            <div style="font-size:11.5px;color:${userTotalOtHours>0?'#dc2626':'#16a34a'};margin-top:4px;">${userTotalOtHours===0?'✅ สำเร็จ! ไม่เสีย OT':'ต้องเปิดอนุมัติ OT เพิ่ม'}</div>
+          </div>
+        </div>`;
+      }
+
+      // Update Advice Box
+      const adviceEl = document.getElementById('simAdviceBox');
+      if(adviceEl){
+        const ots = adviceItems.filter(x=>x.type==='ot');
+        const spares = adviceItems.filter(x=>x.type==='spare');
+
+        let aHtml = '<div style="display:flex;flex-direction:column;gap:10px;">';
+        if(ots.length === 0){
+          aHtml += `<div class="insight-box good">
+            <div class="icon">🎉</div>
+            <div class="text"><strong>ยอดเยี่ยม!</strong> การจัดกำลังคนในปัจจุบันทำให้งานจบได้ภายใน ${tHours} ชั่วโมงโดย <strong>ไม่มีชั่วโมง OT เลย (0 OT)</strong></div>
+          </div>`;
+        } else {
+          ots.forEach(o => {
+            aHtml += `<div class="insight-box warn">
+              <div class="icon">⚠️</div>
+              <div class="text"><strong>${o.shift} · Zone ${escapeZoneHtml(o.zone)} งานล้น:</strong> ใช้เวลาประมาณ ${Math.round(o.hours*10)/10} ชม. (เกินเป้า +${Math.round(o.ot*10)/10} ชม.)<br>แนะนำให้เพิ่มพนักงานอีก 1 คนในโซนนี้ หรือโยกคนจากโซนอื่นมาร่วมหยิบช่วงท้าย</div>
+            </div>`;
+          });
+        }
+
+        if(spares.length > 0){
+          spares.forEach(s => {
+            aHtml += `<div class="insight-box info">
+              <div class="icon">💡</div>
+              <div class="text"><strong>${s.shift} · Zone ${escapeZoneHtml(s.zone)} มีเวลาเหลือ:</strong> งานจะเสร็จใน ${Math.round(s.hours*10)/10} ชม. (เหลือเวลาอีก ${Math.round(s.spareTime*10)/10} ชม.)<br>สามารถโยกพนักงาน 1 คนจาก Zone นี้ไปช่วย Zone คอขวดหลังทำงานเสร็จได้</div>
+            </div>`;
+          });
+        }
+        aHtml += '</div>';
+        adviceEl.innerHTML = aHtml;
+      }
+    }
+
+    // Attach Handlers to Window for UI interaction
+    window._simUpdateShiftRatio = function(val){
+      val = Number(val);
+      SState.shiftARatio = val;
+      SState.shiftBRatio = 100 - val;
+      const txtEl = document.getElementById('simShiftRatioTxt');
+      if(txtEl) txtEl.textContent = `🅰️ กะ A ${val}% : 🅱️ กะ B ${100-val}%`;
+      calculateSim();
+    };
+
+    window._simUpdateTargetHours = function(val){
+      SState.targetHours = Math.max(1, Number(val)||8.0);
+      calculateSim();
+    };
+
+    window._simSetUserPicker = function(zName, shift, val){
+      const num = Math.max(0, parseInt(val, 10)||0);
+      if(shift === 'A') SState.userPickersA[zName] = num;
+      if(shift === 'B') SState.userPickersB[zName] = num;
+      calculateSim();
+    };
+
+    window._simFillZeroOtHeadcount = function(){
+      const ratioA = SState.shiftARatio / 100;
+      const ratioB = SState.shiftBRatio / 100;
+      const tHours = SState.targetHours;
+      Object.keys(activeWorkload).forEach(zName => {
+        const z = activeWorkload[zName];
+        const vol = z.vol || 0;
+        const rate = z.prodRate || 100;
+        const volA = Math.round(vol * ratioA);
+        const volB = vol - volA;
+        SState.userPickersA[zName] = Math.ceil(volA / (tHours * rate)) || 0;
+        SState.userPickersB[zName] = Math.ceil(volB / (tHours * rate)) || 0;
+      });
+      calculateSim();
+    };
+
+    window._simResetWorkload = function(){
+      SState.customWorkload = null;
+      SState.userPickersA = {};
+      SState.userPickersB = {};
+      const txtEl = document.getElementById('simWorkloadSourceTxt');
+      if(txtEl) txtEl.textContent = '📦 ยอดรวมจากช่วงเวลาที่เลือกในระบบ';
+      calculateSim();
+    };
+
+    window._simHandleOrderFile = function(e){
+      const file = e.target.files && e.target.files[0];
+      if(!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(evt){
+        try {
+          const text = evt.target.result;
+          const lines = text.split(/\r?\n/);
+          if(lines.length < 2){ alert('ไฟล์ไม่มีข้อมูล'); return; }
+
+          const customMap = {};
+          // Basic CSV parser assuming headers
+          const header = lines[0].toLowerCase().split(',');
+          let locIdx = header.findIndex(h=>h.includes('location')||h.includes('zone')||h.includes('โลเคชั่น'));
+          let qtyIdx = header.findIndex(h=>h.includes('qty')||h.includes('pcs')||h.includes('จำนวน')||h.includes('pick_qty'));
+
+          if(locIdx === -1) locIdx = 2; // fallback col 3
+          if(qtyIdx === -1) qtyIdx = 6; // fallback col 7
+
+          for(let i=1; i<lines.length; i++){
+            if(!lines[i].trim()) continue;
+            const cols = lines[i].split(',');
+            const rawLoc = (cols[locIdx] || '').trim().toUpperCase();
+            const q = Math.max(1, parseInt(cols[qtyIdx], 10)||1);
+
+            if(rawLoc){
+              const zInfo = getZoneInfo(rawLoc);
+              const zName = zInfo.zone || normalizeLocationCode(rawLoc) || 'OTHER';
+              if(!customMap[zName]){
+                const baseProd = zoneMap[zName] ? zoneMap[zName].prodRate : 100;
+                customMap[zName] = { name: zName, prodRate: baseProd, vol: 0, lines: 0 };
+              }
+              customMap[zName].vol += q;
+              customMap[zName].lines += 1;
+            }
+          }
+
+          if(Object.keys(customMap).length > 0){
+            SState.customWorkload = customMap;
+            SState.userPickersA = {};
+            SState.userPickersB = {};
+            const txtEl = document.getElementById('simWorkloadSourceTxt');
+            if(txtEl) txtEl.textContent = `📂 ไฟล์ Order สั่งซื้อ: ${file.name} (${Object.keys(customMap).length} โซน)`;
+            calculateSim();
+            alert(`อัปโหลดไฟล์ Order สำเร็จ! ประมวลผลได้ ${Object.keys(customMap).length} โซน`);
+          } else {
+            alert('ไม่พบข้อมูล Zone หรือ Qty ในไฟล์');
+          }
+        } catch(err){
+          alert('ไม่สามารถอ่านไฟล์ได้: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    };
+
+    // Initial Trigger
+    calculateSim();
   }
 };
+
 
 
 

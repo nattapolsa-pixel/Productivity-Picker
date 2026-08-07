@@ -164,6 +164,7 @@
     <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> ช่วงเวลา</button>
     <button class="nav" data-page="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8l-9-5-9 5v8l9 5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg> สินค้า (Items)</button>
     <button class="nav" data-page="report" style="margin-top:8px;background:linear-gradient(135deg,#7c3aed11,#6366f111);border:1px solid #c4b5fd;color:#6d28d9;font-weight:700;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> 📊 สรุปผล & Insights</button>
+    <button class="nav" data-page="simulator" style="margin-top:6px;background:linear-gradient(135deg,#05966911,#10b98111);border:1px solid #a7f3d0;color:#047857;font-weight:700;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg> 🎮 วางแผนกำลังคน & OT</button>
     <button class="upload-btn" id="btnUploadModal" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#059669,#10b981);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:10px;width:100%;box-shadow:0 4px 12px rgba(16,185,129,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:19px;height:19px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> 📤 นำเข้าไฟล์ CSV / Excel</button>
     <button id="btnExportPDF" onclick="exportPDF()" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#7c3aed,#6366f1);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:8px;width:100%;box-shadow:0 4px 12px rgba(99,102,241,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:19px;height:19px;flex-shrink:0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> 📋 Export PDF Report</button>
     <div class="sidebadge"><span class="live-pulse-dot"></span>กำลังเชื่อมต่อ BigQuery…</div>
@@ -298,10 +299,10 @@
         <!-- Shift Compare Chart -->
         <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px; grid-column: span 2;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">☀️🌙 เปรียบเทียบผลงาน (กะเช้า vs กะดึก)</h3>
+            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🅰️🅱️ เปรียบเทียบผลงาน (กะ A vs กะ B)</h3>
             <span class="pill" style="background:#f3e8ff; color:#7e22ce; font-weight:700; font-size:12.5px; padding:3px 10px;">Shift Comparison</span>
           </div>
-          <div class="sub" style="margin-bottom:14px;">เปรียบเทียบปริมาณงานระหว่างกะวัน (07:00-16:00) และกะดึก (19:00-04:00)</div>
+          <div class="sub" style="margin-bottom:14px;">กะ A/B อ้างอิง Team ใน Column I ของชีต “บันทึกเวลาทำงาน” · ถ้าไม่ใช่ A/B จะใช้ช่วงเวลาจริงเป็น fallback</div>
           <div style="height:200px; position:relative; flex:1;">
             <canvas id="shiftCompareChart"></canvas>
           </div>
@@ -322,9 +323,9 @@
 
       <div class="card wide">
         <h3>Productivity รายคน — Top 12</h3>
-        <div class="sub">Productivity = ปริมาณตามหน่วยที่เลือก ÷ (ชั่วโมงกะ + OT) · แยกกะเช้า/ดึก · ไม่นับงานที่ต่ำกว่า 3 ชั่วโมง</div>
+        <div class="sub">Productivity = ปริมาณตามหน่วยที่เลือก ÷ (ชั่วโมงกะ + OT) · แยกกะ A/B · ไม่นับงานที่ต่ำกว่า 3 ชั่วโมง</div>
         <div class="chartbox tall"><canvas id="picker"></canvas></div>
-        <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง แล้วจึงนำมารวม · ชั่วโมงทำงาน: กะเช้า 07:00–16:00 (OT 16:30–19:00) · กะดึก 19:00–04:00 (OT 04:30–07:00) — ตัวหาร Productivity = 9 ชม. + OT (นับบล็อกละ 30 นาที) และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
+        <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง แล้วจึงนำมารวม · การจัดกะ: ใช้ Team A/B จาก Sheet ก่อน; ถ้า Team ไม่ใช่ A/B ใช้เวลา 07:00–18:59 = A และ 19:00–06:59 = B · OT ยังอิงเวลาเดิม — ตัวหาร Productivity = 9 ชม. + OT (นับบล็อกละ 30 นาที) และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
       </div>
       <div class="card wide affiliation-breakdown-card">
         <h3>Productivity แยกตามสังกัด</h3>
@@ -527,6 +528,10 @@
     <section class="page" data-page="report">
       <div id="reportPage"></div>
     </section>
+
+    <section class="page" data-page="simulator">
+      <div id="simulatorPage"></div>
+    </section>
   </main>
 </div>
 <!-- Modal สำหรับอัปโหลดไฟล์ CSV/Excel ตรงเข้า BigQuery -->
@@ -711,6 +716,6 @@
 <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
 <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
 <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-<script src="app.js?v=20260807-insights-report-v30-items"></script>
+<script src="app.js?v=20260807-workforce-simulator-v32"></script>
 </body>
 </html>
