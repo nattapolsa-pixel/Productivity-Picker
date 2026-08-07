@@ -4028,7 +4028,9 @@ const builders = {
         allItems = allItems.filter(x => 
           (x.sku && x.sku.toLowerCase().includes(itemSearchTerm)) ||
           (x.name && x.name.toLowerCase().includes(itemSearchTerm)) ||
-          (x.owner && x.owner.toLowerCase().includes(itemSearchTerm))
+          (x.owner && x.owner.toLowerCase().includes(itemSearchTerm)) ||
+          (x.locationStr && x.locationStr.toLowerCase().includes(itemSearchTerm)) ||
+          (x.zoneStr && x.zoneStr.toLowerCase().includes(itemSearchTerm))
         );
       }
 
@@ -4038,15 +4040,15 @@ const builders = {
       const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
       const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
 
-      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (BigQuery) ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
+      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th>Location</th><th>Zone</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (BigQuery) ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
       if (!displayItems.length) {
         const itemState = itemCubeLoadState.get(itemCubeRequestKey());
         if(!hasCurrentItemCube() && itemState && itemState.status === 'error'){
-          h += `<tr><td colspan="7" style="text-align:center;color:#b91c1c;padding:24px">โหลดรายการสินค้าไม่สำเร็จ: ${escapeZoneHtml(itemState.message || '')} <button onclick="retryCurrentItemCube()" class="refreshbtn">ลองอีกครั้ง</button></td></tr>`;
+          h += `<tr><td colspan="9" style="text-align:center;color:#b91c1c;padding:24px">โหลดรายการสินค้าไม่สำเร็จ: ${escapeZoneHtml(itemState.message || '')} <button onclick="retryCurrentItemCube()" class="refreshbtn">ลองอีกครั้ง</button></td></tr>`;
         }else if(!hasCurrentItemCube()){
-          h += '<tr><td colspan="7" style="text-align:center;color:#64748b;padding:24px">⏳ กำลังโหลดรายการสินค้าเฉพาะช่วงวันที่เลือก… หน้าอื่นยังใช้งานได้ตามปกติ</td></tr>';
+          h += '<tr><td colspan="9" style="text-align:center;color:#64748b;padding:24px">⏳ กำลังโหลดรายการสินค้าเฉพาะช่วงวันที่เลือก… หน้าอื่นยังใช้งานได้ตามปกติ</td></tr>';
         }else{
-          h += '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
+          h += '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
         }
       } else {
         displayItems.forEach((x, i) => {
@@ -4068,11 +4070,20 @@ const builders = {
           const pcsCellStyle = isPcs ? 'font-weight:700;color:#0284c7;background:#f0f9ff;' : 'font-weight:600;color:#0f766e;';
           const qtyCellStyle = !isPcs ? 'font-weight:700;color:#4338ca;background:#eef2ff;' : 'font-weight:600;color:#4338ca;';
 
+          const locPill = x.locationStr && x.locationStr !== '-' 
+            ? `<span class="pill" style="background:#f8fafc;color:#0f172a;border:1px solid #cbd5e1;font-family:monospace;font-weight:600;">${x.locationStr}</span>`
+            : '<span style="color:#94a3b8;">-</span>';
+          const zonePill = x.zoneStr && x.zoneStr !== '-'
+            ? `<span class="pill" style="background:#e0f2fe;color:#0369a1;font-weight:700;">${x.zoneStr}</span>`
+            : '<span style="color:#94a3b8;">-</span>';
+
           h += `<tr ${rowBg}>
             <td><span class="rank">${i + 1}</span></td>
             <td><b>${x.sku}</b></td>
             <td ${nameStyle}>${x.name || '-'}</td>
             <td><span class="pill">${x.owner || '-'}</span></td>
+            <td>${locPill}</td>
+            <td>${zonePill}</td>
             <td class="num" style="${isEx ? 'color:#94a3b8;' : pcsCellStyle}">${fmt(x.pcs)}</td>
             <td class="num" style="${isEx ? 'color:#94a3b8;' : qtyCellStyle}">${fmt(x.qty)}</td>
             <td style="text-align:center;display:flex;align-items:center;justify-content:center;gap:10px;">${statusBadge} ${btnAction}</td>
