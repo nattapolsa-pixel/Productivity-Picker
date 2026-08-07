@@ -39,7 +39,7 @@ const ZONE_TYPE_COLORS = Object.freeze({
   'on floor':'#475569',
   '-':'#94a3b8'
 });
-const TITLES = {overview:'ภาพรวม',prod:'Productivity',zones:'โซน & ผังคลัง',typebreak:'Activity by Type Pick',pickers:'พนักงาน (Picker)',time:'ช่วงเวลา',items:'สินค้า (Items)'};
+const TITLES = {overview:'ภาพรวม',prod:'Productivity',zones:'โซน & ผังคลัง',typebreak:'Activity by Type Pick',pickers:'พนักงาน (Picker)',time:'ช่วงเวลา',items:'สินค้า (Items)',report:'📊 สรุปผล & Insights'};
 const SHIFT_LABEL = {morning:'🌅 เช้า', night:'🌙 ดึก', '-':'-'};
 
 Chart.register(ChartDataLabels);
@@ -4383,8 +4383,317 @@ const builders = {
     }
 
     renderItemTable();
+  },
+
+  report(){
+    const el = document.getElementById('reportPage');
+    if(!el) return;
+    const isPcs = unitMode === 'pcs';
+    const kpis = A.kpis;
+    const daily = A.daily || [];
+    const byPicker = A.by_picker || [];
+    const byZone = A.by_zone_prod || A.by_zone || [];
+    const bySlot = A.by_timeslot || [];
+
+    // ── Smart insight computation ──────────────────────────────────────────
+    const prodField = isPcs ? 'avg_pcs_prod' : 'avg_prod';
+    const unitLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+    const volLabel  = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
+    const volField  = isPcs ? 'pcs' : 'qty';
+
+    const totalVol = isPcs ? kpis.pcs : kpis.qty;
+    const avgProd  = isPcs ? kpis.avg_pcs_prod : kpis.avg_prod;
+
+    // trend: compare first-half vs second-half
+    let trendTxt = '', trendIcon = '📊', trendColor = '#64748b';
+    if(daily.length >= 2){
+      const mid = Math.floor(daily.length / 2);
+      const firstH = daily.slice(0, mid).map(d => d[prodField]).filter(v=>v>0);
+      const secondH = daily.slice(mid).map(d => d[prodField]).filter(v=>v>0);
+      const fAvg = firstH.length ? firstH.reduce((a,b)=>a+b,0)/firstH.length : 0;
+      const sAvg = secondH.length ? secondH.reduce((a,b)=>a+b,0)/secondH.length : 0;
+      const delta = sAvg - fAvg;
+      if(Math.abs(delta) < 1){ trendTxt='Productivity ทรงตัว ไม่เปลี่ยนแปลงมาก'; trendIcon='➡️'; trendColor='#64748b'; }
+      else if(delta > 0){ trendTxt=`Productivity ดีขึ้น +${Math.round(delta*10)/10} ${unitLabel} เมื่อเทียบช่วงแรก`; trendIcon='📈'; trendColor='#10b981'; }
+      else{ trendTxt=`Productivity ลดลง ${Math.round(delta*10)/10} ${unitLabel} เมื่อเทียบช่วงแรก`; trendIcon='📉'; trendColor='#ef4444'; }
+    }
+
+    // best / worst day
+    const daysWithProd = daily.filter(d=>d[prodField]>0);
+    const bestDay  = daysWithProd.sort((a,b)=>b[prodField]-a[prodField])[0];
+    const worstDay = daysWithProd.sort((a,b)=>a[prodField]-b[prodField])[0];
+
+    // top picker
+    const activePickers = byPicker.filter(p=>(isPcs?p.avg_pcs_prod:p.avg_prod)>0);
+    const topPicker = activePickers.sort((a,b)=>(isPcs?b.avg_pcs_prod-a.avg_pcs_prod:b.avg_prod-a.avg_prod))[0];
+    const topVolPicker = byPicker.sort((a,b)=>b[volField]-a[volField])[0];
+
+    // top zone
+    const topZone = byZone.filter(z=>z.name&&z.name!=='-')[0];
+
+    // peak time slot
+    const peakSlot = bySlot.slice().sort((a,b)=>b[volField]-a[volField])[0];
+
+    // target hit rate
+    const hitDays = daily.filter(d=>d[prodField]>=prodTarget).length;
+    const hitPct  = daily.length ? Math.round(hitDays/daily.length*100) : 0;
+
+    // shift split from kpis (use daily with picker by shift if available)
+    const shiftData = A.by_affiliation || [];
+
+    // picker pass rate (>= target)
+    const pickerPassCount = activePickers.filter(p=>(isPcs?p.avg_pcs_prod:p.avg_prod)>=prodTarget).length;
+    const pickerPassPct   = activePickers.length ? Math.round(pickerPassCount/activePickers.length*100) : 0;
+
+    // ── HTML template ─────────────────────────────────────────────────────
+    el.innerHTML = `
+<style>
+.rpt-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;}
+.rpt-kcard{background:linear-gradient(135deg,var(--c1),var(--c2));border-radius:18px;padding:20px 18px;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,0.12);position:relative;overflow:hidden;}
+.rpt-kcard::after{content:'';position:absolute;right:-18px;bottom:-18px;width:90px;height:90px;border-radius:50%;background:rgba(255,255,255,0.1);}
+.rpt-kcard .icon{font-size:28px;margin-bottom:8px;}
+.rpt-kcard .val{font-size:30px;font-weight:900;letter-spacing:-1px;line-height:1;}
+.rpt-kcard .lbl{font-size:12px;opacity:.85;margin-top:5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
+.rpt-kcard .sub{font-size:11px;opacity:.7;margin-top:3px;}
+.rpt-row2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;}
+.rpt-row3{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:24px;}
+.rpt-card{background:#fff;border-radius:18px;padding:22px;box-shadow:0 2px 16px rgba(15,23,42,0.07);border:1px solid #f1f5f9;}
+.rpt-card h4{margin:0 0 4px;font-size:15px;font-weight:700;color:#0f172a;}
+.rpt-card .sub{font-size:12px;color:#94a3b8;margin:0 0 16px;}
+.insight-box{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:12px;margin-bottom:10px;}
+.insight-box .icon{font-size:22px;flex-shrink:0;}
+.insight-box .text{font-size:13.5px;line-height:1.55;color:#1e293b;}
+.insight-box .text strong{color:#0f172a;}
+.insight-box.good{background:linear-gradient(135deg,#ecfdf5,#d1fae5);border:1px solid #a7f3d0;}
+.insight-box.warn{background:linear-gradient(135deg,#fff7ed,#ffedd5);border:1px solid #fed7aa;}
+.insight-box.info{background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;}
+.insight-box.neutral{background:linear-gradient(135deg,#f8fafc,#f1f5f9);border:1px solid #e2e8f0;}
+.rpt-chartbox{height:220px;position:relative;}
+.rpt-chartbox-tall{height:260px;position:relative;}
+.rpt-bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.rpt-bar-row .name{font-size:12.5px;color:#334155;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:80px;max-width:120px;}
+.rpt-bar-wrap{flex:1;background:#f1f5f9;border-radius:6px;height:18px;overflow:hidden;}
+.rpt-bar-fill{height:100%;border-radius:6px;transition:.5s;}
+.rpt-bar-row .vval{font-size:12px;color:#64748b;font-weight:700;min-width:50px;text-align:right;}
+.target-line{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:10px;margin-bottom:8px;font-size:13px;font-weight:600;}
+.rpt-section-title{font-size:17px;font-weight:800;color:#0f172a;margin:0 0 16px;display:flex;align-items:center;gap:8px;}
+@media(max-width:900px){.rpt-grid{grid-template-columns:repeat(2,1fr);}.rpt-row2,.rpt-row3{grid-template-columns:1fr;}}
+</style>
+
+<!-- ── Section 1: KPI Overview ──────────────────────────────────────────── -->
+<div style="margin-bottom:28px;">
+  <div class="rpt-section-title">🎯 ภาพรวมผลการปฏิบัติงาน</div>
+  <div class="rpt-grid">
+    <div class="rpt-kcard" style="--c1:#6366f1;--c2:#4f46e5;">
+      <div class="icon">📦</div>
+      <div class="val">${fmt(totalVol)}</div>
+      <div class="lbl">ปริมาณ${volLabel}รวม</div>
+      <div class="sub">Lines: ${fmt(kpis.lines)}</div>
+    </div>
+    <div class="rpt-kcard" style="--c1:#0ea5e9;--c2:#0284c7;">
+      <div class="icon">⚡</div>
+      <div class="val">${avgProd}</div>
+      <div class="lbl">Productivity เฉลี่ย</div>
+      <div class="sub">${unitLabel}</div>
+    </div>
+    <div class="rpt-kcard" style="--c1:#10b981;--c2:#059669;">
+      <div class="icon">👷</div>
+      <div class="val">${kpis.pickers}</div>
+      <div class="lbl">จำนวน Picker</div>
+      <div class="sub">คนที่มีข้อมูลในช่วงนี้</div>
+    </div>
+    <div class="rpt-kcard" style="--c1:${hitPct>=70?'#f59e0b':'#ef4444'};--c2:${hitPct>=70?'#d97706':'#dc2626'};">
+      <div class="icon">${hitPct>=70?'🏆':'⚠️'}</div>
+      <div class="val">${hitPct}%</div>
+      <div class="lbl">วันที่ถึงเป้า</div>
+      <div class="sub">${hitDays} / ${daily.length} วัน (เป้า ${prodTarget} ${unitLabel})</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Section 2: Smart Insights ─────────────────────────────────────────── -->
+<div style="margin-bottom:28px;">
+  <div class="rpt-section-title">🧠 วิเคราะห์อัจฉริยะ · ภาษาคน</div>
+  <div class="rpt-row2">
+    <div>
+      ${trendTxt ? `<div class="insight-box ${trendColor==='#10b981'?'good':trendColor==='#ef4444'?'warn':'neutral'}">
+        <div class="icon">${trendIcon}</div>
+        <div class="text">${trendTxt}</div>
+      </div>` : ''}
+      ${bestDay ? `<div class="insight-box good">
+        <div class="icon">🌟</div>
+        <div class="text"><strong>วันที่ดีที่สุด:</strong> ${bestDay.date} — Productivity ${bestDay[prodField]} ${unitLabel}<br>ปริมาณหยิบ ${fmt(bestDay[volField])} ${volLabel} / ${bestDay.pickers || '-'} คน</div>
+      </div>` : ''}
+      ${worstDay && worstDay.date !== (bestDay && bestDay.date) ? `<div class="insight-box warn">
+        <div class="icon">⚠️</div>
+        <div class="text"><strong>วันที่ต่ำสุด:</strong> ${worstDay.date} — Productivity ${worstDay[prodField]} ${unitLabel}<br>ควรตรวจสอบสาเหตุ เช่น กำลังคน, งานหนัก, ชุดคำสั่งหยิบ</div>
+      </div>` : ''}
+      ${topPicker ? `<div class="insight-box info">
+        <div class="icon">🏅</div>
+        <div class="text"><strong>Picker ที่ดีที่สุด:</strong> ${escapeZoneHtml(topPicker.name||topPicker.picker)}<br>Productivity เฉลี่ย <strong>${isPcs?topPicker.avg_pcs_prod:topPicker.avg_prod} ${unitLabel}</strong></div>
+      </div>` : ''}
+    </div>
+    <div>
+      ${topZone ? `<div class="insight-box info">
+        <div class="icon">🗺️</div>
+        <div class="text"><strong>โซนที่ Productive สุด:</strong> ${escapeZoneHtml(topZone.name)}<br>Productivity ${isPcs?topZone.avg_pcs_prod:topZone.avg_prod} ${unitLabel} · ปริมาณ ${fmt(isPcs?topZone.pcs:topZone.qty)} ${volLabel}</div>
+      </div>` : ''}
+      ${peakSlot ? `<div class="insight-box good">
+        <div class="icon">⏰</div>
+        <div class="text"><strong>ช่วงเวลาที่หยิบเยอะสุด:</strong> ${peakSlot.label}<br>ปริมาณ ${fmt(isPcs?peakSlot.pcs:peakSlot.qty)} ${volLabel} — ควรวางแผนกำลังคนรองรับ</div>
+      </div>` : ''}
+      <div class="insight-box ${pickerPassPct>=70?'good':pickerPassPct>=40?'warn':'neutral'}">
+        <div class="icon">${pickerPassPct>=70?'✅':pickerPassPct>=40?'🟡':'🔴'}</div>
+        <div class="text"><strong>Picker ผ่านเป้าหมาย:</strong> ${pickerPassPct}% (${pickerPassCount} / ${activePickers.length} คน)<br>${pickerPassPct>=70?'ส่วนใหญ่ทำได้ดี ควรรักษาระดับนี้':pickerPassPct>=40?'ยังมี Picker ที่ต้องพัฒนาเพิ่ม':'กำลังคนส่วนใหญ่ยังต่ำกว่าเป้า ต้องวิเคราะห์เร่งด่วน'}</div>
+      </div>
+      ${topVolPicker && topVolPicker.picker !== (topPicker && topPicker.picker) ? `<div class="insight-box neutral">
+        <div class="icon">📦</div>
+        <div class="text"><strong>ปริมาณหยิบมากสุด:</strong> ${escapeZoneHtml(topVolPicker.name||topVolPicker.picker)}<br>${fmt(topVolPicker[volField])} ${volLabel} รวมทั้งช่วง</div>
+      </div>` : ''}
+    </div>
+  </div>
+</div>
+
+<!-- ── Section 3: Daily Trend Chart ─────────────────────────────────────── -->
+<div class="rpt-row3" style="margin-bottom:28px;">
+  <div class="rpt-card">
+    <h4>📈 แนวโน้ม Productivity รายวัน</h4>
+    <p class="sub">เส้น = Productivity เฉลี่ย · แท่ง = ปริมาณ ${volLabel}</p>
+    <div class="rpt-chartbox-tall"><canvas id="rptTrendChart"></canvas></div>
+  </div>
+  <div class="rpt-card">
+    <h4>🕐 กิจกรรมรายชั่วโมง</h4>
+    <p class="sub">ช่วงเวลาไหนหยิบเยอะ</p>
+    <div class="rpt-chartbox-tall"><canvas id="rptSlotChart"></canvas></div>
+  </div>
+</div>
+
+<!-- ── Section 4: Top Pickers + Zone Analysis ────────────────────────────── -->
+<div class="rpt-row2" style="margin-bottom:28px;">
+  <div class="rpt-card">
+    <h4>👷 Top 8 Picker — Productivity</h4>
+    <p class="sub">เรียงตาม Productivity (${unitLabel})</p>
+    <div id="rptPickerBars"></div>
+  </div>
+  <div class="rpt-card">
+    <h4>🗺️ Zone Breakdown</h4>
+    <p class="sub">ปริมาณ${volLabel}ต่อโซน (Top 10)</p>
+    <div class="rpt-chartbox"><canvas id="rptZoneChart"></canvas></div>
+  </div>
+</div>
+
+<!-- ── Section 5: Target Achievement ─────────────────────────────────────── -->
+<div class="rpt-card" style="margin-bottom:24px;">
+  <h4>🎯 สรุปการบรรลุเป้าหมายรายวัน (เป้า: ${prodTarget} ${unitLabel})</h4>
+  <p class="sub">แสดงแต่ละวันว่า Productivity ถึงเป้าหมายหรือไม่</p>
+  <div id="rptTargetRows"></div>
+</div>
+`;
+
+    // ── Render charts ──────────────────────────────────────────────────────
+    // Trend chart
+    const trendCanvas = document.getElementById('rptTrendChart');
+    if(trendCanvas && daily.length > 0){
+      const maxV = Math.max(1, ...daily.map(d=>isPcs?d.pcs:d.qty));
+      new Chart(trendCanvas, {
+        data:{
+          labels: daily.map(d=>d.date.length>5?d.date.slice(5):d.date),
+          datasets:[
+            {type:'bar',label:`${volLabel}`,data:daily.map(d=>isPcs?d.pcs:d.qty),
+              backgroundColor:daily.map(d=>d[prodField]>=prodTarget?'rgba(16,185,129,.75)':'rgba(99,102,241,.65)'),
+              borderRadius:5,yAxisID:'y',
+              datalabels:{display:ctx=>{const v=Number(ctx.dataset.data[ctx.dataIndex]||0);return v>0&&(v/maxV>=0.1||daily.length<=4);},anchor:'end',align:'start',offset:3,formatter:fmt,color:'#fff',backgroundColor:'rgba(15,23,42,.18)',borderRadius:4,padding:{top:2,right:5,bottom:2,left:5},font:{weight:'700',size:9}}},
+            {type:'line',label:`Productivity (${unitLabel})`,data:daily.map(d=>d[prodField]),
+              borderColor:'#f43f5e',backgroundColor:'rgba(244,63,94,.1)',tension:.35,
+              pointRadius:4,pointBackgroundColor:'#f43f5e',fill:true,yAxisID:'y1',
+              datalabels:{display:false}}
+          ]
+        },
+        options:{maintainAspectRatio:false,layout:{padding:{top:22,right:10,bottom:0,left:10}},
+          plugins:{legend:{display:true,position:'top',labels:{font:{weight:'600',size:11}}},datalabels:{}},
+          scales:{y:{position:'left',grid:{color:'#f1f5f9'},ticks:{callback:fmt}},y1:{position:'right',grid:{drawOnChartArea:false},ticks:{callback:v=>v}}}}
+      });
+    }
+
+    // Slot chart (polar/bar)
+    const slotCanvas = document.getElementById('rptSlotChart');
+    if(slotCanvas && bySlot.length > 0){
+      const slotVols = bySlot.map(s=>isPcs?s.pcs:s.qty);
+      const maxSlot = Math.max(1,...slotVols);
+      new Chart(slotCanvas, {
+        type:'bar',
+        data:{
+          labels:bySlot.map(s=>s.label),
+          datasets:[{
+            label:`${volLabel}`,data:slotVols,
+            backgroundColor:slotVols.map(v=>`rgba(99,102,241,${0.35+0.55*(v/maxSlot)})`),
+            borderRadius:6,datalabels:{display:false}
+          }]
+        },
+        options:{maintainAspectRatio:false,plugins:{legend:{display:false},datalabels:{display:false}},
+          scales:{x:{grid:{display:false},ticks:{font:{size:10}}},y:{grid:{color:'#f1f5f9'},ticks:{callback:fmt}}}}
+      });
+    }
+
+    // Zone chart (horizontal doughnut-style via horizontal bar)
+    const zoneCanvas = document.getElementById('rptZoneChart');
+    const topZones = byZone.filter(z=>z.name&&z.name!=='-').slice(0,10);
+    if(zoneCanvas && topZones.length > 0){
+      const zVols = topZones.map(z=>isPcs?z.pcs:z.qty);
+      const zColors = ['#6366f1','#10b981','#f59e0b','#ef4444','#8b5cf6','#0ea5e9','#ec4899','#14b8a6','#f97316','#a855f7'];
+      new Chart(zoneCanvas, {
+        type:'doughnut',
+        data:{labels:topZones.map(z=>z.name),datasets:[{data:zVols,backgroundColor:zColors,borderWidth:2,borderColor:'#fff'}]},
+        options:{maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:11},boxWidth:12}},datalabels:{display:false}}}
+      });
+    }
+
+    // Top picker bars
+    const pickerBarsEl = document.getElementById('rptPickerBars');
+    if(pickerBarsEl){
+      const sortedPickers = activePickers.slice().sort((a,b)=>(isPcs?b.avg_pcs_prod-a.avg_pcs_prod:b.avg_prod-a.avg_prod)).slice(0,8);
+      const maxProd = sortedPickers.length ? Math.max(1,...sortedPickers.map(p=>isPcs?p.avg_pcs_prod:p.avg_prod)) : 1;
+      let pbHtml = '';
+      sortedPickers.forEach((p,i)=>{
+        const pv = isPcs ? p.avg_pcs_prod : p.avg_prod;
+        const pct = Math.round(pv/maxProd*100);
+        const pass = pv >= prodTarget;
+        const barCol = pass ? '#10b981' : i===0?'#6366f1':'#94a3b8';
+        pbHtml += `<div class="rpt-bar-row">
+          <div class="name" title="${escapeZoneHtml(p.name||p.picker)}">${pass?'✅ ':''}<b>${escapeZoneHtml((p.name||p.picker).length>14?(p.name||p.picker).slice(0,13)+'…':p.name||p.picker)}</b></div>
+          <div class="rpt-bar-wrap"><div class="rpt-bar-fill" style="width:${pct}%;background:${barCol};"></div></div>
+          <div class="vval">${pv} <span style="font-size:10px;color:#94a3b8">${unitLabel.split('/')[0]}</span></div>
+        </div>`;
+      });
+      pickerBarsEl.innerHTML = pbHtml || '<div style="color:#94a3b8;font-size:13px;padding:10px;">ไม่พบข้อมูล Picker</div>';
+    }
+
+    // Target rows
+    const targetRowsEl = document.getElementById('rptTargetRows');
+    if(targetRowsEl && daily.length > 0){
+      let trHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;">';
+      daily.forEach(d=>{
+        const pv = d[prodField];
+        const vv = d[volField];
+        const pass = pv >= prodTarget;
+        const pct = prodTarget > 0 ? Math.min(100,Math.round(pv/prodTarget*100)) : 0;
+        trHtml += `<div style="border-radius:10px;padding:10px 14px;background:${pass?'#f0fdf4':'#fff7ed'};border:1px solid ${pass?'#a7f3d0':'#fed7aa'};">
+          <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+            <span style="font-weight:700;color:#0f172a;font-size:13px;">${d.date.length>5?d.date.slice(5):d.date}</span>
+            <span style="font-size:11px;font-weight:700;color:${pass?'#059669':'#ea580c'}">${pass?'✅ ผ่าน':'⚠️ ยังไม่ผ่าน'}</span>
+          </div>
+          <div style="background:#e2e8f0;border-radius:4px;height:6px;overflow:hidden;margin-bottom:4px;">
+            <div style="height:100%;width:${pct}%;background:${pass?'#10b981':'#f59e0b'};border-radius:4px;"></div>
+          </div>
+          <div style="font-size:12px;color:#475569;">${pv} ${unitLabel} · ${fmt(vv)} ${volLabel}</div>
+        </div>`;
+      });
+      trHtml += '</div>';
+      targetRowsEl.innerHTML = trHtml;
+    }
   }
 };
+
 
 function renderTargetVsActualChart() {
   const el = document.getElementById('targetVsActualChart');
