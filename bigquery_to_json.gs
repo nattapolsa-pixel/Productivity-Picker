@@ -20,7 +20,7 @@ const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ regio
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
 const DASHBOARD_SCHEMA_VERSION = 'pick-units-v7-resilient-cubes';
-const MAX_UPLOAD_ROWS = 50000;
+const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
 const MAX_UPLOAD_CHUNK_ROWS = 8000;
@@ -609,6 +609,12 @@ function doPost(e) {
       });
     }
     const postData = JSON.parse(e.postData.contents);
+    // รุ่นใหม่: Browser อ่าน XLSX แล้วส่งเฉพาะ 11 คอลัมน์เป็น CSV UTF-8
+    if (postData.action === 'upload_chunk_csv' && typeof postData.csv === 'string') {
+      const chunkResult = uploadChunkToBigQuery_(postData);
+      return json_(Object.assign({ status: 'success' }, chunkResult));
+    }
+    // รองรับหน้าเว็บรุ่นเดิมที่ยังส่ง Array/JSON
     if (postData.action === 'upload_chunk' && Array.isArray(postData.rows)) {
       const chunkResult = uploadChunkToBigQuery_(postData);
       return json_(Object.assign({ status: 'success' }, chunkResult));
@@ -764,7 +770,11 @@ function uploadChunkToBigQuery_(request) {
   ensureUploadService_();
   validateUploadMeta_(request.meta || {});
   const envelope = validateUploadChunkEnvelope_(request);
-  const rows = request.rows || [];
+  const isCsv = request.action === 'upload_chunk_csv';
+  const rows = isCsv
+    ? parseUploadCsvRows_(request.csv, request.rowCount, request.format)
+    : (request.rows || []);
+
   if (!rows.length) throw uploadError_('EMPTY_CHUNK', 'ชุดข้อมูลที่ส่งมาว่างเปล่า');
   if (rows.length > MAX_UPLOAD_CHUNK_ROWS) {
     throw uploadError_(
@@ -774,7 +784,8 @@ function uploadChunkToBigQuery_(request) {
     );
   }
 
-  const normalized = normalizeUploadRows_(rows, request.fmt);
+  // CSV ที่ Browser ส่งมามีลำดับ 11 คอลัมน์เดียวกับ Array รุ่นเดิม
+  const normalized = normalizeUploadRows_(rows, isCsv ? 'array' : request.fmt);
   if (normalized.errors.length > 0) {
     const err = uploadError_(
       'VALIDATION_FAILED',
@@ -790,8 +801,18 @@ function uploadChunkToBigQuery_(request) {
   }
 
   const stageTable = uploadChunkTable_(envelope.sessionId, envelope.chunkIndex);
-  const ndjson = normalized.rows.map(function(row) { return JSON.stringify(row); }).join('\n');
-  const blob = Utilities.newBlob(ndjson, 'application/octet-stream', stageTable + '.ndjson');
+  let blob;
+  let loadJob;
+  if (isCsv) {
+    // หลังตรวจซ้ำฝั่ง Server แล้ว สร้าง CSV มาตรฐานและให้ BigQuery โหลด CSV โดยตรง
+    const normalizedCsv = normalized.rows.map(uploadNormalizedRowToCsvLine_).join('\n');
+    blob = Utilities.newBlob(normalizedCsv, 'text/csv;charset=utf-8', stageTable + '.csv');
+  } else {
+    // เส้นทางสำรองสำหรับหน้าเว็บรุ่นเดิม
+    const ndjson = normalized.rows.map(function(row) { return JSON.stringify(row); }).join('\n');
+    blob = Utilities.newBlob(ndjson, 'application/octet-stream', stageTable + '.ndjson');
+  }
+
   const normalizedBytes = blob.getBytes().length;
   if (normalizedBytes > MAX_POST_BYTES) {
     throw uploadError_(
@@ -802,7 +823,10 @@ function uploadChunkToBigQuery_(request) {
 
   const jobId = 'pick_chunk_' + envelope.sessionId.substring(0, 20) + '_' +
     envelope.chunkIndex + '_' + Utilities.getUuid().replace(/-/g, '').substring(0, 12);
-  const loadJob = startLoadJob_(stageTable, jobId, blob, 'WRITE_TRUNCATE');
+  loadJob = isCsv
+    ? startCsvLoadJob_(stageTable, jobId, blob, 'WRITE_TRUNCATE')
+    : startLoadJob_(stageTable, jobId, blob, 'WRITE_TRUNCATE');
+
   const stagedRows = Number(
     loadJob && loadJob.statistics && loadJob.statistics.load &&
     loadJob.statistics.load.outputRows || 0
@@ -823,6 +847,7 @@ function uploadChunkToBigQuery_(request) {
   }
   const chunkManifest = {
     schema: 'pick-upload-chunk-v1',
+    transport: isCsv ? 'csv-v1' : 'array-json-v1',
     sessionId: envelope.sessionId,
     chunkIndex: envelope.chunkIndex,
     totalChunks: envelope.totalChunks,
@@ -835,7 +860,8 @@ function uploadChunkToBigQuery_(request) {
   setUploadChunkManifest_(stageTable, chunkManifest);
 
   return {
-    message: 'โหลดชุดที่ ' + (envelope.chunkIndex + 1) + '/' + envelope.totalChunks + ' สำเร็จ',
+    message: 'โหลด' + (isCsv ? ' CSV' : '') + ' ชุดที่ ' +
+      (envelope.chunkIndex + 1) + '/' + envelope.totalChunks + ' สำเร็จ',
     sessionId: envelope.sessionId,
     chunkIndex: envelope.chunkIndex,
     totalChunks: envelope.totalChunks,
@@ -955,9 +981,10 @@ function uploadChunkCanonicalRowSql_() {
 }
 
 function getUploadChunkIntegrity_(stageTable) {
+  const canonical = uploadChunkCanonicalRowSql_();
   const rows = bqQueryAll_([
     'SELECT COUNT(*) AS staged_rows,',
-    "  LOWER(TO_HEX(SHA256(CAST(COUNT(*) AS STRING)))) AS content_hash",
+    "  LOWER(TO_HEX(SHA256(STRING_AGG(" + canonical + ", '\\n' ORDER BY pickdetailkey, source_row_number, " + canonical + ')))) AS content_hash',
     'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + stageTable + '`'
   ].join('\n'), JOB_DEADLINE_MS);
   const stagedRows = Number(rows && rows[0] && rows[0][0] || 0);
@@ -1274,6 +1301,70 @@ function validateUploadMeta_(meta) {
   }
 }
 
+function parseUploadCsvRows_(csvText, expectedRowCount, format) {
+  if (String(format || '') !== 'csv-v1') {
+    throw uploadError_('CSV_FORMAT_MISMATCH', 'รูปแบบ CSV ที่ส่งมาไม่ตรงกับระบบ กรุณารีเฟรชหน้าเว็บแล้วลองใหม่');
+  }
+  const text = String(csvText == null ? '' : csvText).replace(/^\uFEFF/, '');
+  if (!text.trim()) throw uploadError_('EMPTY_CHUNK', 'CSV ชุดที่ส่งมาว่างเปล่า');
+
+  let rows;
+  try {
+    rows = Utilities.parseCsv(text, ',');
+  } catch (err) {
+    throw uploadError_('CSV_PARSE_FAILED', 'ไม่สามารถอ่าน CSV ชุดที่ส่งมาได้: ' + String(err && err.message || err));
+  }
+  while (rows.length && rows[rows.length - 1].every(function(value) { return String(value || '') === ''; })) {
+    rows.pop();
+  }
+  const expected = Number(expectedRowCount || 0);
+  if (expected && rows.length !== expected) {
+    throw uploadError_(
+      'CSV_ROW_COUNT_MISMATCH',
+      'จำนวนแถว CSV ไม่ตรงกับข้อมูลกำกับ (' + rows.length + '/' + expected + ' แถว)'
+    );
+  }
+  for (let i = 0; i < rows.length; i++) {
+    if (!Array.isArray(rows[i]) || rows[i].length !== 11) {
+      throw uploadError_(
+        'CSV_COLUMN_COUNT_MISMATCH',
+        'CSV แถวที่ ' + (i + 1) + ' มี ' + (rows[i] && rows[i].length || 0) +
+          ' คอลัมน์ แต่ระบบต้องการ 11 คอลัมน์'
+      );
+    }
+  }
+  return rows;
+}
+
+function uploadCsvField_(value) {
+  const text = String(value == null ? '' : value);
+  return /[",\r\n]/.test(text)
+    ? '"' + text.replace(/"/g, '""') + '"'
+    : text;
+}
+
+function uploadCsvStringField_(value) {
+  const text = String(value == null ? '' : value);
+  return '"' + text.replace(/"/g, '""') + '"';
+}
+
+function uploadNormalizedRowToCsvLine_(row) {
+  // บังคับ quote คอลัมน์ STRING เพื่อรักษาเลข 0 นำหน้าและค่าว่างให้เหมือนข้อมูลเดิม
+  return [
+    uploadCsvStringField_(row.pickdetailkey),
+    uploadCsvStringField_(row.lpn),
+    String(row.qty),
+    uploadCsvStringField_(row.sku),
+    uploadCsvStringField_(row.owner),
+    String(row.uom_qty),
+    uploadCsvStringField_(row.category),
+    uploadCsvStringField_(row.picker_id),
+    uploadCsvStringField_(row.location),
+    uploadCsvStringField_(row.pick_ts_source),
+    String(row.source_row_number)
+  ].join(',');
+}
+
 function normalizeUploadRows_(rows, fmt) {
   const isArray = fmt === 'array';
   const seen = Object.create(null);
@@ -1475,6 +1566,67 @@ function startLoadJob_(stageTable, jobId, blob, writeDisposition) {
   while (!current.status || current.status.state !== 'DONE') {
     if (Date.now() - started > JOB_DEADLINE_MS) {
       throw uploadError_('LOAD_TIMEOUT', 'BigQuery ใช้เวลาโหลดนานเกินกำหนด กรุณาลองนำเข้าไฟล์เดิมอีกครั้ง');
+    }
+    Utilities.sleep(waitMs);
+    current = BigQuery.Jobs.get(BQ_PROJECT, jobId, { location: BQ_LOCATION });
+    waitMs = Math.min(waitMs * 2, 5000);
+  }
+  if (current.status.errorResult) {
+    throw uploadError_('LOAD_JOB_FAILED', formatJobErrors_(current));
+  }
+  return current;
+}
+
+function startCsvLoadJob_(stageTable, jobId, blob, writeDisposition) {
+  const job = {
+    jobReference: {
+      projectId: BQ_PROJECT,
+      jobId: jobId,
+      location: BQ_LOCATION
+    },
+    configuration: {
+      load: {
+        destinationTable: {
+          projectId: BQ_PROJECT,
+          datasetId: BQ_DATASET,
+          tableId: stageTable
+        },
+        sourceFormat: 'CSV',
+        encoding: 'UTF-8',
+        fieldDelimiter: ',',
+        quote: '"',
+        nullMarker: '\\N',
+        skipLeadingRows: 0,
+        allowQuotedNewlines: true,
+        allowJaggedRows: false,
+        createDisposition: 'CREATE_IF_NEEDED',
+        writeDisposition: writeDisposition || 'WRITE_EMPTY',
+        maxBadRecords: 0,
+        ignoreUnknownValues: false,
+        schema: {
+          fields: [
+            { name: 'pickdetailkey', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'lpn', type: 'STRING' },
+            { name: 'qty', type: 'INT64', mode: 'REQUIRED' },
+            { name: 'sku', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'owner', type: 'STRING' },
+            { name: 'uom_qty', type: 'NUMERIC', mode: 'REQUIRED' },
+            { name: 'category', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'picker_id', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'location', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'pick_ts_source', type: 'STRING', mode: 'REQUIRED' },
+            { name: 'source_row_number', type: 'INT64', mode: 'REQUIRED' }
+          ]
+        }
+      }
+    }
+  };
+  let current = BigQuery.Jobs.insert(job, BQ_PROJECT, blob);
+  const started = Date.now();
+  let waitMs = 500;
+  while (!current.status || current.status.state !== 'DONE') {
+    if (Date.now() - started > JOB_DEADLINE_MS) {
+      throw uploadError_('LOAD_TIMEOUT', 'BigQuery ใช้เวลาโหลด CSV นานเกินกำหนด กรุณาลองนำเข้าไฟล์เดิมอีกครั้ง');
     }
     Utilities.sleep(waitMs);
     current = BigQuery.Jobs.get(BQ_PROJECT, jobId, { location: BQ_LOCATION });

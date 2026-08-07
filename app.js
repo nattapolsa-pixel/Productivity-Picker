@@ -4782,9 +4782,10 @@ bootstrapDashboard();
   const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
   const MAX_UPLOAD_ROWS = 100000;
   const MAX_FILE_BYTES = 50 * 1024 * 1024;
-  const UPLOAD_CHUNK_TARGET_BYTES = 250 * 1024;
-  const UPLOAD_CHUNK_MAX_ROWS = 1500;
-  const UPLOAD_CHUNK_CONCURRENCY = 1;
+  // ส่งข้อมูลเป็น CSV UTF-8 ก้อนใหญ่ขึ้น เพื่อลดจำนวนรอบ Apps Script/BigQuery Load Job
+  const UPLOAD_CHUNK_TARGET_BYTES = 2 * 1024 * 1024;
+  const UPLOAD_CHUNK_MAX_ROWS = 6000;
+  const UPLOAD_CHUNK_CONCURRENCY = 2;
   const XLSX_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
   const REQUIRED_HEADERS = [
     {index:1, name:'PICKDETAILKEY'},
@@ -4933,33 +4934,34 @@ bootstrapDashboard();
           );
         }
 
-        const chunks = splitUploadRows(rows);
+        const chunks = splitUploadRowsAsCsv(rows);
         const sessionId = createUploadSessionId();
         let completedChunks = 0;
         statusText.textContent =
-          `🚀 ตรวจผ่าน ${rows.length.toLocaleString()} แถว แบ่งส่งอย่างปลอดภัย ${chunks.length.toLocaleString()} ชุด...`;
+          `🚀 ตรวจผ่าน ${rows.length.toLocaleString()} แถว แปลงเป็น CSV และแบ่งส่ง ${chunks.length.toLocaleString()} ชุด...`;
         progressBar.style.width = '40%';
 
-        const chunkTasks = chunks.map((chunkRows, chunkIndex) => async () => {
+        const chunkTasks = chunks.map((chunk, chunkIndex) => async () => {
           const chunkPayload = JSON.stringify({
-            action: 'upload_chunk',
+            action: 'upload_chunk_csv',
             sessionId,
             chunkIndex,
             totalChunks: chunks.length,
             totalRows: rows.length,
-            fmt: 'array',
-            rows: chunkRows,
+            rowCount: chunk.rowCount,
+            format: 'csv-v1',
+            csv: chunk.csv,
             meta: parsed.meta
           });
           const response = await postUploadWithRetry(
             chunkPayload,
-            `ชุดที่ ${chunkIndex + 1}/${chunks.length}`
+            `CSV ชุดที่ ${chunkIndex + 1}/${chunks.length}`
           );
           completedChunks += 1;
           const pct = 40 + Math.round((completedChunks / chunks.length) * 35);
           progressBar.style.width = pct + '%';
           statusText.textContent =
-            `📦 BigQuery รับแล้ว ${completedChunks.toLocaleString()}/${chunks.length.toLocaleString()} ชุด ` +
+            `📦 BigQuery รับ CSV แล้ว ${completedChunks.toLocaleString()}/${chunks.length.toLocaleString()} ชุด ` +
             `(${rows.length.toLocaleString()} แถวทั้งหมด)`;
           return response;
         });
@@ -5125,24 +5127,47 @@ bootstrapDashboard();
     return (out + '00000000000000000000000000000000').slice(0, 32);
   }
 
-  function splitUploadRows(rows) {
+  function csvUploadField(value) {
+    const text = String(value == null ? '' : value);
+    // ใส่ quote เฉพาะค่าที่จำเป็น เพื่อลดขนาดข้อมูล แต่ยังรักษา comma/quote/newline ได้ครบ
+    return /[",\r\n]/.test(text)
+      ? `"${text.replace(/"/g, '""')}"`
+      : text;
+  }
+
+  function uploadRowToCsvLine(row) {
+    return row.map(csvUploadField).join(',');
+  }
+
+  function splitUploadRowsAsCsv(rows) {
     const encoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
     const chunks = [];
-    let current = [];
-    let currentBytes = 2;
+    let lines = [];
+    let currentBytes = 0;
+
+    function byteLength(text) {
+      return encoder ? encoder.encode(text).length : text.length * 3;
+    }
+
+    function flushChunk() {
+      if(!lines.length) return;
+      const csv = lines.join('\n');
+      chunks.push({ csv, rowCount: lines.length, csvBytes: currentBytes });
+      lines = [];
+      currentBytes = 0;
+    }
+
     rows.forEach(row => {
-      const encoded = JSON.stringify(row);
-      const rowBytes = (encoder ? encoder.encode(encoded).length : encoded.length * 3) + 1;
-      if(current.length &&
-          (currentBytes + rowBytes > UPLOAD_CHUNK_TARGET_BYTES || current.length >= UPLOAD_CHUNK_MAX_ROWS)) {
-        chunks.push(current);
-        current = [];
-        currentBytes = 2;
+      const line = uploadRowToCsvLine(row);
+      const rowBytes = byteLength(line) + 1;
+      if(lines.length &&
+          (currentBytes + rowBytes > UPLOAD_CHUNK_TARGET_BYTES || lines.length >= UPLOAD_CHUNK_MAX_ROWS)) {
+        flushChunk();
       }
-      current.push(row);
+      lines.push(line);
       currentBytes += rowBytes;
     });
-    if(current.length) chunks.push(current);
+    flushChunk();
     return chunks;
   }
 
