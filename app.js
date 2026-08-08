@@ -82,6 +82,10 @@ const DASHBOARD_CUBE_CACHE_PREFIX = DASHBOARD_SCHEMA_VERSION + ':cube:';
 // แสดงข้อมูลที่เคยโหลดสำเร็จก่อนทันที แล้วตรวจ revision เบื้องหลัง
 // เก็บได้นานขึ้นเพื่อไม่ให้ผู้ใช้เจอหน้าว่างเพียงเพราะไม่ได้เปิดเว็บเกิน 1 วัน
 const DASHBOARD_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const PLANNER_ROSTER_AUTO_REFRESH_MS = 5 * 60 * 1000;
+let plannerRosterLastCheckedAt = 0;
+let plannerRosterRefreshPromise = null;
+let plannerRosterAutoTimer = null;
 
 function normalizeSkuKey(sku) {
   const value = String(sku ?? '').replace(/\u00a0/g, ' ').trim();
@@ -608,6 +612,74 @@ function getPickerRosterPlanningSummary() {
     else flex.push(rec);
   });
   return { all, a, b, flex, total: all.length, countA: a.length, countB: b.length, countFlex: flex.length };
+}
+
+
+function applyPlannerRosterPayload(payload) {
+  if (!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION) throw new Error('Roster schema ไม่ตรงกับหน้าเว็บ');
+  const meta = DATA.meta || (DATA.meta = {});
+  ['picker_names', 'picker_affiliations', 'picker_shift_teams', 'picker_roster_teams', 'picker_responsibilities', 'picker_roster_zones'].forEach(key => {
+    if (payload[key] && typeof payload[key] === 'object') meta[key] = payload[key];
+  });
+  meta.picker_roster_generated = String(payload.generated || new Date().toISOString());
+  meta.picker_roster_cache_ttl_seconds = Number(payload.cache_ttl_seconds) || 300;
+  // กะของ Work cube ถูกคำนวณซ้ำใน browser จาก roster ล่าสุด จึงไม่ต้อง Query BigQuery ใหม่
+  aggregateCache.clear();
+  computeBounds();
+  A = aggregate(sys, dfrom, dto, shiftF);
+  return getPickerRosterPlanningSummary();
+}
+
+async function refreshPlannerRoster(force = false, options = {}) {
+  if (plannerRosterRefreshPromise) return plannerRosterRefreshPromise;
+  const silent = !!options.silent;
+  const btn = document.getElementById('btnSimRefreshRoster');
+  const oldText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ กำลังอัปเดต...'; btn.style.opacity = '.75'; }
+  const task = (async () => {
+    const url = DATA_URL + (DATA_URL.includes('?') ? '&' : '?') +
+      'mode=roster&fresh=' + (force ? '1' : '0') + '&t=' + Date.now();
+    const response = await fetchWithTransientRetry(url, { cache: 'no-store' }, 2);
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const payload = JSON.parse(await response.text());
+    if (payload && payload.error) throw new Error(payload.error);
+    const roster = applyPlannerRosterPayload(payload);
+    plannerRosterLastCheckedAt = Date.now();
+    if (window._simState) {
+      const core = roster.countA + roster.countB;
+      if (core > 0) {
+        const ratioA = Math.round(roster.countA / core * 100);
+        window._simState.shiftARatio = ratioA;
+        window._simState.shiftBRatio = 100 - ratioA;
+      }
+      window._simState.userPickersA = {};
+      window._simState.userPickersB = {};
+    }
+    built.simulator = false;
+    if (currentPage === 'simulator' && hasLiveData) builders.simulator();
+    if (!silent) alert(`อัปเดตรายชื่อ Picker สำเร็จ\nรวม ${roster.total} คน · กะ A ${roster.countA} · กะ B ${roster.countB} · Flex ${roster.countFlex}`);
+    return roster;
+  })().catch(err => {
+    console.warn('refreshPlannerRoster failed:', err);
+    if (!silent) alert('อัปเดตรายชื่อ Picker ไม่สำเร็จ: ' + (err.message || err));
+    throw err;
+  }).finally(() => {
+    plannerRosterRefreshPromise = null;
+    if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = oldText || '🔄 อัปเดตรายชื่อ Picker'; btn.style.opacity = '1'; }
+  });
+  plannerRosterRefreshPromise = task;
+  return task;
+}
+
+function schedulePlannerRosterAutoRefresh() {
+  if (plannerRosterAutoTimer) { clearTimeout(plannerRosterAutoTimer); plannerRosterAutoTimer = null; }
+  if (currentPage !== 'simulator') return;
+  const elapsed = Date.now() - plannerRosterLastCheckedAt;
+  const wait = Math.max(1000, PLANNER_ROSTER_AUTO_REFRESH_MS - elapsed);
+  plannerRosterAutoTimer = setTimeout(() => {
+    plannerRosterAutoTimer = null;
+    if (currentPage === 'simulator') void refreshPlannerRoster(false, { silent: true }).catch(() => { });
+  }, wait);
 }
 
 function normalizeLocationCode(value) {
@@ -5052,12 +5124,12 @@ const builders = {
 <div class="sim-hero">
   <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start;">
     <div><div style="font-size:22px;font-weight:800;">🎮 วางแผน Picker จริงตามภาระงาน</div><div style="font-size:13px;color:#cbd5e1;margin-top:5px;">นับเฉพาะ <b>หน้าที่รับผิดชอบ = Picker</b> จากชีตบันทึกเวลาทำงาน แล้วกระจายคนตาม Person-hours ของแต่ละ Zone</div></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;"><button onclick="window._simResetWorkload()" style="border:0;background:rgba(255,255,255,.15);color:#fff;padding:8px 13px;border-radius:9px;font-weight:700;cursor:pointer;">🔄 ใช้ Workload วันที่ ${escapeZoneHtml(planningDate)}</button><button onclick="document.getElementById('simFileInput').click()" style="border:0;background:#10b981;color:#fff;padding:8px 13px;border-radius:9px;font-weight:700;cursor:pointer;">📂 อัปโหลด ESTIMATED</button><input type="file" id="simFileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="window._simHandleOrderFile(event)"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;"><button id="btnSimRefreshRoster" onclick="window._simRefreshRoster()" style="border:0;background:#0ea5e9;color:#fff;padding:8px 13px;border-radius:9px;font-weight:700;cursor:pointer;">🔄 อัปเดตรายชื่อ Picker</button><button onclick="window._simResetWorkload()" style="border:0;background:rgba(255,255,255,.15);color:#fff;padding:8px 13px;border-radius:9px;font-weight:700;cursor:pointer;">📦 ใช้ Workload วันที่ ${escapeZoneHtml(planningDate)}</button><button onclick="document.getElementById('simFileInput').click()" style="border:0;background:#10b981;color:#fff;padding:8px 13px;border-radius:9px;font-weight:700;cursor:pointer;">📂 อัปโหลด ESTIMATED</button><input type="file" id="simFileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="window._simHandleOrderFile(event)"></div>
   </div>
   <div class="sim-controls">
     <div><div style="font-size:12px;font-weight:700;color:#94a3b8;">📊 Workload</div><div style="font-size:14px;font-weight:800;color:#38bdf8;margin-top:5px;" id="simWorkloadSourceTxt">${SState.customWorkload ? '📂 ' + escapeZoneHtml(SState.customSourceName || 'ไฟล์ที่อัปโหลด') : '📦 BigQuery เฉพาะวันที่ ' + escapeZoneHtml(planningDate)}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:5px;">Productivity อ้างอิงช่วง ${escapeZoneHtml(dfrom)} ถึง ${escapeZoneHtml(dto)}</div></div>
     <div><div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:#94a3b8;"><span>⚖️ แบ่งงาน A / B</span><span id="simShiftRatioTxt" style="color:#10b981;">A ${SState.shiftARatio}% : B ${SState.shiftBRatio}%</span></div><input type="range" min="0" max="100" value="${SState.shiftARatio}" style="width:100%;accent-color:#10b981;margin-top:9px;" oninput="window._simUpdateShiftRatio(this.value)"><button onclick="window._simUseRosterRatio()" style="margin-top:6px;border:0;background:#334155;color:#fff;padding:5px 9px;border-radius:7px;font-size:10.5px;font-weight:700;cursor:pointer;">ใช้สัดส่วนคนจริง ${roster.countA}:${roster.countB}</button></div>
-    <div><div style="font-size:12px;font-weight:700;color:#94a3b8;">⏱️ เป้าหมายเวลาจบ</div><div style="display:flex;gap:8px;align-items:center;margin-top:8px;"><input type="number" min="1" max="12" step=".5" value="${SState.targetHours}" class="sim-input-num" onchange="window._simUpdateTargetHours(this.value)"><span style="font-size:12px;color:#cbd5e1;">ชม./กะ</span></div><div style="font-size:10.5px;color:#94a3b8;margin-top:5px;">Flex Picker ${roster.countFlex} คน แสดงเป็นกำลังสำรอง ไม่แจกอัตโนมัติ</div></div>
+    <div><div style="font-size:12px;font-weight:700;color:#94a3b8;">⏱️ เป้าหมายเวลาจบ</div><div style="display:flex;gap:8px;align-items:center;margin-top:8px;"><input type="number" min="1" max="12" step=".5" value="${SState.targetHours}" class="sim-input-num" onchange="window._simUpdateTargetHours(this.value)"><span style="font-size:12px;color:#cbd5e1;">ชม./กะ</span></div><div style="font-size:10.5px;color:#94a3b8;margin-top:5px;">Flex Picker ${roster.countFlex} คน แสดงเป็นกำลังสำรอง ไม่แจกอัตโนมัติ · Roster cache 5 นาที</div></div>
   </div>
 </div>
 <div id="simKpiSummary" style="margin-bottom:24px;"></div>
@@ -5099,6 +5171,7 @@ const builders = {
       document.getElementById('simAdviceBox').innerHTML = '<div style="display:flex;flex-direction:column;gap:10px">' + (advice.join('') || '<div class="insight-box neutral"><div class="icon">📌</div><div class="text">ยังไม่มีข้อมูลเพียงพอ</div></div>') + '</div>';
     }
 
+    window._simRefreshRoster = function () { return refreshPlannerRoster(true, { silent: false }); };
     window._simUpdateShiftRatio = function (v) { v = Math.max(0, Math.min(100, Number(v) || 0)); SState.shiftARatio = v; SState.shiftBRatio = 100 - v; SState.userPickersA = {}; SState.userPickersB = {}; const x = document.getElementById('simShiftRatioTxt'); if (x) x.textContent = `A ${v}% : B ${100 - v}%`; calculateSim(); };
     window._simUseRosterRatio = function () { SState.shiftARatio = defaultRatioA; SState.shiftBRatio = 100 - defaultRatioA; SState.userPickersA = {}; SState.userPickersB = {}; built.simulator = false; show('simulator'); };
     window._simUpdateTargetHours = function (v) { SState.targetHours = Math.max(1, Number(v) || 8); calculateSim(); };
@@ -5122,6 +5195,10 @@ const builders = {
       if (isXlsx) reader.readAsArrayBuffer(file); else reader.readAsText(file);
     };
     calculateSim();
+    schedulePlannerRosterAutoRefresh();
+    if (Date.now() - plannerRosterLastCheckedAt >= PLANNER_ROSTER_AUTO_REFRESH_MS) {
+      setTimeout(() => void refreshPlannerRoster(false, { silent: true }).catch(() => { }), 0);
+    }
   }
 };
 

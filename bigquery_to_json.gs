@@ -33,7 +33,8 @@ const JOB_DEADLINE_MS = 240000;
 const BQ_RESULT_PAGE_ROWS = 30000;
 // ==========================================================
 
-const MASTER_CACHE_TTL = 21600; // Master อัปเดตรายวัน; ใช้ cache 6 ชม. เพื่อลด cold rebuild ของ Apps Script
+const MASTER_CACHE_TTL = 21600; // Master/BigQuery payload cache 6 ชม. เพื่อลด cold rebuild ของ Apps Script
+const PICKER_ROSTER_CACHE_TTL = 300; // รายชื่อพนักงานอ่านจาก Google Sheet ใหม่อย่างน้อยทุก 5 นาที
 const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่างเดียวกับ revision เพื่อลด cache chunk เก่าค้าง
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_date';
@@ -71,6 +72,12 @@ function doGet(e) {
     const mode = String(e && e.parameter && e.parameter.mode || '').toLowerCase();
     const wantsGzipEnvelope = String(e && e.parameter && e.parameter.encoding || '').toLowerCase() === 'gzip';
     const requestScope = getDashboardRequestScope_(e);
+    // Roster เป็น payload เล็กจาก Google Sheet โดยตรง ไม่ Query BigQuery
+    // fresh=1 ใช้กับปุ่ม "อัปเดตรายชื่อ Picker" เพื่อบังคับอ่านชีตใหม่ทันที
+    if (mode === 'roster') {
+      const forceRoster = String(e && e.parameter && e.parameter.fresh || '') === '1';
+      return json_(buildPickerRosterPayload_(forceRoster));
+    }
     // รายการ SKU รายพนักงานมีจำนวนมากกว่าข้อมูลสรุปหลัก จึงโหลดเฉพาะ
     // เมื่อผู้ใช้เปิดรายละเอียดพนักงานคนนั้น เพื่อไม่ให้หน้าแรกต้องแบกทุก SKU
     if (mode === 'picker_items') {
@@ -1919,13 +1926,43 @@ function writeMasterCache_(key, value) {
   } catch (_) {}
 }
 
-function loadPickerDirectory_() {
-  const cacheKey = 'picker_directory_v3_workforce_planner';
-  const cached = readMasterCache_(cacheKey);
-  if (cached && cached.names && cached.affiliations && cached.shiftTeams &&
-      cached.rosterTeams && cached.responsibilities && cached.rosterZones) return cached;
+function pickerDirectoryCacheKey_() {
+  return 'picker_directory_' + DASHBOARD_SCHEMA_VERSION + '_v4_workforce_planner';
+}
 
-  const empty = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{} };
+function readPickerDirectoryCache_() {
+  try {
+    const raw = CacheService.getScriptCache().get(pickerDirectoryCacheKey_());
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writePickerDirectoryCache_(directory) {
+  try {
+    CacheService.getScriptCache().put(
+      pickerDirectoryCacheKey_(),
+      JSON.stringify(directory),
+      PICKER_ROSTER_CACHE_TTL
+    );
+  } catch (_) {}
+}
+
+function clearPickerDirectoryCache_() {
+  try { CacheService.getScriptCache().remove(pickerDirectoryCacheKey_()); } catch (_) {}
+}
+
+function loadPickerDirectory_(forceRefresh) {
+  if (!forceRefresh) {
+    const cached = readPickerDirectoryCache_();
+    if (cached && cached.names && cached.affiliations && cached.shiftTeams &&
+        cached.rosterTeams && cached.responsibilities && cached.rosterZones) return cached;
+  } else {
+    clearPickerDirectoryCache_();
+  }
+
+  const empty = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{}, loadedAt:'' };
   try {
     const ss = SpreadsheetApp.openById(PICKER_NAME_SHEET_ID);
     const sh = ss.getSheetByName(PICKER_NAME_TAB);
@@ -1935,7 +1972,7 @@ function loadPickerDirectory_() {
 
     // B:I = รหัสพนักงาน, ชื่อ, ชื่อเล่น, สังกัด, หน้าที่รับผิดชอบ, โซน, Start Date, Team
     const values = sh.getRange(PICKER_NAME_START_ROW, 2, lastRow - PICKER_NAME_START_ROW + 1, 8).getDisplayValues();
-    const directory = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{} };
+    const directory = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{}, loadedAt:new Date().toISOString() };
     values.forEach(row => {
       const id = String(row[0] || '').trim();
       if (!id) return;
@@ -1951,12 +1988,40 @@ function loadPickerDirectory_() {
       if (team && !directory.rosterTeams[id]) directory.rosterTeams[id] = team;
       if ((team === 'A' || team === 'B') && !directory.shiftTeams[id]) directory.shiftTeams[id] = team;
     });
-    writeMasterCache_(cacheKey, directory);
+    writePickerDirectoryCache_(directory);
     return directory;
   } catch (err) {
     console.warn('loadPickerDirectory_ failed: ' + err);
     return empty;
   }
+}
+
+function buildPickerRosterPayload_(forceRefresh) {
+  const directory = loadPickerDirectory_(!!forceRefresh);
+  let total = 0, countA = 0, countB = 0, countFlex = 0;
+  const roles = directory.responsibilities || {};
+  const teams = directory.rosterTeams || {};
+  Object.keys(roles).forEach(function(id) {
+    if (String(roles[id] || '').trim().toUpperCase() !== 'PICKER') return;
+    total++;
+    const team = String(teams[id] || '').trim().toUpperCase();
+    if (team === 'A') countA++;
+    else if (team === 'B') countB++;
+    else countFlex++;
+  });
+  return {
+    schema_version: DASHBOARD_SCHEMA_VERSION,
+    generated: directory.loadedAt || new Date().toISOString(),
+    cache_ttl_seconds: PICKER_ROSTER_CACHE_TTL,
+    source: PICKER_NAME_SHEET_ID + '/' + PICKER_NAME_TAB + '!B:I',
+    picker_names: directory.names || {},
+    picker_affiliations: directory.affiliations || {},
+    picker_shift_teams: directory.shiftTeams || {},
+    picker_roster_teams: directory.rosterTeams || {},
+    picker_responsibilities: directory.responsibilities || {},
+    picker_roster_zones: directory.rosterZones || {},
+    summary: { total:total, countA:countA, countB:countB, countFlex:countFlex }
+  };
 }
 
 function pickerRosterShiftCodeSql_(pickerExpr, tminExpr) {
@@ -2680,6 +2745,8 @@ function buildDashboardData_(useQueryCache, requestScope) {
             picker_roster_teams: pickerRosterTeams,
             picker_responsibilities: pickerResponsibilities,
             picker_roster_zones: pickerRosterZones,
+            picker_roster_generated: pickerDirectory.loadedAt || '',
+            picker_roster_cache_ttl_seconds: PICKER_ROSTER_CACHE_TTL,
             picker_shift_source: PICKER_NAME_SHEET_ID + '/' + PICKER_NAME_TAB + '!I:I',
             picker_role_source: PICKER_NAME_SHEET_ID + '/' + PICKER_NAME_TAB + '!F:F',
             zone_master: zoneMaster,
@@ -2917,6 +2984,15 @@ function testRun() {
     if (totalPickers < 1 || aCount < 1 || bCount < 1) throw new Error('ไม่พบ roster ที่หน้าที่รับผิดชอบ = Picker ครบทั้ง Team A/B');
     pass('Picker roster สำหรับ Planner', 'รวม=' + totalPickers.toLocaleString() + ' คน, กะ A=' + aCount.toLocaleString() + ', กะ B=' + bCount.toLocaleString() + ', Flex=' + flexCount.toLocaleString());
   } catch (err) { fail('Picker roster สำหรับ Planner', err); throw err; }
+
+  try {
+    const rosterPayload = buildPickerRosterPayload_(false);
+    if (!rosterPayload || rosterPayload.cache_ttl_seconds !== PICKER_ROSTER_CACHE_TTL ||
+        !rosterPayload.picker_responsibilities || !rosterPayload.picker_roster_teams) {
+      throw new Error('Roster endpoint payload ไม่ครบ');
+    }
+    pass('Roster refresh endpoint', 'Google Sheet cache ' + Math.round(PICKER_ROSTER_CACHE_TTL / 60) + ' นาที และรองรับ fresh=1');
+  } catch (err) { fail('Roster refresh endpoint', err); throw err; }
 
   try {
     const d = buildDashboardData_(true, { excludedItems: [], key: 'test' });
