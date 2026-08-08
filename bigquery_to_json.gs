@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v11-workforce-planner';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v12-shift-date-ptt-fix';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -37,9 +37,9 @@ const MASTER_CACHE_TTL = 21600; // Master/BigQuery payload cache 6 ชม. เ�
 const PICKER_ROSTER_CACHE_TTL = 300; // รายชื่อพนักงานอ่านจาก Google Sheet ใหม่อย่างน้อยทุก 5 นาที
 const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่างเดียวกับ revision เพื่อลด cache chunk เก่าค้าง
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
-const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_date';
-const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_date';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v7-roster-shifts';
+const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_shift_date_v2';
+const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_shift_date_v2';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v8-shift-date-ptt-fix';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -322,6 +322,14 @@ function sqlStringLiteral_(value) {
   return "'" + String(value == null ? '' : value).replace(/'/g, "''") + "'";
 }
 
+// วันกะของ Dashboard: 00:00–06:59 ต้องนับเป็นวันกะก่อนหน้า
+// ใช้ helper เดียวกันทุก Main/Item/Time/Picker cube และ Bounds เพื่อป้องกันยอดแต่ละหน้าคลาดกัน
+function dashboardShiftDateSql_(pickDateExpression, tminExpression) {
+  const d = String(pickDateExpression || 'pick_date');
+  const t = String(tminExpression || 'tmin');
+  return 'IF(' + t + ' < 420, DATE_SUB(' + d + ', INTERVAL 1 DAY), ' + d + ')';
+}
+
 
 function dashboardExclusionSql_(scope, ownerExpression, itemExpression) {
   const items = scope && Array.isArray(scope.excludedItems) ? scope.excludedItems : [];
@@ -432,7 +440,7 @@ function buildItemCubeData_(e, dataEpoch) {
   const sql = [
     'WITH base_picks AS (',
     '  SELECT',
-    '    pick_date AS shift_date,',
+    '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
     '    ' + pickerRosterShiftCodeSql_('picker_id', 'tmin') + ' AS shift_code,',
     "    COALESCE(location, zone, '??') AS location_key,",
     "    COALESCE(zone, '??') AS zone_key,",
@@ -504,7 +512,7 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
   const sql = [
     'WITH base AS (',
     '  SELECT',
-    '    pick_date AS shift_date,',
+    '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
     '    ' + pickerRosterShiftCodeSql_('picker_id', 'tmin') + ' AS shift_code,',
     "    COALESCE(zone, '??') AS zone,",
     "    COALESCE(picker_id, '(none)') AS picker,",
@@ -575,7 +583,7 @@ function buildPickerItemsData_(e, requestScope) {
   const sql = [
     'WITH base AS (',
     '  SELECT',
-    '    pick_date AS shift_date,',
+    '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
     '    ' + pickerRosterShiftCodeSql_('picker_id', 'tmin') + ' AS shift_code,',
     "    COALESCE(zone, '??') AS zone,",
     "    UPPER(COALESCE(owner, '-')) AS owner_key,",
@@ -656,7 +664,7 @@ function dashboardBoundsSql_() {
     "SELECT FORMAT_DATE('%Y-%m-%d', MIN(shift_date)),",
     "       FORMAT_DATE('%Y-%m-%d', MAX(shift_date))",
     'FROM (',
-    '  SELECT pick_date AS shift_date',
+    '  SELECT ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date',
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     "  WHERE pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
     "    AND UPPER(category) IN ('PTT','BPS')",
@@ -2672,7 +2680,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
     'WITH base AS (',
     '  SELECT',
     '    UPPER(category) AS category,',
-    '    pick_date AS shift_date,',
+    '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
     '    ' + pickerRosterShiftCodeSql_('picker_id', 'tmin') + ' AS shift_code,',
     '    COALESCE(zone, \'??\') AS zone,',
     '    COALESCE(picker_id, \'(none)\') AS picker,',
@@ -2918,6 +2926,7 @@ function bqQueryAll_(sql, deadlineMs) {
 // รันเพื่อทดสอบใน Editor (ดูผลใน Execution log)
 function testRun() {
   const results = [];
+  let dashboardTestData = null;
   const pass = function(name, detail) {
     const line = '✅ PASS: ' + name + (detail ? ' — ' + detail : '');
     results.push(line); Logger.log(line);
@@ -2995,9 +3004,48 @@ function testRun() {
   } catch (err) { fail('Roster refresh endpoint', err); throw err; }
 
   try {
-    const d = buildDashboardData_(true, { excludedItems: [], key: 'test' });
-    pass('Dashboard query', 'PTT=' + d.PTT.dates.length + ' วัน, BPS=' + d.BPS.dates.length + ' วัน');
+    dashboardTestData = buildDashboardData_(true, { excludedItems: [], key: 'test' });
+    pass('Dashboard query', 'PTT=' + dashboardTestData.PTT.dates.length + ' วัน, BPS=' + dashboardTestData.BPS.dates.length + ' วัน');
   } catch (err) { fail('Dashboard query', err); throw err; }
+
+  try {
+    if (!dashboardTestData || !dashboardTestData.PTT) throw new Error('ยังไม่มี Dashboard payload สำหรับตรวจยอด PTT');
+    const ptt = dashboardTestData.PTT;
+    const testDate = ptt.dates && ptt.dates.length ? ptt.dates[ptt.dates.length - 1] : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(testDate)) throw new Error('ไม่พบวันกะล่าสุดของ PTT ใน payload');
+    const dateIdx = ptt.dates.indexOf(testDate);
+    let payloadPcs = 0, payloadUnits = 0, payloadLines = 0;
+    for (let i = 0; i < ptt.rows.length; i += 9) {
+      if (Number(ptt.rows[i]) !== dateIdx) continue;
+      payloadPcs += Number(ptt.rows[i + 4]) || 0;
+      payloadUnits += Number(ptt.rows[i + 5]) || 0;
+      payloadLines += Number(ptt.rows[i + 6]) || 0;
+    }
+
+    // จำกัด scan แค่ 2 partition: วันกะนั้น + วันถัดไปช่วง 00:00–06:59
+    const direct = bqQueryAll_([
+      'SELECT COUNT(*) AS records, SUM(pcs) AS total_pcs, SUM(pick_qty) AS total_pick_units',
+      'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
+      "WHERE UPPER(category) = 'PTT'",
+      '  AND pick_date BETWEEN DATE ' + sqlStringLiteral_(testDate) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(testDate) + ', INTERVAL 1 DAY)',
+      '  AND ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' = DATE ' + sqlStringLiteral_(testDate)
+    ].join('\n'), 60000);
+    if (!direct.length) throw new Error('BigQuery ไม่ส่งผลตรวจยอด PTT');
+    const bqLines = Number(direct[0][0]) || 0;
+    const bqPcs = Number(direct[0][1]) || 0;
+    const bqUnits = Number(direct[0][2]) || 0;
+    const near = function(a, b) { return Math.abs(Number(a || 0) - Number(b || 0)) < 0.000001; };
+    if (!near(payloadPcs, bqPcs) || !near(payloadUnits, bqUnits) || payloadLines !== bqLines) {
+      throw new Error(
+        'ยอด PTT ไม่ตรงกัน วันกะ ' + testDate +
+        ' | Payload pcs=' + payloadPcs + ', units=' + payloadUnits + ', rows=' + payloadLines +
+        ' | BigQuery pcs=' + bqPcs + ', units=' + bqUnits + ', rows=' + bqLines
+      );
+    }
+    pass('PTT Shift-date reconciliation',
+      testDate + ' → ' + Number(payloadUnits).toLocaleString() + ' หน่วยหยิบ, ' +
+      Number(payloadPcs).toLocaleString() + ' ชิ้น, ' + Number(payloadLines).toLocaleString() + ' records ตรง BigQuery');
+  } catch (err) { fail('PTT Shift-date reconciliation', err); throw err; }
 
   try {
     const bounds = getOrLoadDashboardBounds_();
@@ -3013,7 +3061,7 @@ function testRun() {
     pass('Owner + Item + Location/Zone mapping', (itemCube.rows.length / 9).toLocaleString() + ' กลุ่มในวันที่ ' + testDate);
   } catch (err) { fail('Owner + Item mapping', err); throw err; }
 
-  const summary = '🎉 TEST RUN PASSED — พร้อม Deploy\n' + results.join('\n');
+  const summary = '🎉 TEST RUN PASSED — Shift Date + PTT totals ถูกต้อง พร้อม Deploy\n' + results.join('\n');
   Logger.log(summary);
   return { status: 'success', message: 'TEST RUN PASSED', checks: results };
 }
