@@ -5685,6 +5685,97 @@ window.clearExcludedSkus = function () {
   slotCubePayloadCache.clear(); slotCubeLoadState.clear();
   void loadData(false);
 };
+
+
+async function clearAllDashboardIndexedDbCache() {
+  let db;
+  try {
+    db = await openDashboardCacheDb();
+    const tx = db.transaction(DASHBOARD_CACHE_STORE, 'readwrite');
+    tx.objectStore(DASHBOARD_CACHE_STORE).clear();
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error('ล้าง Browser cache ไม่สำเร็จ'));
+      tx.onabort = () => reject(tx.error || new Error('ยกเลิกการล้าง Browser cache'));
+    });
+  } finally {
+    if (db) db.close();
+  }
+}
+
+function clearDashboardMemoryCaches() {
+  aggregateCache.clear();
+  dashboardCacheRevision = '';
+  built = {};
+
+  pickerItemPayloadCache.clear();
+  pickerItemLoadState.clear();
+  itemMasterPayloadCache.clear();
+  itemMasterLoadState.clear();
+  itemCubePayloadCache.clear();
+  itemCubeLoadState.clear();
+  itemCubeDailyPayloadCache.clear();
+  slotCubePayloadCache.clear();
+  slotCubeLoadState.clear();
+  slotCubeDailyPayloadCache.clear();
+}
+
+window.resetDashboardFiltersAndCache = async function () {
+  const ok = window.confirm(
+    'รีเซ็ต Filter และ Cache ของหน้าเว็บหรือไม่?\\n\\n' +
+    'ระบบจะยกเลิก Zone/สินค้าที่ Exclude และดึงข้อมูลใหม่จาก BigQuery\\n' +
+    'ข้อมูลจริงใน BigQuery จะไม่ถูกลบ'
+  );
+  if (!ok) return;
+
+  const btn = document.getElementById('btnResetDashboard');
+  plannerSetButtonBusy(btn, true, 'กำลังรีเซ็ต...');
+  showPlannerActionPopup('loading', 'กำลังรีเซ็ตข้อมูลหน้าเว็บ',
+    'กำลังล้าง Filter, Browser Cache และข้อมูล Cube ที่ค้างอยู่ แล้วดึงข้อมูลล่าสุดใหม่');
+
+  try {
+    // ยกเลิก Filter ที่ทำให้ยอดรวมบน Dashboard ถูกหักออก
+    excludedSkus.clear();
+    excludedSkusSavedAt = null;
+    excludedZones.clear();
+    excludedZonesSavedAt = null;
+    try {
+      localStorage.removeItem(EXCLUDED_SKUS_STORAGE_KEY);
+      localStorage.removeItem(LEGACY_EXCLUDED_SKUS_STORAGE_KEY);
+      localStorage.removeItem(EXCLUDED_ZONES_STORAGE_KEY);
+    } catch (_) { }
+
+    invalidateAggregationCache();
+    clearDashboardMemoryCaches();
+    await clearAllDashboardIndexedDbCache();
+
+    updateExcludedZonesBar();
+    renderExcludedBadges();
+
+    // fresh=true บังคับข้าม Apps Script cache; query scope ตอนนี้ไม่มี Excluded Item แล้ว
+    const result = await loadData(true);
+    if (!result || result.ok === false) {
+      throw (result && result.error) || new Error('ดึงข้อมูลใหม่ไม่สำเร็จ');
+    }
+
+    // สร้าง Aggregate ใหม่จากข้อมูลสดหลังล้าง Filter/Cache
+    A = aggregate(sys, dfrom, dto, shiftF);
+    built = {};
+    render();
+
+    const unitText = unitMode === 'pcs' ? 'ชิ้น' : 'หน่วยหยิบ';
+    const currentTotal = unitMode === 'pcs' ? Number(A?.kpis?.pcs || 0) : Number(A?.kpis?.qty || 0);
+    const rangeText = dfrom === dto ? dfrom : `${dfrom} ถึง ${dto}`;
+    showPlannerActionPopup('success', 'รีเซ็ตข้อมูลหน้าเว็บเรียบร้อย',
+      `ยกเลิก Zone/สินค้าที่ Exclude แล้ว\\nล้าง Browser + Cube Cache แล้ว\\nดึงข้อมูลสดใหม่เรียบร้อย\\nช่วง ${rangeText}: ${fmt(currentTotal)} ${unitText}`,
+      { autoClose: 5000 });
+  } catch (err) {
+    console.error('Dashboard reset failed:', err);
+    showPlannerActionPopup('error', 'รีเซ็ตข้อมูลหน้าเว็บไม่สำเร็จ', String(err && err.message || err), { autoClose: false });
+  } finally {
+    plannerSetButtonBusy(btn, false);
+  }
+};
 function renderExcludedBadges() {
   const bar = document.getElementById('excludedBar');
   const badgeContainer = document.getElementById('excludedBadges');

@@ -746,19 +746,23 @@
       border-top: 1px solid #f1f5f9;
       font-size: 13px;
     }
+
     .item-pagination-info {
       color: #64748b;
       font-weight: 500;
     }
+
     .item-pagination-info b {
       color: #0f172a;
     }
+
     .item-pagination-controls {
       display: flex;
       align-items: center;
       gap: 6px;
       flex-wrap: wrap;
     }
+
     .item-page-btn {
       padding: 6px 11px;
       border-radius: 8px;
@@ -775,23 +779,27 @@
       min-width: 32px;
       user-select: none;
     }
+
     .item-page-btn:hover:not(:disabled) {
       background: #f8fafc;
       border-color: #94a3b8;
       color: #0f172a;
     }
+
     .item-page-btn.active {
       background: #4338ca;
       border-color: #4338ca;
       color: #ffffff;
       box-shadow: 0 2px 8px rgba(67, 56, 202, 0.25);
     }
+
     .item-page-btn:disabled {
       opacity: 0.45;
       cursor: not-allowed;
       border-color: #e2e8f0;
       background: #f8fafc;
     }
+
     .item-pagesize-group {
       display: inline-flex;
       align-items: center;
@@ -800,6 +808,7 @@
       border-radius: 9px;
       gap: 3px;
     }
+
     .item-pagesize-btn {
       border: none;
       background: transparent;
@@ -811,14 +820,16 @@
       cursor: pointer;
       transition: all 0.15s;
     }
+
     .item-pagesize-btn:hover:not(.active) {
       color: #0f172a;
     }
+
     .item-pagesize-btn.active {
       background: #ffffff;
       color: #4338ca;
       font-weight: 700;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
     }
 
     .affiliation-daily-title {
@@ -1682,6 +1693,16 @@
           <polyline points="17 8 12 3 7 8" />
           <line x1="12" y1="3" x2="12" y2="15" />
         </svg> 📤 นำเข้าไฟล์ CSV / Excel</button>
+      <button id="btnResetDashboard" onclick="resetDashboardFiltersAndCache()"
+        title="ยกเลิก Filter ที่ Exclude, ล้าง Browser Cache และดึงข้อมูลล่าสุดใหม่"
+        style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:1px solid #cbd5e1;border-radius:12px;background:#ffffff;color:#334155;font-weight:600;font-size:13px;cursor:pointer;margin-top:8px;width:100%;box-shadow:0 3px 10px rgba(15,23,42,0.08);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          style="width:18px;height:18px;flex-shrink:0;">
+          <path d="M3 12a9 9 0 1 0 3-6.7" />
+          <path d="M3 4v6h6" />
+        </svg>
+        <span>รีเซ็ตข้อมูลหน้าเว็บ</span>
+      </button>
       <button id="btnExportPDF" onclick="exportPDF()"
         style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#7c3aed,#6366f1);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:8px;width:100%;box-shadow:0 4px 12px rgba(99,102,241,0.3);"><svg
           viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
