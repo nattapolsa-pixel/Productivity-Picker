@@ -735,6 +735,92 @@
       box-shadow: 0 0 0 3px #ccfbf1
     }
 
+    .item-pagination-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid #f1f5f9;
+      font-size: 13px;
+    }
+    .item-pagination-info {
+      color: #64748b;
+      font-weight: 500;
+    }
+    .item-pagination-info b {
+      color: #0f172a;
+    }
+    .item-pagination-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .item-page-btn {
+      padding: 6px 11px;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      color: #334155;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 32px;
+      user-select: none;
+    }
+    .item-page-btn:hover:not(:disabled) {
+      background: #f8fafc;
+      border-color: #94a3b8;
+      color: #0f172a;
+    }
+    .item-page-btn.active {
+      background: #4338ca;
+      border-color: #4338ca;
+      color: #ffffff;
+      box-shadow: 0 2px 8px rgba(67, 56, 202, 0.25);
+    }
+    .item-page-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      border-color: #e2e8f0;
+      background: #f8fafc;
+    }
+    .item-pagesize-group {
+      display: inline-flex;
+      align-items: center;
+      background: #f1f5f9;
+      padding: 3px;
+      border-radius: 9px;
+      gap: 3px;
+    }
+    .item-pagesize-btn {
+      border: none;
+      background: transparent;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #64748b;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .item-pagesize-btn:hover:not(.active) {
+      color: #0f172a;
+    }
+    .item-pagesize-btn.active {
+      background: #ffffff;
+      color: #4338ca;
+      font-weight: 700;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+
     .affiliation-daily-title {
       font-size: 13px;
       font-weight: 700;
@@ -2065,6 +2151,7 @@
           <div style="overflow-x:auto">
             <table id="itable"></table>
           </div>
+          <div id="itablePagination" class="item-pagination-bar"></div>
         </div>
       </section>
 
@@ -2333,7 +2420,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260808-workforce-zero-fixed-v42"></script>
+  <script src="app.js?v=20260808-item-pagination-v43"></script>
 </body>
 
 </html>

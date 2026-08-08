@@ -4526,7 +4526,26 @@ const builders = {
       }
     });
 
-    // ตารางค้นหาและตั้งค่ายกเว้นสินค้า
+    // ตารางค้นหาและตั้งค่ายกเว้นสินค้า พร้อมระบบแบ่งหน้า 50 - 100 รายการ
+    let itemTablePage = 1;
+    let itemTablePageSize = 50;
+
+    window._setItemTablePage = function(page){
+      itemTablePage = Math.max(1, Number(page) || 1);
+      renderItemTable();
+      const elTable = document.getElementById('itable');
+      if(elTable){
+        const card = elTable.closest('.card');
+        if(card) card.scrollIntoView({behavior:'smooth', block:'start'});
+      }
+    };
+
+    window._setItemPageSize = function(size){
+      itemTablePageSize = size === 'all' ? 'all' : (Number(size) || 50);
+      itemTablePage = 1;
+      renderItemTable();
+    };
+
     const searchInput = document.getElementById('itemSearch');
     if (searchInput) {
       searchInput.value = itemSearchTerm;
@@ -4534,6 +4553,7 @@ const builders = {
         searchInput._bound = true;
         searchInput.addEventListener('input', (e) => {
           itemSearchTerm = e.target.value.toLowerCase().trim();
+          itemTablePage = 1;
           renderItemTable();
         });
       }
@@ -4556,8 +4576,15 @@ const builders = {
         );
       }
 
-      // แสดงรายการสินค้าทั้งหมดที่ตรงกับคำค้นหา (ไม่ตัดสั้นที่ 35 รายการ)
-      const displayItems = allItems;
+      const totalItems = allItems.length;
+      const pageSize = itemTablePageSize === 'all' ? totalItems : (Number(itemTablePageSize) || 50);
+      const totalPages = Math.max(1, Math.ceil(totalItems / (pageSize || 1)));
+      if (itemTablePage > totalPages) itemTablePage = totalPages;
+      if (itemTablePage < 1) itemTablePage = 1;
+
+      const startIdx = (itemTablePage - 1) * pageSize;
+      const endIdx = itemTablePageSize === 'all' ? totalItems : Math.min(totalItems, startIdx + pageSize);
+      const displayItems = totalItems > 0 ? allItems.slice(startIdx, endIdx) : [];
 
       const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
       const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
@@ -4599,8 +4626,9 @@ const builders = {
             ? `<span class="pill" style="background:#e0f2fe;color:#0369a1;font-weight:700;">${escapeZoneHtml(x.zoneStr)}</span>`
             : '<span style="color:#94a3b8;">-</span>';
 
+          const rankNum = startIdx + i + 1;
           h += `<tr ${rowBg}>
-            <td><span class="rank">${i + 1}</span></td>
+            <td><span class="rank">${rankNum}</span></td>
             <td><b>${x.sku}</b></td>
             <td ${nameStyle}>${x.name || '-'}</td>
             <td><span class="pill">${x.owner || '-'}</span></td>
@@ -4614,6 +4642,74 @@ const builders = {
       }
       h += '</tbody>';
       elTable.innerHTML = h;
+
+      // Render Pagination Bar
+      const elPagination = document.getElementById('itablePagination');
+      if (elPagination) {
+        if (!totalItems) {
+          elPagination.innerHTML = '';
+          return;
+        }
+
+        const sizePills = [50, 100, 200, 'all'].map(sz => {
+          const label = sz === 'all' ? 'ทั้งหมด' : sz;
+          const isActive = String(itemTablePageSize) === String(sz);
+          return `<button class="item-pagesize-btn ${isActive ? 'active' : ''}" onclick="window._setItemPageSize('${sz}')">${label}</button>`;
+        }).join('');
+
+        let pageButtons = '';
+        if (itemTablePageSize !== 'all' && totalPages > 1) {
+          const prevDisabled = itemTablePage <= 1 ? 'disabled' : '';
+          const nextDisabled = itemTablePage >= totalPages ? 'disabled' : '';
+
+          pageButtons += `<button class="item-page-btn" ${prevDisabled} onclick="window._setItemTablePage(${itemTablePage - 1})">◀ ก่อนหน้า</button>`;
+
+          // Smart Page Windowing
+          const pageRange = [];
+          const maxButtons = 5;
+          let startPage = Math.max(1, itemTablePage - Math.floor(maxButtons / 2));
+          let endPage = Math.min(totalPages, startPage + maxButtons - 1);
+          if (endPage - startPage + 1 < maxButtons) {
+            startPage = Math.max(1, endPage - maxButtons + 1);
+          }
+
+          if (startPage > 1) {
+            pageRange.push(1);
+            if (startPage > 2) pageRange.push('...');
+          }
+          for (let p = startPage; p <= endPage; p++) {
+            pageRange.push(p);
+          }
+          if (endPage < totalPages) {
+            if (endPage < totalPages - 1) pageRange.push('...');
+            pageRange.push(totalPages);
+          }
+
+          pageRange.forEach(p => {
+            if (p === '...') {
+              pageButtons += `<span style="padding:0 4px;color:#94a3b8;font-weight:600;">…</span>`;
+            } else {
+              const isCurr = p === itemTablePage;
+              pageButtons += `<button class="item-page-btn ${isCurr ? 'active' : ''}" onclick="window._setItemTablePage(${p})">${p}</button>`;
+            }
+          });
+
+          pageButtons += `<button class="item-page-btn" ${nextDisabled} onclick="window._setItemTablePage(${itemTablePage + 1})">ถัดไป ▶</button>`;
+        }
+
+        elPagination.innerHTML = `
+          <div class="item-pagination-info">
+            แสดงรายการที่ <b>${startIdx + 1} - ${endIdx}</b> จากทั้งหมด <b>${fmt(totalItems)}</b> รายการ ${itemTablePageSize !== 'all' && totalPages > 1 ? `(หน้า ${itemTablePage}/${totalPages})` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#64748b;">
+              <span>แสดงต่อหน้า:</span>
+              <div class="item-pagesize-group">${sizePills}</div>
+            </div>
+            ${pageButtons ? `<div class="item-pagination-controls">${pageButtons}</div>` : ''}
+          </div>
+        `;
+      }
     }
 
     renderItemTable();
