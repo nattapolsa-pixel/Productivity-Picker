@@ -5122,6 +5122,7 @@ const builders = {
 
     if(!window._simState || window._simState.version !== 40){
       window._simState = {
+<<<<<<< HEAD
         version:41,
         shiftARatio:defaultRatioA,
         shiftBRatio:100-defaultRatioA,
@@ -5132,6 +5133,18 @@ const builders = {
         productivityDraft:null,
         userPickersA:{},
         userPickersB:{}
+=======
+        version: 41,
+        shiftARatio: defaultRatioA,
+        shiftBRatio: 100 - defaultRatioA,
+        customWorkload: null,
+        customSourceName: '',
+        productivitySystem: '',
+        productivityOverrides: null,
+        productivityDraft: null,
+        userPickersA: {},
+        userPickersB: {}
+>>>>>>> bb63887 (feat: refine empty state messages and workload reset guidance in Workforce Planner)
       };
     }
     const SState = window._simState;
@@ -5190,10 +5203,17 @@ const builders = {
 
     // ไม่มี Workload เริ่มต้นจาก BigQuery: ต้องนำเข้า ESTIMATED ก่อนจึงเริ่มวางแผน
     const activeWorkload = SState.customWorkload || {};
+<<<<<<< HEAD
     const zones = Object.keys(activeWorkload).filter(z => Number(activeWorkload[z].vol)>0).sort();
     const ratioA = Math.max(0, Math.min(1, Number(SState.shiftARatio||0)/100));
     const ratioB = 1-ratioA;
     SState.shiftBRatio = 100 - Number(SState.shiftARatio||0);
+=======
+    const zones = Object.keys(activeWorkload).filter(z => Number(activeWorkload[z].vol) > 0).sort();
+    const ratioA = Math.max(0, Math.min(1, Number(SState.shiftARatio || 0) / 100));
+    const ratioB = 1 - ratioA;
+    SState.shiftBRatio = 100 - Number(SState.shiftARatio || 0);
+>>>>>>> bb63887 (feat: refine empty state messages and workload reset guidance in Workforce Planner)
 
     const rows = zones.map(name => {
       const z = activeWorkload[name] || {};
@@ -5265,13 +5285,21 @@ const builders = {
       <div class="sim-actionbar">
         <span class="sim-status" id="simActionStatus">พร้อมใช้งาน</span>
         <button id="btnSimRefreshRoster" class="sim-btn primary" onclick="window._simRefreshRoster()"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 2 5"/><path d="M20 4v7h-7"/></svg><span>อัปเดตรายชื่อ</span></button>
+<<<<<<< HEAD
         <button id="btnSimResetWorkload" class="sim-btn soft" onclick="window._simResetWorkload()" ${SState.customWorkload?'':'disabled'}><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 10v6M14 10v6"/></svg><span>ล้าง Workload</span></button>
+=======
+        <button id="btnSimResetWorkload" class="sim-btn soft" onclick="window._simResetWorkload()" ${SState.customWorkload ? '' : 'disabled'}><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 10v6M14 10v6"/></svg><span>ล้าง Workload</span></button>
+>>>>>>> bb63887 (feat: refine empty state messages and workload reset guidance in Workforce Planner)
         <button id="btnSimUploadOrder" class="sim-btn success" onclick="document.getElementById('simFileInput').click()"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14a2 2 0 0 0 2-2v-4M3 15v4a2 2 0 0 0 2 2"/></svg><span>นำเข้า ESTIMATED</span></button>
         <input type="file" id="simFileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="window._simHandleOrderFile(event)">
       </div>
     </div>
     <div class="sim-setup">
+<<<<<<< HEAD
       <div class="sim-setup-card"><div class="sim-setup-label">ข้อมูล Workload</div><div class="sim-setup-value" id="simWorkloadSourceTxt">${SState.customWorkload?'ไฟล์ '+escapeZoneHtml(SState.customSourceName||'ที่อัปโหลด'):'รออัปโหลดไฟล์ ESTIMATED'}</div><div class="sim-setup-note">${SState.customWorkload?'ใช้ Column U (pu) · หน่วยหยิบเท่านั้น':'ยังไม่คำนวณแผนจนกว่าจะนำเข้า Column U (pu)'}</div></div>
+=======
+      <div class="sim-setup-card"><div class="sim-setup-label">ข้อมูล Workload</div><div class="sim-setup-value" id="simWorkloadSourceTxt">${SState.customWorkload ? 'ไฟล์ ' + escapeZoneHtml(SState.customSourceName || 'ที่อัปโหลด') : 'รออัปโหลดไฟล์ ESTIMATED'}</div><div class="sim-setup-note">${SState.customWorkload ? 'ใช้ Column U (pu) · หน่วยหยิบเท่านั้น' : 'ยังไม่คำนวณแผนจนกว่าจะนำเข้า Column U (pu)'}</div></div>
+>>>>>>> bb63887 (feat: refine empty state messages and workload reset guidance in Workforce Planner)
       <div class="sim-setup-card"><div class="sim-setup-label">สัดส่วนงาน A / B</div><div class="sim-setup-value" id="simShiftRatioTxt">A ${SState.shiftARatio}% : B ${SState.shiftBRatio}%</div><div class="sim-setup-row"><input id="simShiftRatioInput" class="sim-range" type="range" min="0" max="100" value="${SState.shiftARatio}" oninput="window._simDraftShiftRatio(this.value)"><button class="sim-btn soft" type="button" onclick="window._simDraftRosterRatio()">ตามจำนวนคน</button></div><div class="sim-pending" id="simRatioPending">มีค่าที่ยังไม่ได้ยืนยัน</div></div>
       <div class="sim-setup-card"><div class="sim-setup-label">เวลาทำงานก่อน OT</div><div class="sim-setup-value">กะ A 7.5 ชม. · กะ B 7 ชม. 50 นาที</div><div class="sim-setup-note">OT สูงสุด 2.5 ชม. · Flex ${roster.countFlex} คน · Productivity ย้อนหลัง ${escapeZoneHtml(dfrom)} ถึง ${escapeZoneHtml(dto)}</div></div>
       <div class="sim-setup-footer"><div class="sim-setup-footer-note">ปรับสัดส่วน A/B แล้วกด “ยืนยันสัดส่วน” ก่อนคำนวณแผนใหม่</div><button id="btnSimConfirmSettings" class="sim-confirm" type="button" onclick="window._simConfirmSettings()"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg><span>ยืนยันสัดส่วน</span></button></div>
