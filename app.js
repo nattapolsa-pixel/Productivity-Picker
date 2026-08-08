@@ -39,7 +39,7 @@ const ZONE_TYPE_COLORS = Object.freeze({
   'on floor': '#475569',
   '-': '#94a3b8'
 });
-const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', report: '📊 สรุปผล & Insights', simulator: '🎮 วางแผนกำลังคน & OT' };
+const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
 const SHIFT_LABEL = { morning: '🅰️ กะ A', night: '🅱️ กะ B', '-': '-' };
 
 Chart.register(ChartDataLabels);
@@ -630,12 +630,89 @@ function applyPlannerRosterPayload(payload) {
   return getPickerRosterPlanningSummary();
 }
 
+
+function plannerActionTimeText() {
+  try {
+    return new Intl.DateTimeFormat('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date());
+  } catch (_) {
+    return new Date().toLocaleTimeString('th-TH');
+  }
+}
+
+function plannerActionIconSvg(type) {
+  if (type === 'loading') return '<span class="planner-popup-spinner" aria-hidden="true"></span>';
+  if (type === 'error') return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5m0 3h.01M10.3 3.7 2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/></svg>';
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>';
+}
+
+function showPlannerActionPopup(type, title, message, options = {}) {
+  let overlay = document.getElementById('plannerActionPopup');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'plannerActionPopup';
+    overlay.innerHTML = '<div class="planner-popup-card"><div class="planner-popup-icon"></div><div class="planner-popup-copy"><div class="planner-popup-title"></div><div class="planner-popup-message"></div><div class="planner-popup-time"></div></div><button type="button" class="planner-popup-close" aria-label="ปิด">×</button></div>';
+    document.body.appendChild(overlay);
+    overlay.querySelector('.planner-popup-close').addEventListener('click', () => overlay.classList.remove('show'));
+    overlay.addEventListener('click', e => { if (e.target === overlay && !overlay.classList.contains('loading')) overlay.classList.remove('show'); });
+  }
+  if (!document.getElementById('plannerActionPopupStyle')) {
+    const style = document.createElement('style');
+    style.id = 'plannerActionPopupStyle';
+    style.textContent = `
+#plannerActionPopup{position:fixed;inset:0;z-index:10050;background:rgba(15,23,42,.28);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;pointer-events:none;transition:.18s ease}
+#plannerActionPopup.show{opacity:1;pointer-events:auto}
+.planner-popup-card{width:min(430px,calc(100vw - 32px));background:#fff;border:1px solid #e2e8f0;border-radius:18px;box-shadow:0 24px 70px rgba(15,23,42,.22);padding:20px;display:grid;grid-template-columns:48px 1fr 28px;gap:14px;align-items:start}
+.planner-popup-icon{width:48px;height:48px;border-radius:14px;display:flex;align-items:center;justify-content:center;background:#ecfdf5;color:#047857}
+.planner-popup-icon svg{width:26px;height:26px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+#plannerActionPopup.error .planner-popup-icon{background:#fef2f2;color:#b91c1c}
+#plannerActionPopup.loading .planner-popup-icon{background:#eff6ff;color:#2563eb}
+.planner-popup-title{font-size:16px;font-weight:800;color:#0f172a;margin-top:1px}
+.planner-popup-message{font-size:12.5px;line-height:1.65;color:#475569;margin-top:5px;white-space:pre-line}
+.planner-popup-time{font-size:11px;color:#94a3b8;margin-top:9px}
+.planner-popup-close{border:0;background:#f8fafc;color:#64748b;border-radius:8px;width:28px;height:28px;cursor:pointer;font-size:20px;line-height:1}
+#plannerActionPopup.loading .planner-popup-close{visibility:hidden}
+.planner-popup-spinner{width:24px;height:24px;border:3px solid #bfdbfe;border-top-color:#2563eb;border-radius:50%;animation:plannerSpin .75s linear infinite}
+@keyframes plannerSpin{to{transform:rotate(360deg)}}`;
+    document.head.appendChild(style);
+  }
+  overlay.className = 'show ' + String(type || 'success');
+  overlay.querySelector('.planner-popup-icon').innerHTML = plannerActionIconSvg(type);
+  overlay.querySelector('.planner-popup-title').textContent = title || '';
+  overlay.querySelector('.planner-popup-message').textContent = message || '';
+  overlay.querySelector('.planner-popup-time').textContent = type === 'loading' ? 'กำลังประมวลผลข้อมูล' : 'ดำเนินการเมื่อ ' + plannerActionTimeText() + ' น.';
+  const status = document.getElementById('simActionStatus');
+  if (status && type !== 'loading') {
+    status.textContent = (type === 'error' ? 'ดำเนินการไม่สำเร็จ' : 'อัปเดตล่าสุด ' + plannerActionTimeText() + ' น.');
+    status.dataset.state = type;
+  }
+  if (type !== 'loading' && options.autoClose !== false) {
+    const wait = Number(options.autoClose) || 2800;
+    clearTimeout(window._plannerPopupTimer);
+    window._plannerPopupTimer = setTimeout(() => { if (overlay.classList.contains(type)) overlay.classList.remove('show'); }, wait);
+  }
+  return overlay;
+}
+
+function plannerSetButtonBusy(btn, busy, busyText) {
+  if (!btn) return;
+  if (busy) {
+    if (!btn.dataset.originalHtml) btn.dataset.originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.classList.add('is-busy');
+    btn.innerHTML = '<span class="planner-inline-spinner"></span><span>' + String(busyText || 'กำลังดำเนินการ...') + '</span>';
+  } else {
+    btn.disabled = false;
+    btn.classList.remove('is-busy');
+    if (btn.dataset.originalHtml) { btn.innerHTML = btn.dataset.originalHtml; delete btn.dataset.originalHtml; }
+  }
+}
+
 async function refreshPlannerRoster(force = false, options = {}) {
   if (plannerRosterRefreshPromise) return plannerRosterRefreshPromise;
   const silent = !!options.silent;
   const btn = document.getElementById('btnSimRefreshRoster');
-  const oldText = btn ? btn.textContent : '';
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ กำลังอัปเดต...'; btn.style.opacity = '.75'; }
+  if (btn) plannerSetButtonBusy(btn, true, 'กำลังอัปเดต...');
+  if (!silent) showPlannerActionPopup('loading', 'กำลังอัปเดตรายชื่อพนักงาน', 'ระบบกำลังอ่านข้อมูลล่าสุดจากชีตบันทึกเวลาทำงาน');
   const task = (async () => {
     const url = DATA_URL + (DATA_URL.includes('?') ? '&' : '?') +
       'mode=roster&fresh=' + (force ? '1' : '0') + '&t=' + Date.now();
@@ -657,15 +734,15 @@ async function refreshPlannerRoster(force = false, options = {}) {
     }
     built.simulator = false;
     if (currentPage === 'simulator' && hasLiveData) builders.simulator();
-    if (!silent) alert(`อัปเดตรายชื่อ Picker สำเร็จ\nรวม ${roster.total} คน · กะ A ${roster.countA} · กะ B ${roster.countB} · Flex ${roster.countFlex}`);
+    if (!silent) showPlannerActionPopup('success', 'อัปเดตรายชื่อพนักงานสำเร็จ', `พบ Picker ${roster.total} คน\nกะ A ${roster.countA} คน · กะ B ${roster.countB} คน · Flex ${roster.countFlex} คน`);
     return roster;
   })().catch(err => {
     console.warn('refreshPlannerRoster failed:', err);
-    if (!silent) alert('อัปเดตรายชื่อ Picker ไม่สำเร็จ: ' + (err.message || err));
+    if (!silent) showPlannerActionPopup('error', 'อัปเดตรายชื่อพนักงานไม่สำเร็จ', String(err.message || err), { autoClose: false });
     throw err;
   }).finally(() => {
     plannerRosterRefreshPromise = null;
-    if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = oldText || '🔄 อัปเดตรายชื่อ Picker'; btn.style.opacity = '1'; }
+    if (btn && btn.isConnected) plannerSetButtonBusy(btn, false);
   });
   plannerRosterRefreshPromise = task;
   return task;
@@ -4674,7 +4751,7 @@ const builders = {
         <div class="text"><strong>วันที่ดีที่สุด:</strong> ${bestDay.date} — Productivity ${bestDay[prodField]} ${unitLabel}<br>ปริมาณหยิบ ${fmt(bestDay[volField])} ${volLabel} / ${bestDay.pickers || '-'} คน</div>
       </div>` : ''}
       ${worstDay && worstDay.date !== (bestDay && bestDay.date) ? `<div class="insight-box warn">
-        <div class="icon">⚠️</div>
+        <div class="icon">!</div>
         <div class="text"><strong>วันที่ต่ำสุด:</strong> ${worstDay.date} — Productivity ${worstDay[prodField]} ${unitLabel}<br>ควรตรวจสอบสาเหตุ เช่น กำลังคน, งานหนัก, ชุดคำสั่งหยิบ</div>
       </div>` : ''}
       ${topPicker ? `<div class="insight-box info">
@@ -5036,16 +5113,16 @@ const builders = {
   simulator() {
     const el = document.getElementById('simulatorPage');
     if (!el) return;
-    const isPcs = unitMode === 'pcs';
-    const volLabel = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
-    const prodUnit = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+    // Workforce Planner ใช้หน่วยหยิบเท่านั้น ไม่สลับตามตัวเลือก Pcs/Units ของ Dashboard
+    const volLabel = 'หน่วยหยิบ';
+    const prodUnit = 'หน่วยหยิบ/ชม.';
     const roster = getPickerRosterPlanningSummary();
     const coreRoster = roster.countA + roster.countB;
     const defaultRatioA = coreRoster > 0 ? Math.round(roster.countA / coreRoster * 100) : 50;
 
-    if (!window._simState || window._simState.version !== 34) {
+    if (!window._simState || window._simState.version !== 37) {
       window._simState = {
-        version: 34,
+        version: 37,
         shiftARatio: defaultRatioA,
         shiftBRatio: 100 - defaultRatioA,
         targetHours: 8,
@@ -5064,7 +5141,8 @@ const builders = {
     const rateMap = {};
     (hist.by_zone_prod || []).forEach(z => {
       if (!z.name || z.name === '-' || z.name === 'ไม่พบใน Zone_V2') return;
-      const rate = isPcs ? (z.avg_pcs_prod || z.mean_pcs_prod || 0) : (z.avg_prod || z.mean_prod || 0);
+      // Productivity สำหรับ Planner = หน่วยหยิบ/ชม. เท่านั้น
+      const rate = (z.avg_prod || z.mean_prod || 0);
       if (rate > 0) rateMap[z.name] = rate;
     });
 
@@ -5072,7 +5150,8 @@ const builders = {
     (day.by_zone || []).forEach(z => {
       const name = String(z.zone || '').trim();
       if (!name || name === '-' || name === 'ไม่พบใน Zone_V2') return;
-      const vol = isPcs ? (z.pcs || 0) : (z.qty || 0);
+      // Workload จาก BigQuery ใช้หน่วยหยิบ (pick_qty) เท่านั้น
+      const vol = (z.qty || 0);
       if (vol <= 0) return;
       zoneMap[name] = { name, vol, lines: z.lines || 0, prodRate: rateMap[name] || 100, rateFallback: !(rateMap[name] > 0) };
     });
@@ -5115,27 +5194,44 @@ const builders = {
     const fmt1 = n => Number.isFinite(Number(n)) ? (Math.round(Number(n) * 10) / 10).toLocaleString('en-US') : '-';
     const assigned = (map, z, def) => Object.prototype.hasOwnProperty.call(map, z) ? Math.max(0, Math.floor(Number(map[z]) || 0)) : def;
     const hours = (vol, p, rate) => vol <= 0 ? 0 : (p > 0 && rate > 0 ? vol / (p * rate) : Infinity);
-    const badge = (h, hasWork) => !hasWork ? '<span class="sim-badge ok">— ไม่มีงาน</span>' : (!Number.isFinite(h) ? '<span class="sim-badge ot">🔴 ไม่มีคน</span>' : h <= SState.targetHours ? `<span class="sim-badge ok">🟢 ${fmt1(h)} ชม.</span>` : h <= SState.targetHours + 1.5 ? `<span class="sim-badge warn">🟡 +${fmt1(h - SState.targetHours)} ชม.</span>` : `<span class="sim-badge ot">🔴 +${fmt1(h - SState.targetHours)} ชม.</span>`);
+    const badge = (h, hasWork) => !hasWork ? '<span class="sim-badge neutral"><i></i>ไม่มีงาน</span>' : (!Number.isFinite(h) ? '<span class="sim-badge ot"><i></i>ไม่มีคน</span>' : h <= SState.targetHours ? `<span class="sim-badge ok"><i></i>${fmt1(h)} ชม.</span>` : h <= SState.targetHours + 1.5 ? `<span class="sim-badge warn"><i></i>เกิน ${fmt1(h - SState.targetHours)} ชม.</span>` : `<span class="sim-badge ot"><i></i>เกิน ${fmt1(h - SState.targetHours)} ชม.</span>`);
 
     el.innerHTML = `
 <style>
-.sim-hero{background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:20px;padding:24px;color:#fff;margin-bottom:24px}.sim-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-top:18px;background:rgba(255,255,255,.06);padding:18px;border-radius:16px}.sim-card{background:#fff;border-radius:18px;padding:22px;box-shadow:0 2px 16px rgba(15,23,42,.07);border:1px solid #f1f5f9;margin-bottom:24px}.sim-card h4{margin:0 0 4px;font-size:16px;font-weight:800}.sim-card .sub{font-size:12.5px;color:#64748b;margin:0 0 18px}.sim-table{width:100%;border-collapse:collapse;font-size:13px;min-width:1080px}.sim-table th{background:#f8fafc;padding:11px 12px;font-weight:700;color:#475569;border-bottom:2px solid #e2e8f0;white-space:nowrap}.sim-table td{padding:10px 12px;border-bottom:1px solid #f1f5f9}.sim-input-num{width:64px;padding:6px 8px;border:1.5px solid #cbd5e1;border-radius:8px;font-weight:700;text-align:center}.sim-badge{padding:4px 9px;border-radius:8px;font-size:11px;font-weight:700;white-space:nowrap}.sim-badge.ok{background:#dcfce7;color:#15803d}.sim-badge.warn{background:#fff7ed;color:#c2410c}.sim-badge.ot{background:#fee2e2;color:#b91c1c}.sim-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}.sim-kpi{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:17px}.sim-kpi .lbl{font-size:11.5px;font-weight:700;color:#64748b}.sim-kpi .val{font-size:25px;font-weight:900;margin-top:3px}.sim-kpi .subv{font-size:11px;color:#64748b;margin-top:3px;line-height:1.45}
+.sim-shell{border:1px solid #dbe4ef;border-radius:20px;background:#fff;box-shadow:0 14px 38px -28px rgba(15,23,42,.38);overflow:hidden;margin-bottom:20px}
+.sim-head{padding:20px 22px;border-bottom:1px solid #e7edf5;background:linear-gradient(180deg,#ffffff 0%,#f8fbff 100%);display:flex;justify-content:space-between;gap:18px;align-items:center;flex-wrap:wrap}
+.sim-title-wrap{display:flex;gap:13px;align-items:flex-start}.sim-title-icon{width:42px;height:42px;border-radius:12px;background:#eff6ff;color:#1d4ed8;display:flex;align-items:center;justify-content:center;flex:0 0 auto}.sim-title-icon svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}.sim-title{font-size:20px;font-weight:800;color:#0f172a;line-height:1.2}.sim-title-sub{font-size:12px;color:#64748b;margin-top:5px;line-height:1.55}
+.sim-actionbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.sim-btn{border:1px solid #d7e0ea;background:#fff;color:#334155;padding:8px 12px;border-radius:9px;font:700 11.5px Prompt,sans-serif;cursor:pointer;display:inline-flex;align-items:center;gap:7px;transition:.18s;white-space:nowrap}.sim-btn:hover{border-color:#94a3b8;transform:translateY(-1px);box-shadow:0 5px 12px -9px rgba(15,23,42,.7)}.sim-btn svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.sim-btn.primary{background:#1d4ed8;border-color:#1d4ed8;color:#fff}.sim-btn.success{background:#047857;border-color:#047857;color:#fff}.sim-btn.soft{background:#f8fafc}.sim-btn:disabled{cursor:not-allowed;opacity:.68;transform:none}.planner-inline-spinner{width:13px;height:13px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:plannerSpin .7s linear infinite}
+.sim-status{font-size:10.5px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:999px;padding:5px 9px}.sim-status[data-state="success"]{background:#ecfdf5;border-color:#a7f3d0;color:#047857}.sim-status[data-state="error"]{background:#fef2f2;border-color:#fecaca;color:#b91c1c}
+.sim-config{padding:18px 22px;background:#f8fafc;display:grid;grid-template-columns:1.2fr 1fr .8fr;gap:12px}.sim-config-box{background:#fff;border:1px solid #e2e8f0;border-radius:13px;padding:13px 14px;min-width:0}.sim-config-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#94a3b8;font-weight:800}.sim-config-main{font-size:13px;font-weight:800;color:#0f172a;margin-top:5px;line-height:1.4}.sim-config-sub{font-size:10.5px;color:#64748b;margin-top:4px;line-height:1.45}.sim-config-row{display:flex;gap:9px;align-items:center;margin-top:9px}.sim-range{width:100%;accent-color:#2563eb}.sim-pending{font-size:10.5px;color:#b45309;margin-top:6px;display:none}.sim-pending.show{display:block}.sim-confirm-wrap{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:10px;padding-top:2px}.sim-confirm-note{font-size:10.5px;color:#64748b}.sim-confirm{border:0;background:#0f172a;color:#fff;padding:9px 15px;border-radius:9px;font:700 11.5px Prompt,sans-serif;cursor:pointer;display:inline-flex;gap:7px;align-items:center}.sim-confirm svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.sim-card{background:#fff;border-radius:18px;padding:22px;box-shadow:0 2px 16px rgba(15,23,42,.06);border:1px solid #e7edf5;margin-bottom:20px}.sim-card h4{margin:0 0 4px;font-size:15.5px;font-weight:800;color:#0f172a}.sim-card .sub{font-size:11.5px;color:#64748b;margin:0 0 16px}.sim-section-index{display:inline-flex;width:25px;height:25px;border-radius:8px;background:#eff6ff;color:#1d4ed8;align-items:center;justify-content:center;font-size:11px;font-weight:800;margin-right:8px}.sim-table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:1080px}.sim-table th{background:#f8fafc;padding:10px 11px;font-weight:700;color:#475569;border-bottom:1px solid #dfe7f0;white-space:nowrap}.sim-table td{padding:9px 11px;border-bottom:1px solid #edf2f7}.sim-input-num{width:64px;padding:6px 8px;border:1.5px solid #cbd5e1;border-radius:8px;font-weight:700;text-align:center;background:#fff}.sim-input-num:focus{outline:0;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}.sim-badge{padding:4px 8px;border-radius:999px;font-size:10.5px;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:5px}.sim-badge i{width:6px;height:6px;border-radius:50%;background:currentColor}.sim-badge.ok{background:#ecfdf5;color:#047857}.sim-badge.warn{background:#fff7ed;color:#b45309}.sim-badge.ot{background:#fef2f2;color:#b91c1c}.sim-badge.neutral{background:#f1f5f9;color:#64748b}.sim-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.sim-kpi{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:15px 16px}.sim-kpi .lbl{font-size:10.5px;font-weight:700;color:#64748b}.sim-kpi .val{font-size:23px;font-weight:900;margin-top:3px;color:#0f172a}.sim-kpi .subv{font-size:10.5px;color:#64748b;margin-top:3px;line-height:1.45}
+@media(max-width:1050px){.sim-config{grid-template-columns:1fr}.sim-confirm-wrap{grid-column:1}.sim-head{align-items:flex-start}}
 </style>
-<div class="sim-hero">
-  <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start;">
-    <div><div style="font-size:22px;font-weight:800;">🎮 วางแผน Picker จริงตามภาระงาน</div><div style="font-size:13px;color:#cbd5e1;margin-top:5px;">นับเฉพาะ <b>หน้าที่รับผิดชอบ = Picker</b> จากชีตบันทึกเวลาทำงาน แล้วกระจายคนตาม Person-hours ของแต่ละ Zone</div></div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;"><button id="btnSimRefreshRoster" onclick="window._simRefreshRoster()" style="border:0;background:#0ea5e9;color:#fff;padding:8px 13px;border-radius:9px;font-weight:700;cursor:pointer;">🔄 อัปเดตรายชื่อ Picker</button><button onclick="window._simResetWorkload()" style="border:0;background:rgba(255,255,255,.15);color:#fff;padding:8px 13px;border-radius:9px;font-weight:700;cursor:pointer;">📦 ใช้ Workload วันที่ ${escapeZoneHtml(planningDate)}</button><button onclick="document.getElementById('simFileInput').click()" style="border:0;background:#10b981;color:#fff;padding:8px 13px;border-radius:9px;font-weight:700;cursor:pointer;">📂 อัปโหลด ESTIMATED</button><input type="file" id="simFileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="window._simHandleOrderFile(event)"></div>
+<div class="sim-shell">
+  <div class="sim-head">
+    <div class="sim-title-wrap">
+      <div class="sim-title-icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+      <div><div class="sim-title">แผนการจัดสรรกำลังคนตามภาระงาน</div><div class="sim-title-sub">ใช้พนักงานที่มีหน้าที่รับผิดชอบเป็น Picker และกระจายกำลังคนตามชั่วโมงทำงาน/คนของแต่ละ Zone</div></div>
+    </div>
+    <div class="sim-actionbar">
+      <span class="sim-status" id="simActionStatus">พร้อมใช้งาน</span>
+      <button id="btnSimRefreshRoster" class="sim-btn primary" onclick="window._simRefreshRoster()"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0 2 5"/><path d="M20 4v7h-7"/></svg><span>อัปเดตรายชื่อพนักงาน</span></button>
+      <button id="btnSimResetWorkload" class="sim-btn soft" onclick="window._simResetWorkload()"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-7"/></svg><span>ใช้ Workload วันที่ ${escapeZoneHtml(planningDate)}</span></button>
+      <button id="btnSimUploadOrder" class="sim-btn success" onclick="document.getElementById('simFileInput').click()"><svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14a2 2 0 0 0 2-2v-4M3 15v4a2 2 0 0 0 2 2"/></svg><span>นำเข้าไฟล์ ESTIMATED</span></button>
+      <input type="file" id="simFileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="window._simHandleOrderFile(event)">
+    </div>
   </div>
-  <div class="sim-controls">
-    <div><div style="font-size:12px;font-weight:700;color:#94a3b8;">📊 Workload</div><div style="font-size:14px;font-weight:800;color:#38bdf8;margin-top:5px;" id="simWorkloadSourceTxt">${SState.customWorkload ? '📂 ' + escapeZoneHtml(SState.customSourceName || 'ไฟล์ที่อัปโหลด') : '📦 BigQuery เฉพาะวันที่ ' + escapeZoneHtml(planningDate)}</div><div style="font-size:10.5px;color:#94a3b8;margin-top:5px;">Productivity อ้างอิงช่วง ${escapeZoneHtml(dfrom)} ถึง ${escapeZoneHtml(dto)}</div></div>
-    <div><div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:#94a3b8;"><span>⚖️ แบ่งงาน A / B</span><span id="simShiftRatioTxt" style="color:#10b981;">A ${SState.shiftARatio}% : B ${SState.shiftBRatio}%</span></div><input type="range" min="0" max="100" value="${SState.shiftARatio}" style="width:100%;accent-color:#10b981;margin-top:9px;" oninput="window._simUpdateShiftRatio(this.value)"><button onclick="window._simUseRosterRatio()" style="margin-top:6px;border:0;background:#334155;color:#fff;padding:5px 9px;border-radius:7px;font-size:10.5px;font-weight:700;cursor:pointer;">ใช้สัดส่วนคนจริง ${roster.countA}:${roster.countB}</button></div>
-    <div><div style="font-size:12px;font-weight:700;color:#94a3b8;">⏱️ เป้าหมายเวลาจบ</div><div style="display:flex;gap:8px;align-items:center;margin-top:8px;"><input type="number" min="1" max="12" step=".5" value="${SState.targetHours}" class="sim-input-num" onchange="window._simUpdateTargetHours(this.value)"><span style="font-size:12px;color:#cbd5e1;">ชม./กะ</span></div><div style="font-size:10.5px;color:#94a3b8;margin-top:5px;">Flex Picker ${roster.countFlex} คน แสดงเป็นกำลังสำรอง ไม่แจกอัตโนมัติ · Roster cache 5 นาที</div></div>
+  <div class="sim-config">
+    <div class="sim-config-box"><div class="sim-config-label">แหล่งข้อมูล Workload (หน่วยหยิบ)</div><div class="sim-config-main" id="simWorkloadSourceTxt">${SState.customWorkload ? 'ไฟล์ ' + escapeZoneHtml(SState.customSourceName || 'ที่อัปโหลด') : 'BigQuery เฉพาะวันที่ ' + escapeZoneHtml(planningDate)}</div><div class="sim-config-sub">ไฟล์ ESTIMATED ใช้ Column U (pu) เท่านั้น · Productivity อ้างอิงช่วง ${escapeZoneHtml(dfrom)} ถึง ${escapeZoneHtml(dto)}</div></div>
+    <div class="sim-config-box"><div class="sim-config-label">สัดส่วนงาน กะ A / กะ B</div><div class="sim-config-main" id="simShiftRatioTxt">A ${SState.shiftARatio}% : B ${SState.shiftBRatio}%</div><div class="sim-config-row"><input id="simShiftRatioInput" class="sim-range" type="range" min="0" max="100" value="${SState.shiftARatio}" oninput="window._simDraftShiftRatio(this.value)"><button class="sim-btn" type="button" onclick="window._simDraftRosterRatio()">ใช้สัดส่วน ${roster.countA}:${roster.countB}</button></div><div class="sim-pending" id="simRatioPending">มีการเปลี่ยนแปลงที่ยังไม่ได้ยืนยัน</div></div>
+    <div class="sim-config-box"><div class="sim-config-label">เป้าหมายเวลาจบ</div><div class="sim-config-row"><input id="simTargetHoursInput" type="number" min="1" max="12" step=".5" value="${SState.targetHours}" class="sim-input-num" oninput="window._simDraftTargetHours(this.value)"><span style="font-size:12px;color:#475569">ชม./กะ</span></div><div class="sim-config-sub">Flex ${roster.countFlex} คนเป็นกำลังสำรอง · Roster cache 5 นาที</div><div class="sim-pending" id="simHoursPending">มีการเปลี่ยนแปลงที่ยังไม่ได้ยืนยัน</div></div>
+    <div class="sim-confirm-wrap"><div class="sim-confirm-note">เมื่อปรับสัดส่วนหรือชั่วโมงเป้าหมาย กรุณากดยืนยันก่อนนำค่ามาคำนวณ</div><button id="btnSimConfirmSettings" class="sim-confirm" type="button" onclick="window._simConfirmSettings()"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg><span>ยืนยันการตั้งค่า</span></button></div>
   </div>
 </div>
-<div id="simKpiSummary" style="margin-bottom:24px;"></div>
-<div class="sim-card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><h4>🎯 1. แผนกระจายคนจริงตาม Person-hours</h4><p class="sub">Workload ÷ Productivity = Person-hours แล้วกระจายจำนวนคนจริงแบบจำนวนเต็ม ผลรวมคนแนะนำ = จำนวน Picker ของกะ</p></div><button onclick="window._simFillRecommendedHeadcount()" style="height:34px;border:0;background:#e0e7ff;color:#3730a3;padding:6px 12px;border-radius:9px;font-weight:700;cursor:pointer;">🪄 ใช้แผนแนะนำ</button></div><div style="overflow-x:auto"><table class="sim-table"><thead><tr><th>Zone</th><th style="text-align:right">Workload</th><th style="text-align:right">Prod.</th><th style="text-align:right">Person-hours</th><th style="text-align:right;background:#eef2ff">A งาน</th><th style="text-align:center;background:#eef2ff">A คนแนะนำ</th><th style="text-align:center;background:#eef2ff">A เวลาจบ</th><th style="text-align:right;background:#fdf4ff">B งาน</th><th style="text-align:center;background:#fdf4ff">B คนแนะนำ</th><th style="text-align:center;background:#fdf4ff">B เวลาจบ</th></tr></thead><tbody id="simPlanTbody"></tbody></table></div></div>
-<div class="sim-card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><h4>🎮 2. Simulator — ปรับคนแต่ละ Zone</h4><p class="sub">ปรับจำนวนคนได้เอง ระบบคำนวณเวลาจบและ OT คน-ชั่วโมงทันที</p></div><div id="simAssignedCounter" style="font-size:11.5px;font-weight:700;color:#475569;"></div></div><div style="overflow-x:auto"><table class="sim-table"><thead><tr><th>Zone</th><th style="text-align:center;background:#f0fdf4">A ใส่คน</th><th style="text-align:center;background:#f0fdf4">A เวลาจบ</th><th style="text-align:center;background:#f0fdf4">A สถานะ</th><th style="text-align:center;background:#faf5ff">B ใส่คน</th><th style="text-align:center;background:#faf5ff">B เวลาจบ</th><th style="text-align:center;background:#faf5ff">B สถานะ</th><th style="text-align:right">OT คน-ชม.</th></tr></thead><tbody id="simLiveTbody"></tbody></table></div></div>
-<div class="sim-card" style="margin-bottom:0"><h4>💡 3. คำแนะนำการโยกคน & ความเสี่ยง OT</h4><p class="sub">ดู Capacity ของทั้งกะก่อน แล้วค่อยหา Zone ที่ควรโยกคนไปช่วย</p><div id="simAdviceBox"></div></div>`;
+<div id="simKpiSummary" style="margin-bottom:20px;"></div>
+<div class="sim-card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start"><div><h4><span class="sim-section-index">1</span>แผนกระจายกำลังคนตามชั่วโมงทำงาน/คน</h4><p class="sub">Workload (หน่วยหยิบ) ÷ Productivity (หน่วยหยิบ/ชม.) = ชั่วโมงทำงาน/คน และกระจายจำนวนคนจริงแบบจำนวนเต็ม โดยผลรวมคนแนะนำเท่ากับจำนวน Picker ของแต่ละกะ</p></div><button id="btnSimUseRecommended" class="sim-btn primary" onclick="window._simFillRecommendedHeadcount()"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/></svg><span>ใช้แผนแนะนำ</span></button></div><div style="overflow-x:auto"><table class="sim-table"><thead><tr><th>Zone</th><th style="text-align:right">Workload (หน่วยหยิบ)</th><th style="text-align:right">Productivity</th><th style="text-align:right">ชั่วโมงทำงาน/คน</th><th style="text-align:right;background:#eef2ff">A งาน (หน่วยหยิบ)</th><th style="text-align:center;background:#eef2ff">A คนแนะนำ</th><th style="text-align:center;background:#eef2ff">A เวลาจบ</th><th style="text-align:right;background:#faf5ff">B งาน (หน่วยหยิบ)</th><th style="text-align:center;background:#faf5ff">B คนแนะนำ</th><th style="text-align:center;background:#faf5ff">B เวลาจบ</th></tr></thead><tbody id="simPlanTbody"></tbody></table></div></div>
+<div class="sim-card"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start"><div><h4><span class="sim-section-index">2</span>ปรับแผนกำลังคนราย Zone</h4><p class="sub">สามารถปรับจำนวนคนได้ตามสถานการณ์จริง ระบบจะคำนวณเวลาจบและ OT คน-ชั่วโมงใหม่ทันที</p><div class="sim-pending" id="simManualPending">มีการปรับจำนวนคนที่ยังไม่ได้ยืนยัน</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><div id="simAssignedCounter" style="font-size:11.5px;font-weight:700;color:#475569"></div><button id="btnSimConfirmManual" class="sim-btn primary" type="button" onclick="window._simConfirmManualPlan()"><svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg><span>ยืนยันแผนกำลังคน</span></button></div></div><div style="overflow-x:auto"><table class="sim-table"><thead><tr><th>Zone</th><th style="text-align:center;background:#f0fdf4">A ใส่คน</th><th style="text-align:center;background:#f0fdf4">A เวลาจบ</th><th style="text-align:center;background:#f0fdf4">A สถานะ</th><th style="text-align:center;background:#faf5ff">B ใส่คน</th><th style="text-align:center;background:#faf5ff">B เวลาจบ</th><th style="text-align:center;background:#faf5ff">B สถานะ</th><th style="text-align:right">OT คน-ชม.</th></tr></thead><tbody id="simLiveTbody"></tbody></table></div></div>
+<div class="sim-card" style="margin-bottom:0"><h4><span class="sim-section-index">3</span>ข้อเสนอแนะการโยกกำลังคนและความเสี่ยง OT</h4><p class="sub">ประเมิน Capacity ของทั้งกะและระบุ Zone ที่ควรโยกกำลังคนเข้าไปช่วย</p><div id="simAdviceBox"></div></div>`;
 
     function calculateSim() {
       let totalWork = 0, phA = 0, phB = 0, assignedA = 0, assignedB = 0, otPersonHours = 0;
@@ -5159,38 +5255,94 @@ const builders = {
       if (!rows.length) { planHtml = '<tr><td colspan="10" style="text-align:center;padding:24px;color:#94a3b8">ไม่มี Workload สำหรับวันนี้ หรือกรุณาอัปโหลด ESTIMATED</td></tr>'; liveHtml = '<tr><td colspan="8" style="text-align:center;padding:24px;color:#94a3b8">ไม่มีข้อมูล</td></tr>'; }
       document.getElementById('simPlanTbody').innerHTML = planHtml; document.getElementById('simLiveTbody').innerHTML = liveHtml;
       const avgA = roster.countA > 0 ? phA / roster.countA : Infinity, avgB = roster.countB > 0 ? phB / roster.countB : Infinity;
-      document.getElementById('simKpiSummary').innerHTML = `<div class="sim-kpis"><div class="sim-kpi"><div class="lbl">📦 Workload</div><div class="val">${fmt(Math.round(totalWork))}</div><div class="subv">${volLabel} · ${rows.length} Zone</div></div><div class="sim-kpi" style="border-color:#c7d2fe"><div class="lbl" style="color:#4338ca">👷 Picker จริง</div><div class="val" style="color:#4338ca">${roster.total} คน</div><div class="subv">A ${roster.countA} · B ${roster.countB} · Flex ${roster.countFlex}</div></div><div class="sim-kpi" style="border-color:#bbf7d0"><div class="lbl" style="color:#15803d">🅰️ กะ A</div><div class="val" style="color:#15803d">${roster.countA} คน</div><div class="subv">จัด ${assignedA}/${roster.countA} · ภาระเฉลี่ย ${Number.isFinite(avgA) ? fmt1(avgA) : '-'} ชม./คน</div></div><div class="sim-kpi" style="border-color:#e9d5ff"><div class="lbl" style="color:#7e22ce">🅱️ กะ B</div><div class="val" style="color:#7e22ce">${roster.countB} คน</div><div class="subv">จัด ${assignedB}/${roster.countB} · ภาระเฉลี่ย ${Number.isFinite(avgB) ? fmt1(avgB) : '-'} ชม./คน</div></div><div class="sim-kpi" style="border-color:${risk.size ? '#fecaca' : '#bbf7d0'}"><div class="lbl" style="color:${risk.size ? '#b91c1c' : '#15803d'}">⚠️ OT คาดการณ์</div><div class="val" style="color:${risk.size ? '#b91c1c' : '#15803d'}">${risk.size} Zone</div><div class="subv">${fmt1(otPersonHours)} คน-ชม.</div></div></div>`;
+      document.getElementById('simKpiSummary').innerHTML = `<div class="sim-kpis"><div class="sim-kpi"><div class="lbl">Workload (หน่วยหยิบ)</div><div class="val">${fmt(Math.round(totalWork))}</div><div class="subv">${volLabel} · ${rows.length} Zone</div></div><div class="sim-kpi" style="border-color:#c7d2fe"><div class="lbl" style="color:#4338ca">Picker ที่พร้อมใช้งาน</div><div class="val" style="color:#4338ca">${roster.total} คน</div><div class="subv">A ${roster.countA} · B ${roster.countB} · Flex ${roster.countFlex}</div></div><div class="sim-kpi" style="border-color:#bbf7d0"><div class="lbl" style="color:#15803d">กะ A</div><div class="val" style="color:#15803d">${roster.countA} คน</div><div class="subv">จัด ${assignedA}/${roster.countA} · ภาระเฉลี่ย ${Number.isFinite(avgA) ? fmt1(avgA) : '-'} ชม./คน</div></div><div class="sim-kpi" style="border-color:#e9d5ff"><div class="lbl" style="color:#7e22ce">กะ B</div><div class="val" style="color:#7e22ce">${roster.countB} คน</div><div class="subv">จัด ${assignedB}/${roster.countB} · ภาระเฉลี่ย ${Number.isFinite(avgB) ? fmt1(avgB) : '-'} ชม./คน</div></div><div class="sim-kpi" style="border-color:${risk.size ? '#fecaca' : '#bbf7d0'}"><div class="lbl" style="color:${risk.size ? '#b91c1c' : '#15803d'}">OT คาดการณ์</div><div class="val" style="color:${risk.size ? '#b91c1c' : '#15803d'}">${risk.size} Zone</div><div class="subv">${fmt1(otPersonHours)} คน-ชม.</div></div></div>`;
       const c = document.getElementById('simAssignedCounter'); if (c) c.innerHTML = `A ${assignedA}/${roster.countA} คน · B ${assignedB}/${roster.countB} คน${assignedA > roster.countA || assignedB > roster.countB ? ' <span style="color:#dc2626">⚠️ จัดเกินคนจริง</span>' : ''}`;
       const advice = [];
-      [[infoA, '🅰️ กะ A', avgA, roster.countA], [infoB, '🅱️ กะ B', avgB, roster.countB]].forEach(([arr, label, avg, count]) => {
-        if (!count) { advice.push(`<div class="insight-box warn"><div class="icon">⚠️</div><div class="text"><strong>${label}:</strong> ไม่มี Picker ใน roster</div></div>`); return; }
-        if (avg <= SState.targetHours) advice.push(`<div class="insight-box good"><div class="icon">✅</div><div class="text"><strong>${label} Capacity โดยรวมเพียงพอ:</strong> ถ้ากระจายสมดุล ภาระเฉลี่ย ${fmt1(avg)} ชม./คน</div></div>`); else advice.push(`<div class="insight-box warn"><div class="icon">⚠️</div><div class="text"><strong>${label} Capacity ไม่พอสำหรับ 0 OT:</strong> แม้กระจายสมดุล ภาระเฉลี่ยยัง ${fmt1(avg)} ชม./คน สูงกว่าเป้า ${SState.targetHours} ชม. ควรโยกคนจาก Zone ที่จบก่อนมาช่วย Zone คอขวด</div></div>`);
+      [[infoA, 'กะ A', avgA, roster.countA], [infoB, 'กะ B', avgB, roster.countB]].forEach(([arr, label, avg, count]) => {
+        if (!count) { advice.push(`<div class="insight-box warn"><div class="icon">!</div><div class="text"><strong>${label}:</strong> ไม่มี Picker ใน roster</div></div>`); return; }
+        if (avg <= SState.targetHours) advice.push(`<div class="insight-box good"><div class="icon">✓</div><div class="text"><strong>${label} Capacity โดยรวมเพียงพอ:</strong> ถ้ากระจายสมดุล ภาระเฉลี่ย ${fmt1(avg)} ชม./คน</div></div>`); else advice.push(`<div class="insight-box warn"><div class="icon">!</div><div class="text"><strong>${label} Capacity ไม่พอสำหรับ 0 OT:</strong> แม้กระจายสมดุล ภาระเฉลี่ยยัง ${fmt1(avg)} ชม./คน สูงกว่าเป้า ${SState.targetHours} ชม. ควรโยกคนจาก Zone ที่จบก่อนมาช่วย Zone คอขวด</div></div>`);
         const sp = arr.filter(x => x.user > x.req).sort((a, b) => (b.user - b.req) - (a.user - a.req)); const need = arr.filter(x => x.req > x.user).sort((a, b) => (b.req - b.user) - (a.req - a.user));
-        let si = 0, ni = 0, moves = 0; while (si < sp.length && ni < need.length && moves < 4) { const n = Math.min(sp[si].user - sp[si].req, need[ni].req - need[ni].user); if (n > 0) { advice.push(`<div class="insight-box info"><div class="icon">🔁</div><div class="text"><strong>${label}:</strong> ลองโยก ${n} คน จาก Zone ${escapeZoneHtml(sp[si].zone)} → ${escapeZoneHtml(need[ni].zone)}</div></div>`); sp[si].user -= n; need[ni].user += n; moves++; } if (sp[si].user <= sp[si].req) si++; if (need[ni].user >= need[ni].req) ni++; }
+        let si = 0, ni = 0, moves = 0; while (si < sp.length && ni < need.length && moves < 4) { const n = Math.min(sp[si].user - sp[si].req, need[ni].req - need[ni].user); if (n > 0) { advice.push(`<div class="insight-box info"><div class="icon">↔</div><div class="text"><strong>${label}:</strong> ลองโยก ${n} คน จาก Zone ${escapeZoneHtml(sp[si].zone)} → ${escapeZoneHtml(need[ni].zone)}</div></div>`); sp[si].user -= n; need[ni].user += n; moves++; } if (sp[si].user <= sp[si].req) si++; if (need[ni].user >= need[ni].req) ni++; }
       });
-      document.getElementById('simAdviceBox').innerHTML = '<div style="display:flex;flex-direction:column;gap:10px">' + (advice.join('') || '<div class="insight-box neutral"><div class="icon">📌</div><div class="text">ยังไม่มีข้อมูลเพียงพอ</div></div>') + '</div>';
+      document.getElementById('simAdviceBox').innerHTML = '<div style="display:flex;flex-direction:column;gap:10px">' + (advice.join('') || '<div class="insight-box neutral"><div class="icon">i</div><div class="text">ยังไม่มีข้อมูลเพียงพอ</div></div>') + '</div>';
     }
 
     window._simRefreshRoster = function () { return refreshPlannerRoster(true, { silent: false }); };
-    window._simUpdateShiftRatio = function (v) { v = Math.max(0, Math.min(100, Number(v) || 0)); SState.shiftARatio = v; SState.shiftBRatio = 100 - v; SState.userPickersA = {}; SState.userPickersB = {}; const x = document.getElementById('simShiftRatioTxt'); if (x) x.textContent = `A ${v}% : B ${100 - v}%`; calculateSim(); };
-    window._simUseRosterRatio = function () { SState.shiftARatio = defaultRatioA; SState.shiftBRatio = 100 - defaultRatioA; SState.userPickersA = {}; SState.userPickersB = {}; built.simulator = false; show('simulator'); };
-    window._simUpdateTargetHours = function (v) { SState.targetHours = Math.max(1, Number(v) || 8); calculateSim(); };
-    window._simSetUserPicker = function (z, s, v) { const n = Math.max(0, Math.floor(Number(v) || 0)); if (s === 'A') SState.userPickersA[z] = n; else SState.userPickersB[z] = n; calculateSim(); };
-    window._simFillRecommendedHeadcount = function () { SState.userPickersA = { ...recommendedA }; SState.userPickersB = { ...recommendedB }; calculateSim(); };
-    window._simResetWorkload = function () { SState.customWorkload = null; SState.customSourceName = ''; SState.userPickersA = {}; SState.userPickersB = {}; built.simulator = false; show('simulator'); };
+    window._simDraftShiftRatio = function (v) {
+      v = Math.max(0, Math.min(100, Number(v) || 0));
+      const txt = document.getElementById('simShiftRatioTxt'); if (txt) txt.textContent = `A ${v}% : B ${100 - v}%`;
+      const note = document.getElementById('simRatioPending'); if (note) note.classList.toggle('show', Math.round(v) !== Math.round(Number(SState.shiftARatio) || 0));
+    };
+    window._simDraftRosterRatio = function () {
+      const input = document.getElementById('simShiftRatioInput'); if (input) { input.value = defaultRatioA; window._simDraftShiftRatio(defaultRatioA); }
+    };
+    window._simDraftTargetHours = function (v) {
+      const n = Math.max(1, Math.min(12, Number(v) || 8));
+      const note = document.getElementById('simHoursPending'); if (note) note.classList.toggle('show', Math.abs(n - Number(SState.targetHours || 8)) > 0.001);
+    };
+    window._simConfirmSettings = function () {
+      const btn = document.getElementById('btnSimConfirmSettings');
+      const ratioInput = document.getElementById('simShiftRatioInput');
+      const hoursInput = document.getElementById('simTargetHoursInput');
+      const nextRatio = Math.max(0, Math.min(100, Number(ratioInput && ratioInput.value) || 0));
+      const nextHours = Math.max(1, Math.min(12, Number(hoursInput && hoursInput.value) || 8));
+      plannerSetButtonBusy(btn, true, 'กำลังยืนยัน...');
+      showPlannerActionPopup('loading', 'กำลังยืนยันการตั้งค่า', 'ระบบกำลังนำค่าที่แก้ไขไปคำนวณแผนใหม่');
+      setTimeout(() => {
+        SState.shiftARatio = nextRatio; SState.shiftBRatio = 100 - nextRatio; SState.targetHours = nextHours;
+        SState.userPickersA = {}; SState.userPickersB = {};
+        calculateSim();
+        const rn = document.getElementById('simRatioPending'); if (rn) rn.classList.remove('show');
+        const hn = document.getElementById('simHoursPending'); if (hn) hn.classList.remove('show');
+        plannerSetButtonBusy(btn, false);
+        showPlannerActionPopup('success', 'ยืนยันการตั้งค่าเรียบร้อย', `สัดส่วนงาน A ${nextRatio}% : B ${100 - nextRatio}%\nเป้าหมายเวลาจบ ${nextHours} ชั่วโมง/กะ`);
+      }, 180);
+    };
+    window._simSetUserPicker = function (z, s, v) { const n = Math.max(0, Math.floor(Number(v) || 0)); if (s === 'A') SState.userPickersA[z] = n; else SState.userPickersB[z] = n; calculateSim(); const note = document.getElementById('simManualPending'); if (note) note.classList.add('show'); };
+    window._simConfirmManualPlan = function () { const note = document.getElementById('simManualPending'); if (note) note.classList.remove('show'); const summary = (document.getElementById('simAssignedCounter') || {}).textContent || 'แผนกำลังคนถูกยืนยันแล้ว'; showPlannerActionPopup('success', 'ยืนยันแผนกำลังคนเรียบร้อย', summary.trim()); };
+    window._simFillRecommendedHeadcount = function () {
+      const btn = document.getElementById('btnSimUseRecommended'); plannerSetButtonBusy(btn, true, 'กำลังใช้แผน...');
+      SState.userPickersA = { ...recommendedA }; SState.userPickersB = { ...recommendedB }; calculateSim(); const note = document.getElementById('simManualPending'); if (note) note.classList.remove('show'); plannerSetButtonBusy(btn, false);
+      showPlannerActionPopup('success', 'ใช้แผนแนะนำเรียบร้อย', `จัดสรรกำลังคนตามชั่วโมงทำงาน/คนแล้ว\nกะ A ${roster.countA} คน · กะ B ${roster.countB} คน`);
+    };
+    window._simResetWorkload = function () {
+      const btn = document.getElementById('btnSimResetWorkload'); plannerSetButtonBusy(btn, true, 'กำลังเปลี่ยน...');
+      SState.customWorkload = null; SState.customSourceName = ''; SState.userPickersA = {}; SState.userPickersB = {}; built.simulator = false; show('simulator');
+      setTimeout(() => { const b = document.getElementById('btnSimResetWorkload'); plannerSetButtonBusy(b, false); showPlannerActionPopup('success', 'เปลี่ยนแหล่ง Workload เรียบร้อย', `ระบบใช้ข้อมูล BigQuery วันที่ ${planningDate} แล้ว (หน่วยหยิบ)`); }, 120);
+    };
     window._simHandleOrderFile = function (e) {
-      const file = e.target.files && e.target.files[0]; if (!file) return; const isXlsx = /\.(xlsx|xls)$/i.test(file.name); const reader = new FileReader();
+      const file = e.target.files && e.target.files[0]; if (!file) return; const isXlsx = /\.(xlsx|xls)$/i.test(file.name); const reader = new FileReader(); const uploadBtn = document.getElementById('btnSimUploadOrder'); plannerSetButtonBusy(uploadBtn, true, 'กำลังอ่านไฟล์...'); showPlannerActionPopup('loading', 'กำลังนำเข้าไฟล์ ESTIMATED', file.name);
       reader.onload = function (evt) {
         try {
           let matrix = []; if (isXlsx && typeof XLSX !== 'undefined') { const wb = XLSX.read(new Uint8Array(evt.target.result), { type: 'array' }); matrix = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' }); } else { const txt = typeof evt.target.result === 'string' ? evt.target.result : new TextDecoder().decode(evt.target.result); matrix = txt.split(/\r?\n/).map(x => x.split(',')); }
           if (!matrix || matrix.length < 2) throw new Error('ไฟล์ไม่มีข้อมูล'); let headerRow = 0, header = [];
-          for (let i = 0; i < Math.min(20, matrix.length); i++) { const h = (matrix[i] || []).map(v => String(v || '').trim().toLowerCase()); if (h.some(x => x === 'zone' || x === 'z' || x.includes('โซน') || x === 'location' || x === 'loc') && h.some(x => x === 'qty' || x === 'pcs' || x === 'alloc' || x === 'pkq' || x.includes('จำนวน') || x.includes('หน่วยหยิบ'))) { headerRow = i; header = h; break; } }
+          for (let i = 0; i < Math.min(20, matrix.length); i++) {
+            const h = (matrix[i] || []).map(v => String(v || '').trim().toLowerCase());
+            const hasZone = h.some(x => x === 'zone' || x === 'z' || x.includes('โซน') || x === 'location' || x === 'loc');
+            const hasPickUnits = h.some(x => x === 'pu' || x === 'pick unit' || x === 'pick units' || x === 'pickunit' || x === 'pickunits' || x.includes('หน่วยหยิบ'));
+            if (hasZone && hasPickUnits) { headerRow = i; header = h; break; }
+          }
           if (!header.length) header = (matrix[0] || []).map(v => String(v || '').trim().toLowerCase());
-          let zIdx = header.findIndex(h => h === 'z' || h === 'zone' || h.includes('โซน')), locIdx = header.findIndex(h => h === 'loc' || h === 'location' || h.includes('โลเคชั่น')), allocIdx = header.findIndex(h => h === 'alloc' || h === 'req' || h === 'oqty' || h === 'qty' || h === 'pcs' || h.includes('จำนวน')), pkQIdx = header.findIndex(h => h === 'pkq' || h === 'pickqty' || h.includes('หน่วยหยิบ'));
-          if (zIdx < 0) zIdx = locIdx >= 0 ? locIdx : 8; if (allocIdx < 0) allocIdx = 12; if (pkQIdx < 0) pkQIdx = 16; const map = {}; let n = 0;
-          for (let i = headerRow + 1; i < matrix.length; i++) { const row = matrix[i] || []; const raw = String(row[zIdx] || (locIdx >= 0 ? row[locIdx] : '') || '').trim(); if (!raw) continue; const a = Math.max(0, parseFloat(row[allocIdx]) || 0), p = Math.max(0, parseFloat(row[pkQIdx]) || 0), q = isPcs ? (a || p || 0) : (p || a || 0); if (q <= 0) continue; const zi = getZoneInfo(raw), zn = zi.zone || raw; if (!map[zn]) map[zn] = { name: zn, vol: 0, lines: 0, prodRate: rateMap[zn] || 100, rateFallback: !(rateMap[zn] > 0) }; map[zn].vol += q; map[zn].lines++; n++; }
-          if (!Object.keys(map).length) throw new Error('ไม่พบ Zone และ Qty ที่ใช้วางแผน'); SState.customWorkload = map; SState.customSourceName = `${file.name} · ${fmt(n)} รายการ`; SState.userPickersA = {}; SState.userPickersB = {}; built.simulator = false; show('simulator');
-        } catch (err) { alert('ไม่สามารถอ่านไฟล์ได้: ' + (err.message || err)); } finally { e.target.value = ''; }
+          let zIdx = header.findIndex(h => h === 'z' || h === 'zone' || h.includes('โซน'));
+          let locIdx = header.findIndex(h => h === 'loc' || h === 'location' || h.includes('โลเคชั่น'));
+          let puIdx = header.findIndex(h => h === 'pu' || h === 'pick unit' || h === 'pick units' || h === 'pickunit' || h === 'pickunits' || h.includes('หน่วยหยิบ'));
+          if (zIdx < 0) zIdx = locIdx >= 0 ? locIdx : 8;   // ESTIMATED: Column I = z
+          if (puIdx < 0) puIdx = 20;                // ESTIMATED: Column U = pu (0-based index 20)
+          const map = {}; let n = 0, totalPu = 0;
+          for (let i = headerRow + 1; i < matrix.length; i++) {
+            const row = matrix[i] || [];
+            const raw = String(row[zIdx] || (locIdx >= 0 ? row[locIdx] : '') || '').trim();
+            if (!raw) continue;
+            const pu = Math.max(0, parseFloat(row[puIdx]) || 0);
+            if (pu <= 0) continue;
+            const zi = getZoneInfo(raw), zn = zi.zone || raw;
+            if (!map[zn]) map[zn] = { name: zn, vol: 0, lines: 0, prodRate: rateMap[zn] || 100, rateFallback: !(rateMap[zn] > 0) };
+            map[zn].vol += pu; map[zn].lines++; n++; totalPu += pu;
+          }
+          if (!Object.keys(map).length) throw new Error('ไม่พบ Zone และหน่วยหยิบจาก Column U (pu) ที่ใช้วางแผน');
+          SState.customWorkload = map; SState.customSourceName = `${file.name} · Column U (pu) · ${fmt(n)} รายการ`; SState.userPickersA = {}; SState.userPickersB = {}; built.simulator = false; show('simulator');
+          setTimeout(() => showPlannerActionPopup('success', 'นำเข้าไฟล์ ESTIMATED สำเร็จ', `${file.name}\nWorkload จาก Column U (pu) = ${fmt(totalPu)} หน่วยหยิบ\nประมวลผล ${fmt(n)} รายการ · ${Object.keys(map).length} Zone`), 80);
+        } catch (err) { showPlannerActionPopup('error', 'นำเข้าไฟล์ไม่สำเร็จ', String(err.message || err), { autoClose: false }); } finally { const b = document.getElementById('btnSimUploadOrder'); plannerSetButtonBusy(b, false); e.target.value = ''; }
       };
       if (isXlsx) reader.readAsArrayBuffer(file); else reader.readAsText(file);
     };

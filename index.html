@@ -1,722 +1,2339 @@
 <!DOCTYPE html>
 <html lang="th">
+
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Pick Productivity Dashboard</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<style>
-  :root{--indigo:#6366f1;--violet:#8b5cf6;--teal:#14b8a6;--amber:#f59e0b;--rose:#f43f5e;--sky:#0ea5e9;--emerald:#10b981;--ink:#1e293b;--muted:#64748b;--card:#fff}
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Prompt',system-ui,sans-serif;color:var(--ink);background:linear-gradient(135deg,#eef2ff 0%,#f8fafc 45%,#ecfeff 100%);background-attachment:fixed;min-height:100vh}
-  .layout{display:flex;min-height:100vh}
-  .sidebar{width:250px;flex-shrink:0;background:#fff;box-shadow:4px 0 30px -18px rgba(30,41,59,.35);display:flex;flex-direction:column;padding:22px 16px;position:sticky;top:0;height:100vh}
-  .brand{font-size:19px;font-weight:700;background:linear-gradient(90deg,var(--indigo),var(--teal));-webkit-background-clip:text;background-clip:text;color:transparent;padding:4px 8px 18px;line-height:1.3}
-  .brand span{display:block;font-size:11px;font-weight:400;color:var(--muted);-webkit-text-fill-color:var(--muted)}
-  .nav{display:flex;align-items:center;gap:12px;border:0;background:transparent;font-family:inherit;font-size:14.5px;font-weight:500;color:var(--muted);padding:12px 14px;border-radius:12px;cursor:pointer;text-align:left;width:100%;transition:.18s;margin-bottom:4px}
-  .nav:hover{background:#f1f5f9;color:var(--ink)}
-  .nav.active{background:linear-gradient(90deg,var(--indigo),var(--violet));color:#fff;box-shadow:0 8px 18px -8px rgba(99,102,241,.75)}
-  .nav svg{width:19px;height:19px;flex-shrink:0}
-  .sidebadge{margin-top:auto;background:#f0fdfa;color:#0f766e;border:1px solid #99f6e4;padding:8px 12px;border-radius:12px;font-size:11.5px;line-height:1.5;white-space:pre-line}
-  .content{flex:1;padding:26px 28px 60px;min-width:0}
-  .pagehead{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:10px;margin-bottom:22px}
-  .pagehead h1{font-size:26px;font-weight:700}
-  .content.data-unavailable .page{display:none}
-  .data-state{min-height:420px;background:#fff;border:1px solid #e2e8f0;border-radius:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:42px 24px;box-shadow:0 12px 30px -24px rgba(15,23,42,.35)}
-  .data-state[hidden]{display:none}
-  .data-state-icon{font-size:46px;line-height:1;margin-bottom:16px}
-  .data-state h2{font-size:22px;color:#1e293b;margin-bottom:8px}
-  .data-state p{max-width:560px;color:#64748b;line-height:1.7;margin-bottom:22px}
-  .data-state-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
-  .data-state-actions button{border:0;border-radius:10px;padding:10px 17px;font-family:inherit;font-weight:600;cursor:pointer}
-  #dataStateUpload{background:#10b981;color:#fff}
-  #dataStateRetry{background:#eef2ff;color:#4338ca}
-  .daterange{color:var(--muted);font-size:13px}.daterange b{color:var(--ink)}
-  .page{display:none}.page.active{display:block;animation:fade .45s}
-  @keyframes fade{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:15px;margin-bottom:20px}
-  .kpi{background:var(--card);border-radius:18px;padding:17px;position:relative;overflow:hidden;box-shadow:0 10px 30px -14px rgba(30,41,59,.2);transition:transform .25s}
-  .kpi:hover{transform:translateY(-4px)}
-  .kpi .bar{position:absolute;top:0;left:0;right:0;height:4px}
-  .kpi .lbl{font-size:12px;color:var(--muted);font-weight:500;margin-bottom:8px}
-  .kpi .val{font-size:24px;font-weight:700;line-height:1}
-  .kpi .unit{font-size:11.5px;color:var(--muted);font-weight:400;margin-left:3px}
-  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
-  .card{background:var(--card);border-radius:18px;padding:20px;box-shadow:0 10px 30px -14px rgba(30,41,59,.18)}
-  .card.wide{grid-column:span 2}
-  .card h3{font-size:15px;font-weight:600}.card .sub{font-size:12px;color:var(--muted);margin:2px 0 12px}
-  .chartbox{position:relative;height:300px}.chartbox.tall{height:380px}
-  .note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:12px;padding:12px 14px;font-size:12.5px;line-height:1.6;margin-top:14px}
-  .controls{display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
-  .seg{display:inline-flex;background:#f1f5f9;border-radius:11px;padding:4px}
-  .seg button{border:0;background:transparent;font-family:inherit;font-size:13px;font-weight:500;color:var(--muted);padding:7px 16px;border-radius:8px;cursor:pointer;transition:.2s}
-  .seg button.active{background:linear-gradient(90deg,var(--indigo),var(--violet));color:#fff}
-  table{width:100%;border-collapse:collapse;font-size:13.5px}
-  th,td{padding:11px 12px;text-align:left;border-bottom:1px solid #eef2f7}
-  th{color:var(--muted);font-weight:600;font-size:12px}
-  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-  tr:hover td{background:#f8fafc}
-  @keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(12px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .page.active {
-    display: block !important;
-    animation: fadeInUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  }
-  .rank{display:inline-flex;min-width:24px;height:24px;padding:0 6px;align-items:center;justify-content:center;border-radius:7px;background:#eef2ff;color:#4338ca;font-weight:600;font-size:12px;transition:transform .18s}
-  .rank.rank-1{background:linear-gradient(135deg, #f59e0b 0%, #d97706 100%)!important;color:#fff!important;font-weight:800!important;border:1px solid #fbbf24;box-shadow:0 3px 8px rgba(245,158,11,0.45)}
-  .rank.rank-2{background:linear-gradient(135deg, #94a3b8 0%, #64748b 100%)!important;color:#fff!important;font-weight:800!important;border:1px solid #cbd5e1;box-shadow:0 3px 8px rgba(148,163,184,0.4)}
-  .rank.rank-3{background:linear-gradient(135deg, #b45309 0%, #78350f 100%)!important;color:#fff!important;font-weight:800!important;border:1px solid #f59e0b;box-shadow:0 3px 8px rgba(180,83,9,0.4)}
-  @keyframes statusHeartbeat {
-    0% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.7); }
-    50% { transform: scale(1.15); opacity: 0.85; box-shadow: 0 0 0 6px rgba(34,197,94,0); }
-    100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0); }
-  }
-  .live-pulse-dot {
-    width: 9px;
-    height: 9px;
-    background: #22c55e;
-    border-radius: 50%;
-    display: inline-block;
-    animation: statusHeartbeat 2s infinite ease-in-out;
-    margin-right: 6px;
-    vertical-align: middle;
-  }
-  .mini-progress-bar { height: 4px; border-radius: 999px; background: rgba(0,0,0,0.08); overflow: hidden; margin-top: 3px; width: 100%; }
-  .mini-progress-fill { height: 100%; border-radius: 999px; transition: width 0.4s ease-out; }
-  .pill{background:#ecfeff;color:#0e7490;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:500}
-  .zone-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:18px}
-  .zone-stat{background:#fff;border:1px solid #e2e8f0;border-radius:15px;padding:14px 16px;box-shadow:0 8px 22px -18px rgba(15,23,42,.5)}
-  .zone-stat-label{font-size:11.5px;color:var(--muted);font-weight:600}.zone-stat-value{font-size:24px;font-weight:700;margin-top:4px}.zone-stat-detail{font-size:10.5px;color:#64748b;line-height:1.45;margin-top:4px;word-break:break-word}
-  .heat{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:6px}
-  .tile{border-radius:14px;padding:16px;color:#fff;transition:transform .2s}.tile:hover{transform:scale(1.04)}
-  .tile .z{font-size:20px;font-weight:700}.tile .q{font-size:13px;opacity:.95;margin-top:8px}.tile .p{font-size:11px;opacity:.9;margin-top:4px;line-height:1.45}
-  .zone-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}.zone-tags span{font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;background:rgba(255,255,255,.24);border:1px solid rgba(255,255,255,.3)}
-  .zone-status{display:inline-flex;padding:3px 8px;border-radius:999px;background:#f1f5f9;color:#64748b;font-size:11px;font-weight:600;white-space:nowrap}.zone-status.active{background:#dcfce7;color:#15803d}
-  .zone-breakdown-switch{display:inline-flex;gap:4px;background:#f1f5f9;border-radius:10px;padding:4px;margin:2px 0 12px}.zone-breakdown-switch button{border:0;background:transparent;color:#64748b;font:600 12px Prompt,sans-serif;padding:7px 12px;border-radius:7px;cursor:pointer}.zone-breakdown-switch button.active{background:#fff;color:#4338ca;box-shadow:0 4px 10px -8px rgba(30,41,59,.8)}.zone-breakdown-wrap{overflow-x:auto}.zone-breakdown-table{min-width:900px}.zone-breakdown-table th,.zone-breakdown-table td{padding:9px 10px}.zone-breakdown-table .metric-main{font-weight:700;color:#4338ca}.zone-breakdown-table .metric-sub{display:block;font-size:10px;color:#64748b;margin-top:2px}.zone-breakdown-key{display:inline-flex;align-items:center;gap:7px;font-weight:700}.zone-breakdown-key i{width:12px;height:12px;border-radius:4px;display:inline-block;box-shadow:0 0 0 1px rgba(15,23,42,.14)}.zone-breakdown-foot{font-size:11px;color:#64748b;margin-top:10px;padding:9px 11px;background:#f8fafc;border-radius:999px;border:1px solid #e2e8f0}
-  .affiliation-breakdown-card{margin-top:18px}.affiliation-table-wrap{overflow-x:auto}.affiliation-table{min-width:1040px}.affiliation-table th,.affiliation-table td{padding:9px 10px}.affiliation-table .metric-main{font-weight:700;color:#4338ca}.affiliation-table .metric-sub{display:block;font-size:10px;color:#64748b;margin-top:2px}.affiliation-key{display:inline-flex;align-items:center;gap:7px;font-weight:700;color:#0f172a}.affiliation-key:before{content:'';width:9px;height:9px;border-radius:50%;background:#14b8a6;box-shadow:0 0 0 3px #ccfbf1}.affiliation-daily-title{font-size:13px;font-weight:700;color:#334155;margin:18px 0 8px}.affiliation-daily-table{min-width:980px}.affiliation-daily-table .ot-cell{font-weight:700;color:#e11d48}.empty-cell{text-align:center;color:#94a3b8;padding:24px!important}
-  .zone-inactive td{color:#94a3b8}.zone-inactive td .pill{opacity:.65}
-  .floor-map-card{overflow:hidden}.floor-map-legend{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:4px 0 8px;font-size:11px;color:#64748b}.floor-map-legend>div{display:flex;align-items:center;gap:5px}.floor-legend-dot{width:14px;height:14px;border:1px solid #cbd5e1;border-radius:4px;background:#fff}.floor-legend-bar{width:72px;height:12px;border-radius:999px;background:linear-gradient(90deg,#eef2ff,#4f46e5)}.floor-legend-bar.pcs,.floor-legend-bar.units{background:linear-gradient(90deg,#eef2ff,#4f46e5)}.floor-legend-unit{margin-left:auto;font-weight:500}.floor-map-group-legends{display:flex;gap:14px;flex-wrap:wrap;margin:0 0 12px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:999px;background:#f8fafc;color:#475569;font-size:10px}.floor-map-group-legends>div{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.floor-group-key{display:inline-flex;align-items:center;gap:3px;margin-right:6px;white-space:nowrap}.floor-group-key i{display:inline-block;width:10px;height:10px;border-radius:3px;box-shadow:0 0 0 1px rgba(15,23,42,.12)}
-  .warehouse-map-scroll{overflow-x:auto;padding:4px 2px 12px;scrollbar-color:#94a3b8 #f1f5f9}.warehouse-floor{display:grid;grid-template-columns:390px 6px minmax(900px,1fr);gap:18px;min-width:1330px;align-items:start;background:#fff}
-  .floor-section-title{text-align:center;font-size:14px;font-weight:700;color:#0f172a;border-top:7px solid #d1d5db;padding-top:3px}.floor-owner-strip,.floor-owner-band{text-align:center;font-size:10px;font-weight:700;line-height:18px;height:18px;color:#0f172a}.floor-owner-strip.maxmart,.floor-owner-band.maxmart{background:#dcefd9}.floor-owner-band.punthai{background:#dbeafe}.floor-owner-band.gfa{background:#ffedd5}.floor-owner-band.lube{background:#fecaca;color:#991b1b}
-  .floor-onfloor-grid{display:grid;grid-template-columns:repeat(7,minmax(42px,1fr));gap:10px;margin-top:8px}.floor-divider{width:6px;height:410px;background:#0874c9;border-radius:999px}
-  .floor-selective-title{text-align:right;padding-right:14px}.floor-selective-body{display:flex;gap:12px;align-items:start}.floor-rack-main{min-width:800px;flex:1}.floor-owner-grid,.floor-rack-grid{display:grid;grid-template-columns:repeat(14,minmax(46px,1fr));gap:7px}.floor-owner-grid{margin-bottom:7px}.floor-owner-grid.bottom{margin:7px 0 0}.floor-rack-grid.bottom{margin-top:22px}
-  .floor-loc{height:154px;min-width:0;border:2px solid var(--floor-border);border-top:7px solid var(--floor-accent);border-radius:6px;background:var(--floor-bg);color:#0f172a;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:5px 2px 5px;box-shadow:0 4px 12px -10px rgba(15,23,42,.65);transition:transform .2s cubic-bezier(0.16,1,0.3,1),box-shadow .2s cubic-bezier(0.16,1,0.3,1);cursor:pointer;box-sizing:border-box;overflow:hidden}
-  .floor-loc:hover{transform:translateY(-5px) scale(1.04);box-shadow:0 12px 24px -6px var(--floor-accent, rgba(99,102,241,0.45));z-index:10}.floor-loc.inactive{border-style:dashed;opacity:.58}.floor-loc.onfloor{height:326px;padding-top:86px}.floor-loc-code{font-size:14px;font-weight:800;letter-spacing:.02em;line-height:1.1;color:#0f172a}.floor-loc-metric{text-align:center;line-height:1.05;margin-top:auto}.floor-loc-metric strong{display:block;font-size:11px;font-variant-numeric:tabular-nums;color:#0f172a}.floor-loc-metric span{display:block;font-size:8px;margin-top:2px;color:#334155;font-weight:600}.floor-loc-secondary{font-size:8px;margin-top:2px;color:#475569;font-weight:600;white-space:nowrap}
-  .floor-loc-prod{font-size:8px;font-weight:800;margin-top:2px;color:#0f172a!important;white-space:normal;background:#ffffff;padding:1px 3px;border-radius:4px;border:1px solid rgba(15,23,42,0.18);box-shadow:0 1px 3px rgba(0,0,0,0.06);width:96%;letter-spacing:-0.01em;text-align:center;box-sizing:border-box;word-break:break-all}
-  .floor-loc-pickers{font-size:7.5px;font-weight:700;margin-top:2px;color:#1e293b;white-space:nowrap;opacity:.95}
-  .floor-micro{width:88px;display:grid;grid-template-columns:25px 1fr;gap:7px;margin-top:25px}.floor-micro-owner{background:#dcefd9;color:#14532d;font-size:9px;font-weight:700;writing-mode:vertical-rl;transform:rotate(180deg);display:flex;align-items:center;justify-content:center;border-radius:4px}.floor-micro-stack{display:grid;gap:14px}.floor-loc.micro{height:198px}.floor-loc.micro .floor-loc-code{font-size:20px}
-  .floor-outside-wrap{border-top:1px dashed #cbd5e1;margin-top:12px;padding-top:12px}.floor-outside-title{font-size:11.5px;color:#64748b;font-weight:600;margin-bottom:8px}.floor-outside{display:flex;gap:8px;flex-wrap:wrap}.floor-loc.outside{width:116px;height:104px;align-items:flex-start;padding:6px 8px;box-sizing:border-box}.floor-loc.outside .floor-loc-code{font-size:13px}.floor-loc.outside .floor-loc-metric{text-align:left}.floor-loc.outside .floor-loc-secondary{font-size:8px}.floor-all-mapped,.floor-map-empty{font-size:12px;color:#64748b;padding:12px;border:1px dashed #cbd5e1;border-radius:10px;background:#f8fafc}
-  @media(max-width:1200px){.kpis{grid-template-columns:repeat(3,1fr)}}
-  @media(max-width:900px){
-    .layout{display:block}
-    .sidebar{width:100%;height:auto;flex-direction:row;align-items:stretch;overflow-x:auto;overflow-y:hidden;position:sticky;top:0;z-index:100;padding:8px 10px;gap:4px;box-shadow:0 4px 18px -12px rgba(30,41,59,.55);-webkit-overflow-scrolling:touch;scrollbar-width:thin}
-    .brand{display:none}.sidebadge{display:none}
-    .nav{flex:0 0 auto;width:auto;min-width:max-content;white-space:nowrap;margin:0;padding:10px 12px;min-height:42px;font-size:13px;gap:8px}
-    .nav svg{width:17px;height:17px}.upload-btn{flex:0 0 auto;width:auto!important;min-width:max-content;margin:0 0 0 4px!important;padding:10px 13px!important;font-size:12px!important}
-    .content{padding:14px 12px calc(34px + env(safe-area-inset-bottom));overflow:hidden}
-    .pagehead{align-items:flex-start;margin-bottom:12px;gap:4px}.pagehead h1{font-size:22px}.daterange{width:100%;font-size:11.5px;line-height:1.5}
-    .kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}.kpi{padding:13px 12px;border-radius:14px}.kpi .lbl{font-size:11px;line-height:1.35;margin-bottom:7px}.kpi .val{font-size:20px}.kpi .unit{font-size:10px}
-    .grid{grid-template-columns:1fr;gap:12px}.card.wide{grid-column:span 1}.card{padding:14px;border-radius:14px}.card h3{font-size:14px}.card .sub{font-size:11px;line-height:1.5}
-    .chartbox{height:250px}.chartbox.tall{height:330px}
-    .controls{gap:8px;margin-bottom:10px}.controls .seg{width:100%;display:flex}.controls .seg button{flex:1;min-width:0;padding:8px 6px;font-size:12px;line-height:1.25}
-    table{min-width:760px;font-size:12px}th,td{padding:9px 10px}.zone-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:12px}.zone-stat{padding:11px 12px}.zone-stat-label{font-size:10.5px}.zone-stat-value{font-size:19px}.zone-stat-detail{font-size:9.5px}
-    .heat{grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}.tile{padding:12px}.tile .z{font-size:18px}
-    .warehouse-map-scroll,.zone-breakdown-wrap,.affiliation-table-wrap,.card>div[style*="overflow-x:auto"]{overflow-x:auto;-webkit-overflow-scrolling:touch}
-    .zone-breakdown-switch{width:100%;display:flex}.zone-breakdown-switch button{flex:1;padding:8px 6px}
-    .sysbar{flex-direction:column;align-items:stretch!important;gap:8px!important;margin:-4px 0 14px!important}.sysbar .lab{font-size:11.5px;padding:0 2px}.sysbar .systog{width:100%;display:flex!important}.sysbar .systog button{flex:1;min-width:0;padding:9px 6px;font-size:11px;line-height:1.25;white-space:normal}
-    .sysbar .datebar{width:100%;display:flex;padding:6px}.sysbar .datebar input[type=date]{flex:1;min-width:0;width:0;padding:7px 4px;font-size:11px}.sysbar .datebar .sep{flex:0 0 auto}
-    .sysbar .datepreset{width:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.sysbar .datepreset button{padding:8px 5px;font-size:11px}.sysbar .refreshbtn{width:100%;justify-content:center;padding:9px}.sysbar .freshtxt{font-size:10px;line-height:1.4}
-    #dataState{min-height:340px;padding:32px 16px}#dataState h2{font-size:19px}#dataState p{font-size:12px}
-    #uploadModal>div{width:calc(100% - 24px)!important;max-height:calc(100vh - 24px);overflow:auto;padding:18px!important;border-radius:16px!important}#uploadModal h2{font-size:17px!important}#uploadModal p{font-size:12px!important}#dropZone{padding:26px 14px!important}
-  }
-  @media print {
-    body { background: #fff !important; color: #000 !important; font-size: 11pt !important; }
-    .sidebar, .sysbar, .upload-btn, .sidebadge, #btnUploadModal, #uploadModal, #dataState, .datepreset, .refreshbtn, button, .zone-breakdown-switch, #excludedBar, #excludedZonesBar { display: none !important; }
-    .layout { display: block !important; }
-    .content { padding: 0 !important; overflow: visible !important; }
-    .print-header { display: flex !important; margin-bottom: 20px !important; border-bottom: 2px solid #0f172a !important; padding-bottom: 12px !important; }
-    .pagehead { margin-bottom: 12px !important; }
-    .page { display: block !important; opacity: 1 !important; transform: none !important; }
-    .card { box-shadow: none !important; border: 1px solid #cbd5e1 !important; break-inside: avoid; margin-bottom: 16px !important; }
-    .grid { display: block !important; }
-    .kpis { display: grid !important; grid-template-columns: repeat(5, 1fr) !important; gap: 8px !important; page-break-after: avoid; }
-    .kpi { border: 1px solid #cbd5e1 !important; box-shadow: none !important; padding: 10px !important; }
-    .kpi .val { font-size: 18px !important; }
-    .chartbox { height: 260px !important; }
-    .chartbox.tall { height: 320px !important; }
-  }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pick Productivity Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script
+    src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    :root {
+      --indigo: #6366f1;
+      --violet: #8b5cf6;
+      --teal: #14b8a6;
+      --amber: #f59e0b;
+      --rose: #f43f5e;
+      --sky: #0ea5e9;
+      --emerald: #10b981;
+      --ink: #1e293b;
+      --muted: #64748b;
+      --card: #fff
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0
+    }
+
+    body {
+      font-family: 'Prompt', system-ui, sans-serif;
+      color: var(--ink);
+      background: linear-gradient(135deg, #eef2ff 0%, #f8fafc 45%, #ecfeff 100%);
+      background-attachment: fixed;
+      min-height: 100vh
+    }
+
+    .layout {
+      display: flex;
+      min-height: 100vh
+    }
+
+    .sidebar {
+      width: 250px;
+      flex-shrink: 0;
+      background: #fff;
+      box-shadow: 4px 0 30px -18px rgba(30, 41, 59, .35);
+      display: flex;
+      flex-direction: column;
+      padding: 22px 16px;
+      position: sticky;
+      top: 0;
+      height: 100vh
+    }
+
+    .brand {
+      font-size: 19px;
+      font-weight: 700;
+      background: linear-gradient(90deg, var(--indigo), var(--teal));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      padding: 4px 8px 18px;
+      line-height: 1.3
+    }
+
+    .brand span {
+      display: block;
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--muted);
+      -webkit-text-fill-color: var(--muted)
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border: 0;
+      background: transparent;
+      font-family: inherit;
+      font-size: 14.5px;
+      font-weight: 500;
+      color: var(--muted);
+      padding: 12px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      text-align: left;
+      width: 100%;
+      transition: .18s;
+      margin-bottom: 4px
+    }
+
+    .nav:hover {
+      background: #f1f5f9;
+      color: var(--ink)
+    }
+
+    .nav.active {
+      background: linear-gradient(90deg, var(--indigo), var(--violet));
+      color: #fff;
+      box-shadow: 0 8px 18px -8px rgba(99, 102, 241, .75)
+    }
+
+    .nav svg {
+      width: 19px;
+      height: 19px;
+      flex-shrink: 0
+    }
+
+    .sidebadge {
+      margin-top: auto;
+      background: #f0fdfa;
+      color: #0f766e;
+      border: 1px solid #99f6e4;
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 11.5px;
+      line-height: 1.5;
+      white-space: pre-line
+    }
+
+    .content {
+      flex: 1;
+      padding: 26px 28px 60px;
+      min-width: 0
+    }
+
+    .pagehead {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 22px
+    }
+
+    .pagehead h1 {
+      font-size: 26px;
+      font-weight: 700
+    }
+
+    .content.data-unavailable .page {
+      display: none
+    }
+
+    .data-state {
+      min-height: 420px;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 42px 24px;
+      box-shadow: 0 12px 30px -24px rgba(15, 23, 42, .35)
+    }
+
+    .data-state[hidden] {
+      display: none
+    }
+
+    .data-state-icon {
+      font-size: 46px;
+      line-height: 1;
+      margin-bottom: 16px
+    }
+
+    .data-state h2 {
+      font-size: 22px;
+      color: #1e293b;
+      margin-bottom: 8px
+    }
+
+    .data-state p {
+      max-width: 560px;
+      color: #64748b;
+      line-height: 1.7;
+      margin-bottom: 22px
+    }
+
+    .data-state-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center
+    }
+
+    .data-state-actions button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 17px;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer
+    }
+
+    #dataStateUpload {
+      background: #10b981;
+      color: #fff
+    }
+
+    #dataStateRetry {
+      background: #eef2ff;
+      color: #4338ca
+    }
+
+    .daterange {
+      color: var(--muted);
+      font-size: 13px
+    }
+
+    .daterange b {
+      color: var(--ink)
+    }
+
+    .page {
+      display: none
+    }
+
+    .page.active {
+      display: block;
+      animation: fade .45s
+    }
+
+    @keyframes fade {
+      from {
+        opacity: 0;
+        transform: translateY(10px)
+      }
+
+      to {
+        opacity: 1;
+        transform: none
+      }
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 15px;
+      margin-bottom: 20px
+    }
+
+    .kpi {
+      background: var(--card);
+      border-radius: 18px;
+      padding: 17px;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 10px 30px -14px rgba(30, 41, 59, .2);
+      transition: transform .25s
+    }
+
+    .kpi:hover {
+      transform: translateY(-4px)
+    }
+
+    .kpi .bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 4px
+    }
+
+    .kpi .lbl {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 500;
+      margin-bottom: 8px
+    }
+
+    .kpi .val {
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1
+    }
+
+    .kpi .unit {
+      font-size: 11.5px;
+      color: var(--muted);
+      font-weight: 400;
+      margin-left: 3px
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 18px
+    }
+
+    .card {
+      background: var(--card);
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 10px 30px -14px rgba(30, 41, 59, .18)
+    }
+
+    .card.wide {
+      grid-column: span 2
+    }
+
+    .card h3 {
+      font-size: 15px;
+      font-weight: 600
+    }
+
+    .card .sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin: 2px 0 12px
+    }
+
+    .chartbox {
+      position: relative;
+      height: 300px
+    }
+
+    .chartbox.tall {
+      height: 380px
+    }
+
+    .note {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      color: #92400e;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 12.5px;
+      line-height: 1.6;
+      margin-top: 14px
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 14px;
+      flex-wrap: wrap
+    }
+
+    .seg {
+      display: inline-flex;
+      background: #f1f5f9;
+      border-radius: 11px;
+      padding: 4px
+    }
+
+    .seg button {
+      border: 0;
+      background: transparent;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--muted);
+      padding: 7px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: .2s
+    }
+
+    .seg button.active {
+      background: linear-gradient(90deg, var(--indigo), var(--violet));
+      color: #fff
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px
+    }
+
+    th,
+    td {
+      padding: 11px 12px;
+      text-align: left;
+      border-bottom: 1px solid #eef2f7
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px
+    }
+
+    td.num,
+    th.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums
+    }
+
+    tr:hover td {
+      background: #f8fafc
+    }
+
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(12px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .page.active {
+      display: block !important;
+      animation: fadeInUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    .rank {
+      display: inline-flex;
+      min-width: 24px;
+      height: 24px;
+      padding: 0 6px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 7px;
+      background: #eef2ff;
+      color: #4338ca;
+      font-weight: 600;
+      font-size: 12px;
+      transition: transform .18s
+    }
+
+    .rank.rank-1 {
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%) !important;
+      color: #fff !important;
+      font-weight: 800 !important;
+      border: 1px solid #fbbf24;
+      box-shadow: 0 3px 8px rgba(245, 158, 11, 0.45)
+    }
+
+    .rank.rank-2 {
+      background: linear-gradient(135deg, #94a3b8 0%, #64748b 100%) !important;
+      color: #fff !important;
+      font-weight: 800 !important;
+      border: 1px solid #cbd5e1;
+      box-shadow: 0 3px 8px rgba(148, 163, 184, 0.4)
+    }
+
+    .rank.rank-3 {
+      background: linear-gradient(135deg, #b45309 0%, #78350f 100%) !important;
+      color: #fff !important;
+      font-weight: 800 !important;
+      border: 1px solid #f59e0b;
+      box-shadow: 0 3px 8px rgba(180, 83, 9, 0.4)
+    }
+
+    @keyframes statusHeartbeat {
+      0% {
+        transform: scale(1);
+        opacity: 1;
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+      }
+
+      50% {
+        transform: scale(1.15);
+        opacity: 0.85;
+        box-shadow: 0 0 0 6px rgba(34, 197, 94, 0);
+      }
+
+      100% {
+        transform: scale(1);
+        opacity: 1;
+        box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+      }
+    }
+
+    .live-pulse-dot {
+      width: 9px;
+      height: 9px;
+      background: #22c55e;
+      border-radius: 50%;
+      display: inline-block;
+      animation: statusHeartbeat 2s infinite ease-in-out;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    .mini-progress-bar {
+      height: 4px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.08);
+      overflow: hidden;
+      margin-top: 3px;
+      width: 100%;
+    }
+
+    .mini-progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.4s ease-out;
+    }
+
+    .pill {
+      background: #ecfeff;
+      color: #0e7490;
+      border-radius: 6px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 500
+    }
+
+    .zone-summary {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px
+    }
+
+    .zone-stat {
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 15px;
+      padding: 14px 16px;
+      box-shadow: 0 8px 22px -18px rgba(15, 23, 42, .5)
+    }
+
+    .zone-stat-label {
+      font-size: 11.5px;
+      color: var(--muted);
+      font-weight: 600
+    }
+
+    .zone-stat-value {
+      font-size: 24px;
+      font-weight: 700;
+      margin-top: 4px
+    }
+
+    .zone-stat-detail {
+      font-size: 10.5px;
+      color: #64748b;
+      line-height: 1.45;
+      margin-top: 4px;
+      word-break: break-word
+    }
+
+    .heat {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 6px
+    }
+
+    .tile {
+      border-radius: 14px;
+      padding: 16px;
+      color: #fff;
+      transition: transform .2s
+    }
+
+    .tile:hover {
+      transform: scale(1.04)
+    }
+
+    .tile .z {
+      font-size: 20px;
+      font-weight: 700
+    }
+
+    .tile .q {
+      font-size: 13px;
+      opacity: .95;
+      margin-top: 8px
+    }
+
+    .tile .p {
+      font-size: 11px;
+      opacity: .9;
+      margin-top: 4px;
+      line-height: 1.45
+    }
+
+    .zone-tags {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      margin-top: 7px
+    }
+
+    .zone-tags span {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .24);
+      border: 1px solid rgba(255, 255, 255, .3)
+    }
+
+    .zone-status {
+      display: inline-flex;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #f1f5f9;
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap
+    }
+
+    .zone-status.active {
+      background: #dcfce7;
+      color: #15803d
+    }
+
+    .zone-breakdown-switch {
+      display: inline-flex;
+      gap: 4px;
+      background: #f1f5f9;
+      border-radius: 10px;
+      padding: 4px;
+      margin: 2px 0 12px
+    }
+
+    .zone-breakdown-switch button {
+      border: 0;
+      background: transparent;
+      color: #64748b;
+      font: 600 12px Prompt, sans-serif;
+      padding: 7px 12px;
+      border-radius: 7px;
+      cursor: pointer
+    }
+
+    .zone-breakdown-switch button.active {
+      background: #fff;
+      color: #4338ca;
+      box-shadow: 0 4px 10px -8px rgba(30, 41, 59, .8)
+    }
+
+    .zone-breakdown-wrap {
+      overflow-x: auto
+    }
+
+    .zone-breakdown-table {
+      min-width: 900px
+    }
+
+    .zone-breakdown-table th,
+    .zone-breakdown-table td {
+      padding: 9px 10px
+    }
+
+    .zone-breakdown-table .metric-main {
+      font-weight: 700;
+      color: #4338ca
+    }
+
+    .zone-breakdown-table .metric-sub {
+      display: block;
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 2px
+    }
+
+    .zone-breakdown-key {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-weight: 700
+    }
+
+    .zone-breakdown-key i {
+      width: 12px;
+      height: 12px;
+      border-radius: 4px;
+      display: inline-block;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, .14)
+    }
+
+    .zone-breakdown-foot {
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 10px;
+      padding: 9px 11px;
+      background: #f8fafc;
+      border-radius: 999px;
+      border: 1px solid #e2e8f0
+    }
+
+    .affiliation-breakdown-card {
+      margin-top: 18px
+    }
+
+    .affiliation-table-wrap {
+      overflow-x: auto
+    }
+
+    .affiliation-table {
+      min-width: 1040px
+    }
+
+    .affiliation-table th,
+    .affiliation-table td {
+      padding: 9px 10px
+    }
+
+    .affiliation-table .metric-main {
+      font-weight: 700;
+      color: #4338ca
+    }
+
+    .affiliation-table .metric-sub {
+      display: block;
+      font-size: 10px;
+      color: #64748b;
+      margin-top: 2px
+    }
+
+    .affiliation-key {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-weight: 700;
+      color: #0f172a
+    }
+
+    .affiliation-key:before {
+      content: '';
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #14b8a6;
+      box-shadow: 0 0 0 3px #ccfbf1
+    }
+
+    .affiliation-daily-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #334155;
+      margin: 18px 0 8px
+    }
+
+    .affiliation-daily-table {
+      min-width: 980px
+    }
+
+    .affiliation-daily-table .ot-cell {
+      font-weight: 700;
+      color: #e11d48
+    }
+
+    .empty-cell {
+      text-align: center;
+      color: #94a3b8;
+      padding: 24px !important
+    }
+
+    .zone-inactive td {
+      color: #94a3b8
+    }
+
+    .zone-inactive td .pill {
+      opacity: .65
+    }
+
+    .floor-map-card {
+      overflow: hidden
+    }
+
+    .floor-map-legend {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin: 4px 0 8px;
+      font-size: 11px;
+      color: #64748b
+    }
+
+    .floor-map-legend>div {
+      display: flex;
+      align-items: center;
+      gap: 5px
+    }
+
+    .floor-legend-dot {
+      width: 14px;
+      height: 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      background: #fff
+    }
+
+    .floor-legend-bar {
+      width: 72px;
+      height: 12px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #eef2ff, #4f46e5)
+    }
+
+    .floor-legend-bar.pcs,
+    .floor-legend-bar.units {
+      background: linear-gradient(90deg, #eef2ff, #4f46e5)
+    }
+
+    .floor-legend-unit {
+      margin-left: auto;
+      font-weight: 500
+    }
+
+    .floor-map-group-legends {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin: 0 0 12px;
+      padding: 8px 10px;
+      border: 1px solid #e2e8f0;
+      border-radius: 999px;
+      background: #f8fafc;
+      color: #475569;
+      font-size: 10px
+    }
+
+    .floor-map-group-legends>div {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap
+    }
+
+    .floor-group-key {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      margin-right: 6px;
+      white-space: nowrap
+    }
+
+    .floor-group-key i {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, .12)
+    }
+
+    .warehouse-map-scroll {
+      overflow-x: auto;
+      padding: 4px 2px 12px;
+      scrollbar-color: #94a3b8 #f1f5f9
+    }
+
+    .warehouse-floor {
+      display: grid;
+      grid-template-columns: 390px 6px minmax(900px, 1fr);
+      gap: 18px;
+      min-width: 1330px;
+      align-items: start;
+      background: #fff
+    }
+
+    .floor-section-title {
+      text-align: center;
+      font-size: 14px;
+      font-weight: 700;
+      color: #0f172a;
+      border-top: 7px solid #d1d5db;
+      padding-top: 3px
+    }
+
+    .floor-owner-strip,
+    .floor-owner-band {
+      text-align: center;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 18px;
+      height: 18px;
+      color: #0f172a
+    }
+
+    .floor-owner-strip.maxmart,
+    .floor-owner-band.maxmart {
+      background: #dcefd9
+    }
+
+    .floor-owner-band.punthai {
+      background: #dbeafe
+    }
+
+    .floor-owner-band.gfa {
+      background: #ffedd5
+    }
+
+    .floor-owner-band.lube {
+      background: #fecaca;
+      color: #991b1b
+    }
+
+    .floor-onfloor-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(42px, 1fr));
+      gap: 10px;
+      margin-top: 8px
+    }
+
+    .floor-divider {
+      width: 6px;
+      height: 410px;
+      background: #0874c9;
+      border-radius: 999px
+    }
+
+    .floor-selective-title {
+      text-align: right;
+      padding-right: 14px
+    }
+
+    .floor-selective-body {
+      display: flex;
+      gap: 12px;
+      align-items: start
+    }
+
+    .floor-rack-main {
+      min-width: 800px;
+      flex: 1
+    }
+
+    .floor-owner-grid,
+    .floor-rack-grid {
+      display: grid;
+      grid-template-columns: repeat(14, minmax(46px, 1fr));
+      gap: 7px
+    }
+
+    .floor-owner-grid {
+      margin-bottom: 7px
+    }
+
+    .floor-owner-grid.bottom {
+      margin: 7px 0 0
+    }
+
+    .floor-rack-grid.bottom {
+      margin-top: 22px
+    }
+
+    .floor-loc {
+      height: 154px;
+      min-width: 0;
+      border: 2px solid var(--floor-border);
+      border-top: 7px solid var(--floor-accent);
+      border-radius: 6px;
+      background: var(--floor-bg);
+      color: #0f172a;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 2px 5px;
+      box-shadow: 0 4px 12px -10px rgba(15, 23, 42, .65);
+      transition: transform .2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow .2s cubic-bezier(0.16, 1, 0.3, 1);
+      cursor: pointer;
+      box-sizing: border-box;
+      overflow: hidden
+    }
+
+    .floor-loc:hover {
+      transform: translateY(-5px) scale(1.04);
+      box-shadow: 0 12px 24px -6px var(--floor-accent, rgba(99, 102, 241, 0.45));
+      z-index: 10
+    }
+
+    .floor-loc.inactive {
+      border-style: dashed;
+      opacity: .58
+    }
+
+    .floor-loc.onfloor {
+      height: 326px;
+      padding-top: 86px
+    }
+
+    .floor-loc-code {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: .02em;
+      line-height: 1.1;
+      color: #0f172a
+    }
+
+    .floor-loc-metric {
+      text-align: center;
+      line-height: 1.05;
+      margin-top: auto
+    }
+
+    .floor-loc-metric strong {
+      display: block;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      color: #0f172a
+    }
+
+    .floor-loc-metric span {
+      display: block;
+      font-size: 8px;
+      margin-top: 2px;
+      color: #334155;
+      font-weight: 600
+    }
+
+    .floor-loc-secondary {
+      font-size: 8px;
+      margin-top: 2px;
+      color: #475569;
+      font-weight: 600;
+      white-space: nowrap
+    }
+
+    .floor-loc-prod {
+      font-size: 8px;
+      font-weight: 800;
+      margin-top: 2px;
+      color: #0f172a !important;
+      white-space: normal;
+      background: #ffffff;
+      padding: 1px 3px;
+      border-radius: 4px;
+      border: 1px solid rgba(15, 23, 42, 0.18);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+      width: 96%;
+      letter-spacing: -0.01em;
+      text-align: center;
+      box-sizing: border-box;
+      word-break: break-all
+    }
+
+    .floor-loc-pickers {
+      font-size: 7.5px;
+      font-weight: 700;
+      margin-top: 2px;
+      color: #1e293b;
+      white-space: nowrap;
+      opacity: .95
+    }
+
+    .floor-micro {
+      width: 88px;
+      display: grid;
+      grid-template-columns: 25px 1fr;
+      gap: 7px;
+      margin-top: 25px
+    }
+
+    .floor-micro-owner {
+      background: #dcefd9;
+      color: #14532d;
+      font-size: 9px;
+      font-weight: 700;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px
+    }
+
+    .floor-micro-stack {
+      display: grid;
+      gap: 14px
+    }
+
+    .floor-loc.micro {
+      height: 198px
+    }
+
+    .floor-loc.micro .floor-loc-code {
+      font-size: 20px
+    }
+
+    .floor-outside-wrap {
+      border-top: 1px dashed #cbd5e1;
+      margin-top: 12px;
+      padding-top: 12px
+    }
+
+    .floor-outside-title {
+      font-size: 11.5px;
+      color: #64748b;
+      font-weight: 600;
+      margin-bottom: 8px
+    }
+
+    .floor-outside {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap
+    }
+
+    .floor-loc.outside {
+      width: 116px;
+      height: 104px;
+      align-items: flex-start;
+      padding: 6px 8px;
+      box-sizing: border-box
+    }
+
+    .floor-loc.outside .floor-loc-code {
+      font-size: 13px
+    }
+
+    .floor-loc.outside .floor-loc-metric {
+      text-align: left
+    }
+
+    .floor-loc.outside .floor-loc-secondary {
+      font-size: 8px
+    }
+
+    .floor-all-mapped,
+    .floor-map-empty {
+      font-size: 12px;
+      color: #64748b;
+      padding: 12px;
+      border: 1px dashed #cbd5e1;
+      border-radius: 10px;
+      background: #f8fafc
+    }
+
+    @media(max-width:1200px) {
+      .kpis {
+        grid-template-columns: repeat(3, 1fr)
+      }
+    }
+
+    @media(max-width:900px) {
+      .layout {
+        display: block
+      }
+
+      .sidebar {
+        width: 100%;
+        height: auto;
+        flex-direction: row;
+        align-items: stretch;
+        overflow-x: auto;
+        overflow-y: hidden;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        padding: 8px 10px;
+        gap: 4px;
+        box-shadow: 0 4px 18px -12px rgba(30, 41, 59, .55);
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin
+      }
+
+      .brand {
+        display: none
+      }
+
+      .sidebadge {
+        display: none
+      }
+
+      .nav {
+        flex: 0 0 auto;
+        width: auto;
+        min-width: max-content;
+        white-space: nowrap;
+        margin: 0;
+        padding: 10px 12px;
+        min-height: 42px;
+        font-size: 13px;
+        gap: 8px
+      }
+
+      .nav svg {
+        width: 17px;
+        height: 17px
+      }
+
+      .upload-btn {
+        flex: 0 0 auto;
+        width: auto !important;
+        min-width: max-content;
+        margin: 0 0 0 4px !important;
+        padding: 10px 13px !important;
+        font-size: 12px !important
+      }
+
+      .content {
+        padding: 14px 12px calc(34px + env(safe-area-inset-bottom));
+        overflow: hidden
+      }
+
+      .pagehead {
+        align-items: flex-start;
+        margin-bottom: 12px;
+        gap: 4px
+      }
+
+      .pagehead h1 {
+        font-size: 22px
+      }
+
+      .daterange {
+        width: 100%;
+        font-size: 11.5px;
+        line-height: 1.5
+      }
+
+      .kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 14px
+      }
+
+      .kpi {
+        padding: 13px 12px;
+        border-radius: 14px
+      }
+
+      .kpi .lbl {
+        font-size: 11px;
+        line-height: 1.35;
+        margin-bottom: 7px
+      }
+
+      .kpi .val {
+        font-size: 20px
+      }
+
+      .kpi .unit {
+        font-size: 10px
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+        gap: 12px
+      }
+
+      .card.wide {
+        grid-column: span 1
+      }
+
+      .card {
+        padding: 14px;
+        border-radius: 14px
+      }
+
+      .card h3 {
+        font-size: 14px
+      }
+
+      .card .sub {
+        font-size: 11px;
+        line-height: 1.5
+      }
+
+      .chartbox {
+        height: 250px
+      }
+
+      .chartbox.tall {
+        height: 330px
+      }
+
+      .controls {
+        gap: 8px;
+        margin-bottom: 10px
+      }
+
+      .controls .seg {
+        width: 100%;
+        display: flex
+      }
+
+      .controls .seg button {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 6px;
+        font-size: 12px;
+        line-height: 1.25
+      }
+
+      table {
+        min-width: 760px;
+        font-size: 12px
+      }
+
+      th,
+      td {
+        padding: 9px 10px
+      }
+
+      .zone-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 12px
+      }
+
+      .zone-stat {
+        padding: 11px 12px
+      }
+
+      .zone-stat-label {
+        font-size: 10.5px
+      }
+
+      .zone-stat-value {
+        font-size: 19px
+      }
+
+      .zone-stat-detail {
+        font-size: 9.5px
+      }
+
+      .heat {
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 8px
+      }
+
+      .tile {
+        padding: 12px
+      }
+
+      .tile .z {
+        font-size: 18px
+      }
+
+      .warehouse-map-scroll,
+      .zone-breakdown-wrap,
+      .affiliation-table-wrap,
+      .card>div[style*="overflow-x:auto"] {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch
+      }
+
+      .zone-breakdown-switch {
+        width: 100%;
+        display: flex
+      }
+
+      .zone-breakdown-switch button {
+        flex: 1;
+        padding: 8px 6px
+      }
+
+      .sysbar {
+        flex-direction: column;
+        align-items: stretch !important;
+        gap: 8px !important;
+        margin: -4px 0 14px !important
+      }
+
+      .sysbar .lab {
+        font-size: 11.5px;
+        padding: 0 2px
+      }
+
+      .sysbar .systog {
+        width: 100%;
+        display: flex !important
+      }
+
+      .sysbar .systog button {
+        flex: 1;
+        min-width: 0;
+        padding: 9px 6px;
+        font-size: 11px;
+        line-height: 1.25;
+        white-space: normal
+      }
+
+      .sysbar .datebar {
+        width: 100%;
+        display: flex;
+        padding: 6px
+      }
+
+      .sysbar .datebar input[type=date] {
+        flex: 1;
+        min-width: 0;
+        width: 0;
+        padding: 7px 4px;
+        font-size: 11px
+      }
+
+      .sysbar .datebar .sep {
+        flex: 0 0 auto
+      }
+
+      .sysbar .datepreset {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 6px
+      }
+
+      .sysbar .datepreset button {
+        padding: 8px 5px;
+        font-size: 11px
+      }
+
+      .sysbar .refreshbtn {
+        width: 100%;
+        justify-content: center;
+        padding: 9px
+      }
+
+      .sysbar .freshtxt {
+        font-size: 10px;
+        line-height: 1.4
+      }
+
+      #dataState {
+        min-height: 340px;
+        padding: 32px 16px
+      }
+
+      #dataState h2 {
+        font-size: 19px
+      }
+
+      #dataState p {
+        font-size: 12px
+      }
+
+      #uploadModal>div {
+        width: calc(100% - 24px) !important;
+        max-height: calc(100vh - 24px);
+        overflow: auto;
+        padding: 18px !important;
+        border-radius: 16px !important
+      }
+
+      #uploadModal h2 {
+        font-size: 17px !important
+      }
+
+      #uploadModal p {
+        font-size: 12px !important
+      }
+
+      #dropZone {
+        padding: 26px 14px !important
+      }
+    }
+
+    @media print {
+      body {
+        background: #fff !important;
+        color: #000 !important;
+        font-size: 11pt !important;
+      }
+
+      .sidebar,
+      .sysbar,
+      .upload-btn,
+      .sidebadge,
+      #btnUploadModal,
+      #uploadModal,
+      #dataState,
+      .datepreset,
+      .refreshbtn,
+      button,
+      .zone-breakdown-switch,
+      #excludedBar,
+      #excludedZonesBar {
+        display: none !important;
+      }
+
+      .layout {
+        display: block !important;
+      }
+
+      .content {
+        padding: 0 !important;
+        overflow: visible !important;
+      }
+
+      .print-header {
+        display: flex !important;
+        margin-bottom: 20px !important;
+        border-bottom: 2px solid #0f172a !important;
+        padding-bottom: 12px !important;
+      }
+
+      .pagehead {
+        margin-bottom: 12px !important;
+      }
+
+      .page {
+        display: block !important;
+        opacity: 1 !important;
+        transform: none !important;
+      }
+
+      .card {
+        box-shadow: none !important;
+        border: 1px solid #cbd5e1 !important;
+        break-inside: avoid;
+        margin-bottom: 16px !important;
+      }
+
+      .grid {
+        display: block !important;
+      }
+
+      .kpis {
+        display: grid !important;
+        grid-template-columns: repeat(5, 1fr) !important;
+        gap: 8px !important;
+        page-break-after: avoid;
+      }
+
+      .kpi {
+        border: 1px solid #cbd5e1 !important;
+        box-shadow: none !important;
+        padding: 10px !important;
+      }
+
+      .kpi .val {
+        font-size: 18px !important;
+      }
+
+      .chartbox {
+        height: 260px !important;
+      }
+
+      .chartbox.tall {
+        height: 320px !important;
+      }
+    }
+  </style>
 </head>
+
 <body>
-<div class="layout">
-  <nav class="sidebar">
-    <div class="brand">Pick Productivity<span>คลังสินค้า · BPS / PTT</span></div>
-    <button class="nav active" data-page="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg> ภาพรวม</button>
-    <button class="nav" data-page="prod"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9z"/></svg> Productivity</button>
-    <button class="nav" data-page="zones"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21"/><line x1="8" y1="3" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="21"/></svg> โซน &amp; ผังคลัง</button>
-    <button class="nav" data-page="typebreak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> Activity by Type Pick</button>
-    <button class="nav" data-page="pickers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg> พนักงาน (Picker)</button>
-    <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg> ช่วงเวลา</button>
-    <button class="nav" data-page="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8l-9-5-9 5v8l9 5z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg> สินค้า (Items)</button>
-    <button class="nav" data-page="report" style="margin-top:8px;background:linear-gradient(135deg,#7c3aed11,#6366f111);border:1px solid #c4b5fd;color:#6d28d9;font-weight:700;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> 📊 สรุปผล & Insights</button>
-    <button class="nav" data-page="simulator" style="margin-top:6px;background:linear-gradient(135deg,#05966911,#10b98111);border:1px solid #a7f3d0;color:#047857;font-weight:700;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg> 🎮 วางแผนกำลังคน & OT</button>
-    <button class="upload-btn" id="btnUploadModal" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#059669,#10b981);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:10px;width:100%;box-shadow:0 4px 12px rgba(16,185,129,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:19px;height:19px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> 📤 นำเข้าไฟล์ CSV / Excel</button>
-    <button id="btnExportPDF" onclick="exportPDF()" style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#7c3aed,#6366f1);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:8px;width:100%;box-shadow:0 4px 12px rgba(99,102,241,0.3);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:19px;height:19px;flex-shrink:0;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg> 📋 Export PDF Report</button>
-    <div class="sidebadge"><span class="live-pulse-dot"></span>กำลังเชื่อมต่อ BigQuery…</div>
-  </nav>
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="brand">Pick Productivity<span>คลังสินค้า · BPS / PTT</span></div>
+      <button class="nav active" data-page="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2">
+          <rect x="3" y="3" width="7" height="7" rx="1" />
+          <rect x="14" y="3" width="7" height="7" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+          <rect x="14" y="14" width="7" height="7" rx="1" />
+        </svg> ภาพรวม</button>
+      <button class="nav" data-page="prod"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
+        </svg> Productivity</button>
+      <button class="nav" data-page="zones"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21" />
+          <line x1="8" y1="3" x2="8" y2="18" />
+          <line x1="16" y1="6" x2="16" y2="21" />
+        </svg> โซน &amp; ผังคลัง</button>
+      <button class="nav" data-page="typebreak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+        </svg> Activity by Type Pick</button>
+      <button class="nav" data-page="pickers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2">
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4 21c0-4 4-6 8-6s8 2 8 6" />
+        </svg> พนักงาน (Picker)</button>
+      <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 3" />
+        </svg> ช่วงเวลา</button>
+      <button class="nav" data-page="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 16V8l-9-5-9 5v8l9 5z" />
+          <path d="M3 8l9 5 9-5" />
+          <path d="M12 13v8" />
+        </svg> สินค้า (Items)</button>
+      <button class="nav" data-page="report"
+        style="margin-top:8px;background:linear-gradient(135deg,#7c3aed11,#6366f111);border:1px solid #c4b5fd;color:#6d28d9;font-weight:700;"><svg
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+        </svg> 📊 สรุปผล & Insights</button>
+      <button class="nav" data-page="simulator"
+        style="margin-top:6px;background:linear-gradient(135deg,#05966911,#10b98111);border:1px solid #a7f3d0;color:#047857;font-weight:700;"><svg
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 20V10" />
+          <path d="M12 20V4" />
+          <path d="M6 20v-6" />
+        </svg> วางแผนกำลังคน & OT</button>
+      <button class="upload-btn" id="btnUploadModal"
+        style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#059669,#10b981);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:10px;width:100%;box-shadow:0 4px 12px rgba(16,185,129,0.3);"><svg
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:19px;height:19px;">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="17 8 12 3 7 8" />
+          <line x1="12" y1="3" x2="12" y2="15" />
+        </svg> 📤 นำเข้าไฟล์ CSV / Excel</button>
+      <button id="btnExportPDF" onclick="exportPDF()"
+        style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#7c3aed,#6366f1);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:8px;width:100%;box-shadow:0 4px 12px rgba(99,102,241,0.3);"><svg
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          style="width:19px;height:19px;flex-shrink:0;">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="16" y1="13" x2="8" y2="13" />
+          <line x1="16" y1="17" x2="8" y2="17" />
+        </svg> 📋 Export PDF Report</button>
+      <div class="sidebadge"><span class="live-pulse-dot"></span>กำลังเชื่อมต่อ BigQuery…</div>
+    </nav>
 
-  <main class="content">
-    <!-- 📄 Executive PDF Print Header -->
-    <div class="print-header" style="display:none;">
-      <div style="display:flex; align-items:center; gap:14px;">
-        <img src="pt_dcwn_logo.png" style="height:44px; object-fit:contain;" alt="Logo" />
-        <div>
-          <div style="font-size:18px; font-weight:800; color:#0f172a; margin:0;">รายงานสรุปผลงานและการปฏิบัติงานจัดเก็บและหยิบสินค้า (Executive Picking Productivity Report)</div>
-          <div style="font-size:12px; color:#475569; margin-top:2px;">คลังสินค้า BPS / PTT · พิมพ์รายงาน ณ <span id="printTimestamp"></span></div>
+    <main class="content">
+      <!-- 📄 Executive PDF Print Header -->
+      <div class="print-header" style="display:none;">
+        <div style="display:flex; align-items:center; gap:14px;">
+          <img src="pt_dcwn_logo.png" style="height:44px; object-fit:contain;" alt="Logo" />
+          <div>
+            <div style="font-size:18px; font-weight:800; color:#0f172a; margin:0;">
+              รายงานสรุปผลงานและการปฏิบัติงานจัดเก็บและหยิบสินค้า (Executive Picking Productivity Report)</div>
+            <div style="font-size:12px; color:#475569; margin-top:2px;">คลังสินค้า BPS / PTT · พิมพ์รายงาน ณ <span
+                id="printTimestamp"></span></div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="pagehead"><h1 id="ptitle">ภาพรวม</h1><div class="daterange" id="daterange"></div></div>
-    <div class="data-state" id="dataState" hidden>
-      <div class="data-state-icon" id="dataStateIcon">⏳</div>
-      <h2 id="dataStateTitle">กำลังโหลดข้อมูล</h2>
-      <p id="dataStateMessage">กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่</p>
-      <div class="data-state-actions">
-        <button id="dataStateUpload" type="button">📤 นำเข้าไฟล์ใหม่</button>
-        <button id="dataStateRetry" type="button">↻ ลองอีกครั้ง</button>
+      <div class="pagehead">
+        <h1 id="ptitle">ภาพรวม</h1>
+        <div class="daterange" id="daterange"></div>
       </div>
-    </div>
+      <div class="data-state" id="dataState" hidden>
+        <div class="data-state-icon" id="dataStateIcon">⏳</div>
+        <h2 id="dataStateTitle">กำลังโหลดข้อมูล</h2>
+        <p id="dataStateMessage">กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่</p>
+        <div class="data-state-actions">
+          <button id="dataStateUpload" type="button">📤 นำเข้าไฟล์ใหม่</button>
+          <button id="dataStateRetry" type="button">↻ ลองอีกครั้ง</button>
+        </div>
+      </div>
 
-    <section class="page active" data-page="overview">
-      <div class="kpis" id="kpis"></div>
-      <div class="grid">
-        <!-- 📈 Chart 1: Trend Chart (Full Width) -->
+      <section class="page active" data-page="overview">
+        <div class="kpis" id="kpis"></div>
+        <div class="grid">
+          <!-- 📈 Chart 1: Trend Chart (Full Width) -->
+          <div class="card wide">
+            <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
+            <div class="sub">แท่ง = ปริมาณตามหน่วยที่เลือก (ซ้าย) · เส้น = Productivity เฉลี่ยตามหน่วยที่เลือก (ขวา) ·
+              หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ</div>
+            <div class="controls">
+              <div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button
+                  data-mode="week">รายสัปดาห์</button><button data-mode="month">รายเดือน</button></div>
+            </div>
+            <div class="chartbox"><canvas id="trend"></canvas></div>
+          </div>
+
+          <!-- 🕒 Chart 2: Hourly Activity Timeline (Full Width - Identical Size to Trend) -->
+          <div class="card wide" style="margin-top:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <h3 style="font-size:16.5px; font-weight:700; color:#0f172a; margin:0;">🕒 ปริมาณงานรายชั่วโมง (Hourly
+                Activity Timeline)</h3>
+              <span class="pill"
+                style="background:#f0fdf4; color:#15803d; font-weight:700; font-size:12.5px; padding:3px 10px;">24
+                ชั่วโมง (00:00 - 23:00 น.)</span>
+            </div>
+            <div class="sub" style="margin-bottom:12px;">วิเคราะห์ช่วงเวลาพีค (Peak Hours)
+              ของการปฏิบัติงานหยิบสินค้าตลอดวัน (00:00 - 23:00 น.)</div>
+            <div class="chartbox"><canvas id="hourlyPeakChart"></canvas></div>
+          </div>
+        </div>
+
+        <!-- 📊 ROW 2 ANALYTICS GRID: BPS vs PTT & Storage Type Distribution -->
+        <div
+          style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
+          <!-- Left Card: BPS vs PTT Share & Stats Panel -->
+          <div class="card"
+            style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📊 สัดส่วนระบบ (BPS vs PTT)</h3>
+              <span class="pill" id="catTotalBadge"
+                style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">-</span>
+            </div>
+            <div class="sub" style="margin-bottom:14px;">เปรียบเทียบสัดส่วนยอดหยิบ Pick (PTT) vs Pick to Sort (BPS)
+            </div>
+
+            <div style="display:grid; grid-template-columns: 200px 1fr; gap:16px; align-items:center; flex:1;">
+              <div style="height:200px; position:relative; display:flex; align-items:center; justify-content:center;">
+                <canvas id="cat"></canvas>
+              </div>
+              <!-- Detailed Stats Breakdown Panel -->
+              <div id="catStatsBreakdown" style="display:flex; flex-direction:column; gap:12px;">
+                <!-- PTT Stat Box -->
+                <div
+                  style="background:#f8fafc; border:1px solid #e2e8f0; border-left:5px solid #6366f1; border-radius:12px; padding:12px 16px;">
+                  <div
+                    style="font-size:12px; font-weight:700; color:#4338ca; display:flex; justify-content:space-between;">
+                    <span>🟣 Pick (PTT)</span>
+                    <span id="pttSharePct" style="font-weight:800; color:#4338ca; font-size:14px;">0%</span>
+                  </div>
+                  <div style="font-size:19px; font-weight:800; color:#0f172a; margin-top:2px;" id="pttVal">0</div>
+                  <div style="font-size:11px; color:#64748b; margin-top:2px;" id="pttSubText">0 ชิ้น · 0 Lines</div>
+                </div>
+
+                <!-- BPS Stat Box -->
+                <div
+                  style="background:#f8fafc; border:1px solid #e2e8f0; border-left:5px solid #f59e0b; border-radius:12px; padding:12px 16px;">
+                  <div
+                    style="font-size:12px; font-weight:700; color:#d97706; display:flex; justify-content:space-between;">
+                    <span>🟠 Pick to Sort (BPS)</span>
+                    <span id="bpsSharePct" style="font-weight:800; color:#d97706; font-size:14px;">0%</span>
+                  </div>
+                  <div style="font-size:19px; font-weight:800; color:#0f172a; margin-top:2px;" id="bpsVal">0</div>
+                  <div style="font-size:11px; color:#64748b; margin-top:2px;" id="bpsSubText">0 ชิ้น · 0 Lines</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Card: Storage Type Distribution Chart -->
+          <div class="card"
+            style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🏭 สัดส่วนตามรูปแบบการจัดเก็บ (Type
+                Pick Share)</h3>
+              <span class="pill"
+                style="background:#ecfeff; color:#0891b2; font-weight:700; font-size:12.5px; padding:3px 10px;">On Floor
+                / Rack</span>
+            </div>
+            <div class="sub" style="margin-bottom:14px;">กระจายตัวของปริมาณงานบน On Floor, Selective Rack และ Micro Rack
+            </div>
+            <div style="height:200px; position:relative; flex:1;">
+              <canvas id="storageTypeChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- 🏢 ROW 3 ANALYTICS GRID: Owner Share & Affiliation Performance -->
+        <div
+          style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
+          <!-- Owner Share Chart -->
+          <div class="card"
+            style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🏢 สัดส่วนงานแยกตามเจ้าของสินค้า
+                (Owner Share)</h3>
+              <span class="pill"
+                style="background:#fef3c7; color:#b45309; font-weight:700; font-size:12.5px; padding:3px 10px;">Max Mart
+                / Punthai / GFA</span>
+            </div>
+            <div class="sub" style="margin-bottom:14px;">ปริมาณการหยิบสินค้าจำแนกตาม Owner หลักในคลัง</div>
+            <div style="height:200px; position:relative; flex:1;">
+              <canvas id="ownerShareChart"></canvas>
+            </div>
+          </div>
+
+          <!-- Affiliation Chart -->
+          <div class="card"
+            style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">👥 ปริมาณงานและพนักงาน แยกตามสังกัด
+                (Affiliation)</h3>
+              <span class="pill"
+                style="background:#f0fdf4; color:#15803d; font-weight:700; font-size:12.5px; padding:3px 10px;">ประจำ /
+                Outsource</span>
+            </div>
+            <div class="sub" style="margin-bottom:14px;">เปรียบเทียบผลงานและจำนวนพนักงานระหว่าง ประจำ และ Outsource
+            </div>
+            <div style="height:200px; position:relative; flex:1;">
+              <canvas id="macroAffiliationChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- ☀️🌙 ROW 4 ANALYTICS GRID: Shift Compare -->
+        <div
+          style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
+          <!-- Shift Compare Chart -->
+          <div class="card"
+            style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px; grid-column: span 2;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🅰️🅱️ เปรียบเทียบผลงาน (กะ A vs กะ
+                B)</h3>
+              <span class="pill"
+                style="background:#f3e8ff; color:#7e22ce; font-weight:700; font-size:12.5px; padding:3px 10px;">Shift
+                Comparison</span>
+            </div>
+            <div class="sub" style="margin-bottom:14px;">กะ A/B อ้างอิง Team ใน Column I ของชีต “บันทึกเวลาทำงาน” ·
+              ถ้าไม่ใช่ A/B จะใช้ช่วงเวลาจริงเป็น fallback</div>
+            <div style="height:200px; position:relative; flex:1;">
+              <canvas id="shiftCompareChart"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="page" data-page="prod">
+        <!-- 📈 Chart 0: Target vs Actual Productivity Chart (Full Width) -->
+        <div class="card wide" style="margin-bottom:18px;">
+          <div
+            style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
+            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📈 เปรียบเทียบ Productivity จริง vs
+              เป้าหมาย (Target vs Actual)</h3>
+            <span class="pill" id="targetVsActualBadge"
+              style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">เป้าหมาย:
+              <span id="targetBadgeVal">10</span></span>
+          </div>
+          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ Productivity จริงในแต่ละวันกับเป้าหมายที่ตั้งไว้
+            (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)</div>
+          <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
+        </div>
+
         <div class="card wide">
-          <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
-          <div class="sub">แท่ง = ปริมาณตามหน่วยที่เลือก (ซ้าย) · เส้น = Productivity เฉลี่ยตามหน่วยที่เลือก (ขวา) · หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ</div>
-          <div class="controls"><div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button data-mode="week">รายสัปดาห์</button><button data-mode="month">รายเดือน</button></div></div>
-          <div class="chartbox"><canvas id="trend"></canvas></div>
+          <h3>Productivity รายคน — Top 12</h3>
+          <div class="sub">Productivity = ปริมาณตามหน่วยที่เลือก ÷ (ชั่วโมงกะ + OT) · แยกกะ A/B · ไม่นับงานที่ต่ำกว่า 3
+            ชั่วโมง</div>
+          <div class="chartbox tall"><canvas id="picker"></canvas></div>
+          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง แล้วจึงนำมารวม · การจัดกะ: ใช้ Team A/B จาก Sheet
+            ก่อน; ถ้า Team ไม่ใช่ A/B ใช้เวลา 07:00–18:59 = A และ 19:00–06:59 = B · OT ยังอิงเวลาเดิม — ตัวหาร
+            Productivity = 9 ชม. + OT (นับบล็อกละ 30 นาที) และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
         </div>
-
-        <!-- 🕒 Chart 2: Hourly Activity Timeline (Full Width - Identical Size to Trend) -->
-        <div class="card wide" style="margin-top:16px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:16.5px; font-weight:700; color:#0f172a; margin:0;">🕒 ปริมาณงานรายชั่วโมง (Hourly Activity Timeline)</h3>
-            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700; font-size:12.5px; padding:3px 10px;">24 ชั่วโมง (00:00 - 23:00 น.)</span>
-          </div>
-          <div class="sub" style="margin-bottom:12px;">วิเคราะห์ช่วงเวลาพีค (Peak Hours) ของการปฏิบัติงานหยิบสินค้าตลอดวัน (00:00 - 23:00 น.)</div>
-          <div class="chartbox"><canvas id="hourlyPeakChart"></canvas></div>
+        <div class="card wide affiliation-breakdown-card">
+          <h3>Productivity แยกตามสังกัด</h3>
+          <div class="sub">จับรหัสพนักงานจาก Sheet “บันทึกเวลาทำงาน” · สรุปจำนวนชิ้น หน่วยหยิบ Productivity และ OT
+            รายวัน</div>
+          <div id="affiliationBreakdown"></div>
         </div>
-      </div>
+      </section>
 
-      <!-- 📊 ROW 2 ANALYTICS GRID: BPS vs PTT & Storage Type Distribution -->
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
-        <!-- Left Card: BPS vs PTT Share & Stats Panel -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📊 สัดส่วนระบบ (BPS vs PTT)</h3>
-            <span class="pill" id="catTotalBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">-</span>
-          </div>
-          <div class="sub" style="margin-bottom:14px;">เปรียบเทียบสัดส่วนยอดหยิบ Pick (PTT) vs Pick to Sort (BPS)</div>
-          
-          <div style="display:grid; grid-template-columns: 200px 1fr; gap:16px; align-items:center; flex:1;">
-            <div style="height:200px; position:relative; display:flex; align-items:center; justify-content:center;">
-              <canvas id="cat"></canvas>
+      <section class="page" data-page="zones">
+        <!-- แถบแสดงรายการ Zone ที่ถูกยกเว้นจากการคำนวณ -->
+        <div id="excludedZonesBar"
+          style="display:none;margin-bottom:18px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:16px;padding:14px 18px;box-shadow:0 4px 12px rgba(22,163,74,0.08);">
+          <div
+            style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px;">
+            <div style="font-weight:600;color:#15803d;font-size:14px;display:flex;align-items:center;gap:6px;">
+              <span>🚫 Zone ที่ถูกยกเว้นจากการคำนวณ</span>
+              <span id="excludedZonesCountBadge"
+                style="background:#16a34a;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700;">0</span>
             </div>
-            <!-- Detailed Stats Breakdown Panel -->
-            <div id="catStatsBreakdown" style="display:flex; flex-direction:column; gap:12px;">
-              <!-- PTT Stat Box -->
-              <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:5px solid #6366f1; border-radius:12px; padding:12px 16px;">
-                <div style="font-size:12px; font-weight:700; color:#4338ca; display:flex; justify-content:space-between;">
-                  <span>🟣 Pick (PTT)</span>
-                  <span id="pttSharePct" style="font-weight:800; color:#4338ca; font-size:14px;">0%</span>
-                </div>
-                <div style="font-size:19px; font-weight:800; color:#0f172a; margin-top:2px;" id="pttVal">0</div>
-                <div style="font-size:11px; color:#64748b; margin-top:2px;" id="pttSubText">0 ชิ้น · 0 Lines</div>
-              </div>
-
-              <!-- BPS Stat Box -->
-              <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:5px solid #f59e0b; border-radius:12px; padding:12px 16px;">
-                <div style="font-size:12px; font-weight:700; color:#d97706; display:flex; justify-content:space-between;">
-                  <span>🟠 Pick to Sort (BPS)</span>
-                  <span id="bpsSharePct" style="font-weight:800; color:#d97706; font-size:14px;">0%</span>
-                </div>
-                <div style="font-size:19px; font-weight:800; color:#0f172a; margin-top:2px;" id="bpsVal">0</div>
-                <div style="font-size:11px; color:#64748b; margin-top:2px;" id="bpsSubText">0 ชิ้น · 0 Lines</div>
-              </div>
-            </div>
+            <button id="btnClearExcludedZones" onclick="clearExcludedZones()"
+              style="border:0;background:#dcfce7;color:#15803d;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">🧹
+              ยกเลิกการยกเว้น Zone ทั้งหมด</button>
           </div>
+          <div id="excludedZonesSavedAt" style="font-size:12px;color:#15803d;margin:0 0 10px 2px;opacity:.85;"></div>
+          <div id="excludedZonesBadges" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
         </div>
 
-        <!-- Right Card: Storage Type Distribution Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🏭 สัดส่วนตามรูปแบบการจัดเก็บ (Type Pick Share)</h3>
-            <span class="pill" style="background:#ecfeff; color:#0891b2; font-weight:700; font-size:12.5px; padding:3px 10px;">On Floor / Rack</span>
+        <div class="zone-summary" id="zoneSummary"></div>
+        <div class="card wide floor-map-card" style="margin-bottom:18px">
+          <h3>แผนผัง Zone และยอดหยิบจริง</h3>
+          <div class="sub">ตำแหน่งตาม Sheet Layout_Zone · สีและตัวเลขเปลี่ยนตามระบบ หน่วย วันที่ และกะที่เลือกด้านบน
           </div>
-          <div class="sub" style="margin-bottom:14px;">กระจายตัวของปริมาณงานบน On Floor, Selective Rack และ Micro Rack</div>
-          <div style="height:200px; position:relative; flex:1;">
-            <canvas id="storageTypeChart"></canvas>
+          <div id="warehouseMap"></div>
+        </div>
+        <div class="card wide zone-breakdown-card" style="margin-bottom:18px">
+          <h3>Productivity แยกตาม Zone, Owner และ Type Pick</h3>
+          <div class="sub">ชั่วโมงที่นับใช้กติกาเดียวกับ Productivity รายคน และไม่นับกลุ่มงานที่มีเวลาต่ำกว่า 3 ชั่วโมง
+          </div>
+          <div class="zone-breakdown-switch" id="zoneBreakdownSwitch"><button data-breakdown="zone">ตาม
+              Zone</button><button data-breakdown="owner" class="active">ตาม Owner</button><button
+              data-breakdown="type">ตาม Type Pick</button></div>
+          <div id="zoneBreakdown"></div>
+        </div>
+        <div class="card wide" style="margin-bottom:18px">
+          <h3>ปริมาณหยิบตาม Zone Master</h3>
+          <div class="sub">นำ Location 2 ตัวหน้าไปจับ Zone, Type Pick และ Owner ตาม Sheet Zone_V2</div>
+          <div class="chartbox"><canvas id="zone"></canvas></div>
+        </div>
+        <div class="card wide" style="margin-bottom:18px">
+          <h3>Zone Master · Heatmap ความหนาแน่นการหยิบ</h3>
+          <div class="sub">สีเข้ม = หยิบเยอะ · การ์ดแสดง Zone, Type Pick, Owner และ Location ทั้งหมดในกลุ่ม</div>
+          <div class="heat" id="heat"></div>
+        </div>
+        <div class="card wide">
+          <h3>รายละเอียด Location และ Zone</h3>
+          <div class="sub">แสดง Master ครบทุก Location รวมรายการที่ไม่มีการหยิบในช่วงวันที่ที่เลือก</div>
+          <div style="overflow-x:auto">
+            <table id="zoneTable"></table>
           </div>
         </div>
-      </div>
+      </section>
 
-      <!-- 🏢 ROW 3 ANALYTICS GRID: Owner Share & Affiliation Performance -->
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
-        <!-- Owner Share Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🏢 สัดส่วนงานแยกตามเจ้าของสินค้า (Owner Share)</h3>
-            <span class="pill" style="background:#fef3c7; color:#b45309; font-weight:700; font-size:12.5px; padding:3px 10px;">Max Mart / Punthai / GFA</span>
-          </div>
-          <div class="sub" style="margin-bottom:14px;">ปริมาณการหยิบสินค้าจำแนกตาม Owner หลักในคลัง</div>
-          <div style="height:200px; position:relative; flex:1;">
-            <canvas id="ownerShareChart"></canvas>
-          </div>
-        </div>
-
-        <!-- Affiliation Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">👥 ปริมาณงานและพนักงาน แยกตามสังกัด (Affiliation)</h3>
-            <span class="pill" style="background:#f0fdf4; color:#15803d; font-weight:700; font-size:12.5px; padding:3px 10px;">ประจำ / Outsource</span>
-          </div>
-          <div class="sub" style="margin-bottom:14px;">เปรียบเทียบผลงานและจำนวนพนักงานระหว่าง ประจำ และ Outsource</div>
-          <div style="height:200px; position:relative; flex:1;">
-            <canvas id="macroAffiliationChart"></canvas>
-          </div>
-        </div>
-      </div>
-
-      <!-- ☀️🌙 ROW 4 ANALYTICS GRID: Shift Compare -->
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px; margin-top: 18px;">
-        <!-- Shift Compare Chart -->
-        <div class="card" style="margin:0; background:#ffffff; display:flex; flex-direction:column; padding:18px 22px; grid-column: span 2;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🅰️🅱️ เปรียบเทียบผลงาน (กะ A vs กะ B)</h3>
-            <span class="pill" style="background:#f3e8ff; color:#7e22ce; font-weight:700; font-size:12.5px; padding:3px 10px;">Shift Comparison</span>
-          </div>
-          <div class="sub" style="margin-bottom:14px;">กะ A/B อ้างอิง Team ใน Column I ของชีต “บันทึกเวลาทำงาน” · ถ้าไม่ใช่ A/B จะใช้ช่วงเวลาจริงเป็น fallback</div>
-          <div style="height:200px; position:relative; flex:1;">
-            <canvas id="shiftCompareChart"></canvas>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="page" data-page="prod">
-      <!-- 📈 Chart 0: Target vs Actual Productivity Chart (Full Width) -->
-      <div class="card wide" style="margin-bottom:18px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
-          <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📈 เปรียบเทียบ Productivity จริง vs เป้าหมาย (Target vs Actual)</h3>
-          <span class="pill" id="targetVsActualBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">เป้าหมาย: <span id="targetBadgeVal">10</span></span>
-        </div>
-        <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ Productivity จริงในแต่ละวันกับเป้าหมายที่ตั้งไว้ (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)</div>
-        <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
-      </div>
-
-      <div class="card wide">
-        <h3>Productivity รายคน — Top 12</h3>
-        <div class="sub">Productivity = ปริมาณตามหน่วยที่เลือก ÷ (ชั่วโมงกะ + OT) · แยกกะ A/B · ไม่นับงานที่ต่ำกว่า 3 ชั่วโมง</div>
-        <div class="chartbox tall"><canvas id="picker"></canvas></div>
-        <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง แล้วจึงนำมารวม · การจัดกะ: ใช้ Team A/B จาก Sheet ก่อน; ถ้า Team ไม่ใช่ A/B ใช้เวลา 07:00–18:59 = A และ 19:00–06:59 = B · OT ยังอิงเวลาเดิม — ตัวหาร Productivity = 9 ชม. + OT (นับบล็อกละ 30 นาที) และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
-      </div>
-      <div class="card wide affiliation-breakdown-card">
-        <h3>Productivity แยกตามสังกัด</h3>
-        <div class="sub">จับรหัสพนักงานจาก Sheet “บันทึกเวลาทำงาน” · สรุปจำนวนชิ้น หน่วยหยิบ Productivity และ OT รายวัน</div>
-        <div id="affiliationBreakdown"></div>
-      </div>
-    </section>
-
-    <section class="page" data-page="zones">
-      <!-- แถบแสดงรายการ Zone ที่ถูกยกเว้นจากการคำนวณ -->
-      <div id="excludedZonesBar" style="display:none;margin-bottom:18px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:16px;padding:14px 18px;box-shadow:0 4px 12px rgba(22,163,74,0.08);">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px;">
-          <div style="font-weight:600;color:#15803d;font-size:14px;display:flex;align-items:center;gap:6px;">
-            <span>🚫 Zone ที่ถูกยกเว้นจากการคำนวณ</span>
-            <span id="excludedZonesCountBadge" style="background:#16a34a;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700;">0</span>
-          </div>
-          <button id="btnClearExcludedZones" onclick="clearExcludedZones()" style="border:0;background:#dcfce7;color:#15803d;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">🧹 ยกเลิกการยกเว้น Zone ทั้งหมด</button>
-        </div>
-        <div id="excludedZonesSavedAt" style="font-size:12px;color:#15803d;margin:0 0 10px 2px;opacity:.85;"></div>
-        <div id="excludedZonesBadges" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
-      </div>
-
-      <div class="zone-summary" id="zoneSummary"></div>
-      <div class="card wide floor-map-card" style="margin-bottom:18px">
-        <h3>แผนผัง Zone และยอดหยิบจริง</h3>
-        <div class="sub">ตำแหน่งตาม Sheet Layout_Zone · สีและตัวเลขเปลี่ยนตามระบบ หน่วย วันที่ และกะที่เลือกด้านบน</div>
-        <div id="warehouseMap"></div>
-      </div>
-      <div class="card wide zone-breakdown-card" style="margin-bottom:18px">
-        <h3>Productivity แยกตาม Zone, Owner และ Type Pick</h3>
-        <div class="sub">ชั่วโมงที่นับใช้กติกาเดียวกับ Productivity รายคน และไม่นับกลุ่มงานที่มีเวลาต่ำกว่า 3 ชั่วโมง</div>
-        <div class="zone-breakdown-switch" id="zoneBreakdownSwitch"><button data-breakdown="zone">ตาม Zone</button><button data-breakdown="owner" class="active">ตาม Owner</button><button data-breakdown="type">ตาม Type Pick</button></div>
-        <div id="zoneBreakdown"></div>
-      </div>
-      <div class="card wide" style="margin-bottom:18px">
-        <h3>ปริมาณหยิบตาม Zone Master</h3><div class="sub">นำ Location 2 ตัวหน้าไปจับ Zone, Type Pick และ Owner ตาม Sheet Zone_V2</div>
-        <div class="chartbox"><canvas id="zone"></canvas></div>
-      </div>
-      <div class="card wide" style="margin-bottom:18px">
-        <h3>Zone Master · Heatmap ความหนาแน่นการหยิบ</h3>
-        <div class="sub">สีเข้ม = หยิบเยอะ · การ์ดแสดง Zone, Type Pick, Owner และ Location ทั้งหมดในกลุ่ม</div>
-        <div class="heat" id="heat"></div>
-      </div>
-      <div class="card wide">
-        <h3>รายละเอียด Location และ Zone</h3>
-        <div class="sub">แสดง Master ครบทุก Location รวมรายการที่ไม่มีการหยิบในช่วงวันที่ที่เลือก</div>
-        <div style="overflow-x:auto"><table id="zoneTable"></table></div>
-      </div>
-    </section>
-
-    <section class="page" data-page="typebreak">
-      <!-- 🎛️ Interactive Multi-level Drill-down Bar & Dimension Switcher -->
-      <div class="card wide" style="margin-bottom:18px; padding:16px 20px; border-left: 5px solid var(--indigo); background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
-          <div>
-            <h3 style="font-size:16.5px; font-weight:700; color:#0f172a; margin:0 0 4px 0; display:flex; align-items:center; gap:8px;">
-              <span>📊 วิเคราะห์เจาะลึก 3 มิติหลัก (Macro Dimensions Drill-down)</span>
-            </h3>
-            <div class="sub">เลือกมิติหลักในการวิเคราะห์: ชนิดการหยิบ (Type Pick) · เจ้าของสินค้า (Owner) · สังกัดพนักงาน (Affiliation)</div>
-          </div>
-          <button id="btnResetTypePickFilter" onclick="resetTypePickDrilldown()" style="border:0; background:#eef2ff; color:#4338ca; padding:8px 16px; border-radius:10px; font-size:12.5px; font-weight:600; cursor:pointer; transition:.2s; display:flex; align-items:center; gap:6px; box-shadow:0 2px 6px rgba(99,102,241,0.12);">
-            🧹 แสดงข้อมูลรวมทั้งหมด (Reset)
-          </button>
-        </div>
-
-        <!-- 🔘 3 Primary Macro Dimension Buttons -->
-        <div style="margin-top:14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-          <span style="font-size:12.5px; font-weight:700; color:#475569;">มิติหลัก:</span>
-          <div class="seg" id="macroDimSeg" style="display:inline-flex; background:#e2e8f0; padding:3px; border-radius:12px;">
-            <button data-dim="typePick" class="active" onclick="switchMacroDimension('typePick')" style="padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:9px; border:0; cursor:pointer; transition:.2s;">🏷️ ชนิดการหยิบ (Type Pick)</button>
-            <button data-dim="owner" onclick="switchMacroDimension('owner')" style="padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:9px; border:0; cursor:pointer; transition:.2s;">🏢 เจ้าของสินค้า (Owner)</button>
-            <button data-dim="affiliation" onclick="switchMacroDimension('affiliation')" style="padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:9px; border:0; cursor:pointer; transition:.2s;">👥 สังกัดพนักงาน (Affiliation)</button>
-          </div>
-        </div>
-
-        <!-- Breadcrumb / Status Indicator -->
-        <div id="typepickBreadcrumb" style="margin-top:14px; font-size:13px; font-weight:600; color:#4338ca; display:flex; align-items:center; gap:8px; flex-wrap:wrap; border-top:1px dashed #cbd5e1; padding-top:10px;"></div>
-      </div>
-
-      <!-- 📊 Level 1: Master Category KPI Cards (คลิกเพื่อเลือก) -->
-      <div class="zone-summary" id="typepickKpis" style="margin-bottom:20px;"></div>
-
-      <!-- 📍 Level 2 & 3: Interactive Drill-down Grid -->
-      <div class="grid">
-        <!-- 🔥 HEATMAP / PICKER MATRIX TABLE (ซ้าย) -->
-        <div class="card wide" style="grid-column: span 1;">
-          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+      <section class="page" data-page="typebreak">
+        <!-- 🎛️ Interactive Multi-level Drill-down Bar & Dimension Switcher -->
+        <div class="card wide"
+          style="margin-bottom:18px; padding:16px 20px; border-left: 5px solid var(--indigo); background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
             <div>
-              <h3 style="font-size:16px; font-weight:700;" id="typepickTableTitle">🔥 พนักงานในประเภทที่เลือก</h3>
-              <div class="sub">คลิกแถวเพื่อดูโปรไฟล์ความถนัด &amp; รายชื่อสินค้าที่หยิบ</div>
+              <h3
+                style="font-size:16.5px; font-weight:700; color:#0f172a; margin:0 0 4px 0; display:flex; align-items:center; gap:8px;">
+                <span>📊 วิเคราะห์เจาะลึก 3 มิติหลัก (Macro Dimensions Drill-down)</span>
+              </h3>
+              <div class="sub">เลือกมิติหลักในการวิเคราะห์: ชนิดการหยิบ (Type Pick) · เจ้าของสินค้า (Owner) ·
+                สังกัดพนักงาน (Affiliation)</div>
             </div>
-            <div style="font-size:11.5px; color:#64748b; font-weight:500;">
-              💡 สีเข้ม = สัดส่วนงานสูง
+            <button id="btnResetTypePickFilter" onclick="resetTypePickDrilldown()"
+              style="border:0; background:#eef2ff; color:#4338ca; padding:8px 16px; border-radius:10px; font-size:12.5px; font-weight:600; cursor:pointer; transition:.2s; display:flex; align-items:center; gap:6px; box-shadow:0 2px 6px rgba(99,102,241,0.12);">
+              🧹 แสดงข้อมูลรวมทั้งหมด (Reset)
+            </button>
+          </div>
+
+          <!-- 🔘 3 Primary Macro Dimension Buttons -->
+          <div style="margin-top:14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <span style="font-size:12.5px; font-weight:700; color:#475569;">มิติหลัก:</span>
+            <div class="seg" id="macroDimSeg"
+              style="display:inline-flex; background:#e2e8f0; padding:3px; border-radius:12px;">
+              <button data-dim="typePick" class="active" onclick="switchMacroDimension('typePick')"
+                style="padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:9px; border:0; cursor:pointer; transition:.2s;">🏷️
+                ชนิดการหยิบ (Type Pick)</button>
+              <button data-dim="owner" onclick="switchMacroDimension('owner')"
+                style="padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:9px; border:0; cursor:pointer; transition:.2s;">🏢
+                เจ้าของสินค้า (Owner)</button>
+              <button data-dim="affiliation" onclick="switchMacroDimension('affiliation')"
+                style="padding:6px 14px; font-size:12.5px; font-weight:600; border-radius:9px; border:0; cursor:pointer; transition:.2s;">👥
+                สังกัดพนักงาน (Affiliation)</button>
             </div>
           </div>
-          <div style="overflow-x:auto;">
-            <table id="typepickHeatmapTable" style="min-width:640px;"></table>
+
+          <!-- Breadcrumb / Status Indicator -->
+          <div id="typepickBreadcrumb"
+            style="margin-top:14px; font-size:13px; font-weight:600; color:#4338ca; display:flex; align-items:center; gap:8px; flex-wrap:wrap; border-top:1px dashed #cbd5e1; padding-top:10px;">
           </div>
         </div>
 
-        <!-- 📍 DRILL-DOWN PANEL: รายการ Zone & ผลงานของพนักงาน (ขวา) -->
-        <div class="card wide" style="grid-column: span 1; display:flex; flex-direction:column; gap:16px;">
-          <div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-              <h3 style="font-size:16px; font-weight:700; color:#4338ca;" id="typepickDetailTitle">📍 รายการ Zone &amp; ผลงานรายบุคคล</h3>
-              <span class="pill" id="typepickPickerBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; padding:4px 10px; font-size:12px;">กรุณาคลิกเลือกพนักงาน</span>
-            </div>
-            <div class="sub" style="margin-bottom:12px;">แสดงรายละเอียด Zone, ปริมาณหยิบ และสัดส่วนงาน % ของพนักงานที่เลือก</div>
-            <div style="overflow-x:auto; max-height:450px;">
-              <table id="typepickZoneTable"></table>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+        <!-- 📊 Level 1: Master Category KPI Cards (คลิกเพื่อเลือก) -->
+        <div class="zone-summary" id="typepickKpis" style="margin-bottom:20px;"></div>
 
-    <section class="page" data-page="pickers">
-      <!-- 🔍 Card เจาะลึกการทำงานรายบุคคล (Picker Drill-down) -->
-      <div class="card wide" style="margin-bottom:20px; border-top: 4px solid var(--indigo); background:#ffffff;">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
-          <div>
-            <h3 style="font-size:17px; color:#0f172a; margin:0;">🔍 เจาะลึกการทำงานรายบุคคล (Individual Picker Drill-down)</h3>
-            <div class="sub" style="margin-top:2px;">เลือกรายชื่อพนักงานและวันที่ เพื่อดู Zone ที่ทำ, Time Slot และรายการสินค้าที่หยิบ</div>
+        <!-- 📍 Level 2 & 3: Interactive Drill-down Grid -->
+        <div class="grid">
+          <!-- 🔥 HEATMAP / PICKER MATRIX TABLE (ซ้าย) -->
+          <div class="card wide" style="grid-column: span 1;">
+            <div
+              style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+              <div>
+                <h3 style="font-size:16px; font-weight:700;" id="typepickTableTitle">🔥 พนักงานในประเภทที่เลือก</h3>
+                <div class="sub">คลิกแถวเพื่อดูโปรไฟล์ความถนัด &amp; รายชื่อสินค้าที่หยิบ</div>
+              </div>
+              <div style="font-size:11.5px; color:#64748b; font-weight:500;">
+                💡 สีเข้ม = สัดส่วนงานสูง
+              </div>
+            </div>
+            <div style="overflow-x:auto;">
+              <table id="typepickHeatmapTable" style="min-width:640px;"></table>
+            </div>
           </div>
-          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-            <div style="position:relative;">
-              <input type="text" id="pickerSearchInput" placeholder="🔍 พิมพ์ชื่อ / รหัส / สังกัด..." style="padding:8px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; font-family:inherit; outline:none; background:#ffffff; min-width:210px; font-weight:500; transition:.2s;" />
-            </div>
-            <div style="position:relative;">
-              <select id="pickerSelect" style="padding:8px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; font-family:inherit; outline:none; background:#f8fafc; cursor:pointer; min-width:200px; font-weight:500;">
-                <option value="">-- เลือกพนักงาน --</option>
-              </select>
-            </div>
+
+          <!-- 📍 DRILL-DOWN PANEL: รายการ Zone & ผลงานของพนักงาน (ขวา) -->
+          <div class="card wide" style="grid-column: span 1; display:flex; flex-direction:column; gap:16px;">
             <div>
-              <select id="pickerDateSelect" style="padding:8px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; font-family:inherit; outline:none; background:#f8fafc; cursor:pointer; font-weight:500;">
-                <option value="all">ทุกวันที่</option>
-              </select>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <h3 style="font-size:16px; font-weight:700; color:#4338ca;" id="typepickDetailTitle">📍 รายการ Zone
+                  &amp; ผลงานรายบุคคล</h3>
+                <span class="pill" id="typepickPickerBadge"
+                  style="background:#eef2ff; color:#4338ca; font-weight:700; padding:4px 10px; font-size:12px;">กรุณาคลิกเลือกพนักงาน</span>
+              </div>
+              <div class="sub" style="margin-bottom:12px;">แสดงรายละเอียด Zone, ปริมาณหยิบ และสัดส่วนงาน %
+                ของพนักงานที่เลือก</div>
+              <div style="overflow-x:auto; max-height:450px;">
+                <table id="typepickZoneTable"></table>
+              </div>
             </div>
-            <button id="btnResetPickerFilter" style="border:0; background:#eef2ff; color:#4338ca; padding:8px 14px; border-radius:10px; font-size:12.5px; font-weight:600; cursor:pointer; transition:.2s;">🧹 รีเซ็ต</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="page" data-page="pickers">
+        <!-- 🔍 Card เจาะลึกการทำงานรายบุคคล (Picker Drill-down) -->
+        <div class="card wide" style="margin-bottom:20px; border-top: 4px solid var(--indigo); background:#ffffff;">
+          <div
+            style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+            <div>
+              <h3 style="font-size:17px; color:#0f172a; margin:0;">🔍 เจาะลึกการทำงานรายบุคคล (Individual Picker
+                Drill-down)</h3>
+              <div class="sub" style="margin-top:2px;">เลือกรายชื่อพนักงานและวันที่ เพื่อดู Zone ที่ทำ, Time Slot
+                และรายการสินค้าที่หยิบ</div>
+            </div>
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+              <div style="position:relative;">
+                <input type="text" id="pickerSearchInput" placeholder="🔍 พิมพ์ชื่อ / รหัส / สังกัด..."
+                  style="padding:8px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; font-family:inherit; outline:none; background:#ffffff; min-width:210px; font-weight:500; transition:.2s;" />
+              </div>
+              <div style="position:relative;">
+                <select id="pickerSelect"
+                  style="padding:8px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; font-family:inherit; outline:none; background:#f8fafc; cursor:pointer; min-width:200px; font-weight:500;">
+                  <option value="">-- เลือกพนักงาน --</option>
+                </select>
+              </div>
+              <div>
+                <select id="pickerDateSelect"
+                  style="padding:8px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:13px; font-family:inherit; outline:none; background:#f8fafc; cursor:pointer; font-weight:500;">
+                  <option value="all">ทุกวันที่</option>
+                </select>
+              </div>
+              <button id="btnResetPickerFilter"
+                style="border:0; background:#eef2ff; color:#4338ca; padding:8px 14px; border-radius:10px; font-size:12.5px; font-weight:600; cursor:pointer; transition:.2s;">🧹
+                รีเซ็ต</button>
+            </div>
+          </div>
+
+          <!-- รายละเอียดของพนักงานที่เลือก -->
+          <div id="pickerDetailContent">
+            <div
+              style="text-align:center; color:#94a3b8; padding:32px; background:#f8fafc; border-radius:14px; border:1px dashed #cbd5e1;">
+              👆 กรุณาเลือกรายชื่อพนักงานจากดรอปดาวน์ด้านบนเพื่อเริ่มดูรายงานเจาะลึก
+            </div>
           </div>
         </div>
 
-        <!-- รายละเอียดของพนักงานที่เลือก -->
-        <div id="pickerDetailContent">
-          <div style="text-align:center; color:#94a3b8; padding:32px; background:#f8fafc; border-radius:14px; border:1px dashed #cbd5e1;">
-            👆 กรุณาเลือกรายชื่อพนักงานจากดรอปดาวน์ด้านบนเพื่อเริ่มดูรายงานเจาะลึก
+        <div class="card wide">
+          <h3>ตารางพนักงานหยิบ (เรียงตามปริมาณ)</h3>
+          <div class="sub">รหัส Picker · ชื่อพนักงาน · สังกัด · Location/Zone หลัก · จำนวนชิ้น · หน่วยหยิบ ·
+            Productivity</div>
+          <div style="overflow-x:auto">
+            <table id="ptable"></table>
           </div>
+          <div class="note">ชื่อพนักงานและสังกัดจับคู่จากรหัส Picker · Location
+            หลักคือจุดที่พนักงานมีรายการหยิบบ่อยที่สุด และนำไปจับ Zone ตาม Master Zone_V2</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="time">
+        <div class="card wide">
+          <h3>ช่วงเวลาที่หยิบ (Time Slot)</h3>
+          <div class="sub">ปริมาณตามหน่วยที่เลือก แยกตามชั่วโมง — ดูช่วงงานหนัก</div>
+          <div id="slotLoadStatus" style="min-height:20px;margin-top:8px;color:#64748b;font-size:12px;"></div>
+          <div class="chartbox tall"><canvas id="slot"></canvas></div>
+        </div>
+      </section>
+
+      <section class="page" data-page="items">
+        <!-- แถบแสดงรายการสินค้าที่ถูกยกเว้นจากการคำนวณ -->
+        <div id="excludedBar"
+          style="display:none;margin-bottom:18px;background:#fff7ed;border:1px solid #ffedd5;border-radius:16px;padding:14px 18px;box-shadow:0 4px 12px rgba(249,115,22,0.08);">
+          <div
+            style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px;">
+            <div style="font-weight:600;color:#c2410c;font-size:14px;display:flex;align-items:center;gap:6px;">
+              <span>🚫 สินค้าที่ถูกยกเว้นจากการคำนวณ</span>
+              <span id="excludedCountBadge"
+                style="background:#ea580c;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700;">0</span>
+            </div>
+            <button id="btnClearExcluded"
+              style="border:0;background:#ffedd5;color:#c2410c;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">🧹
+              ยกเลิกการยกเว้นทั้งหมด</button>
+          </div>
+          <div id="excludedSavedAt" style="font-size:12px;color:#c2410c;margin:0 0 10px 2px;opacity:.85;"></div>
+          <div id="excludedBadges" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+        </div>
+
+        <div class="card wide" style="margin-bottom:20px;">
+          <h3>สินค้าหยิบเยอะสุด — Top 10</h3>
+          <div class="sub">ชื่อสินค้า (Owner) · ปริมาณตามหน่วยที่เลือก (เฉพาะรายการที่ไม่ถูกยกเว้น)</div>
+          <div class="chartbox tall"><canvas id="item"></canvas></div>
+        </div>
+
+        <div class="card wide">
+          <div
+            style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+            <div>
+              <h3 style="margin:0;">รายการสินค้า &amp; ตั้งค่ายกเว้นคำนวณ</h3>
+              <div class="sub" style="margin:2px 0 0;">ค้นหา คัดเลือก หรือกด <b>🚫 ยกเว้น</b>
+                สินค้าที่ต้องการให้ตัดออกจากระบบ</div>
+            </div>
+            <div style="position:relative;width:100%;max-width:320px;">
+              <input type="text" id="itemSearch" placeholder="🔍 ค้นหารหัส SKU / ชื่อสินค้า / Owner..."
+                style="width:100%;padding:9px 14px;border:1px solid #cbd5e1;border-radius:12px;font-size:13px;outline:none;font-family:inherit;transition:.2s;" />
+            </div>
+          </div>
+          <div style="overflow-x:auto">
+            <table id="itable"></table>
+          </div>
+        </div>
+      </section>
+
+      <section class="page" data-page="report">
+        <div id="reportPage"></div>
+      </section>
+
+      <section class="page" data-page="simulator">
+        <div id="simulatorPage"></div>
+      </section>
+    </main>
+  </div>
+  <!-- Modal สำหรับอัปโหลดไฟล์ CSV/Excel ตรงเข้า BigQuery -->
+  <div id="uploadModal"
+    style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.65);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+    <div
+      style="background:#fff;border-radius:20px;padding:30px;width:90%;max-width:550px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+        <h2 style="font-size:20px;font-weight:700;margin:0;color:#1e293b;">📤 อัปโหลดไฟล์เข้า BigQuery โดยตรง</h2>
+        <button id="btnCloseUpload"
+          style="background:none;border:none;font-size:24px;cursor:pointer;color:#64748b;">&times;</button>
+      </div>
+      <p style="font-size:13px;color:#64748b;margin-bottom:20px;">เลือกหรือลากวางไฟล์ <b>Pick Detail (.xlsx, .csv)</b>
+        ชื่อไฟล์เป็นอะไรก็ได้ ระบบจะตรวจโครงสร้างและทุกแถวก่อนโหลดแบบ Batch เข้า <b>BigQuery</b>
+        พร้อมตรวจผลและรีเฟรชหน้าเว็บอัตโนมัติครับ</p>
+
+      <div id="dropZone"
+        style="border:2px dashed #3b82f6;background:#eff6ff;border-radius:14px;padding:35px 20px;text-align:center;cursor:pointer;transition:.2s;">
+        <div style="font-size:36px;margin-bottom:10px;">📄</div>
+        <div style="font-size:15px;font-weight:600;color:#1d4ed8;">คลิกเพื่อเลือกไฟล์ หรือ ลากวางไฟล์ Excel / CSV ที่นี่
+        </div>
+        <div style="font-size:12px;color:#64748b;margin-top:6px;">รองรับไฟล์ Pick Detail (.xlsx, .xls, .csv)
+          สกัดโดยตรงจาก WMS</div>
+      </div>
+      <input type="file" id="csvFileInput" accept=".csv, .xlsx, .xls" style="display:none;" />
+
+      <div id="uploadProgress" style="display:none;margin-top:20px;">
+        <div style="font-size:13.5px;font-weight:600;color:#334155;margin-bottom:8px;" id="uploadStatusText">
+          กำลังอ่านและประมวลผลไฟล์...</div>
+        <div style="width:100%;background:#e2e8f0;border-radius:10px;height:10px;overflow:hidden;">
+          <div id="progressBar"
+            style="width:0%;background:linear-gradient(90deg,#2563eb,#3b82f6);height:100%;transition:width .3s;"></div>
         </div>
       </div>
 
-      <div class="card wide">
-        <h3>ตารางพนักงานหยิบ (เรียงตามปริมาณ)</h3>
-        <div class="sub">รหัส Picker · ชื่อพนักงาน · สังกัด · Location/Zone หลัก · จำนวนชิ้น · หน่วยหยิบ · Productivity</div>
-        <div style="overflow-x:auto"><table id="ptable"></table></div>
-        <div class="note">ชื่อพนักงานและสังกัดจับคู่จากรหัส Picker · Location หลักคือจุดที่พนักงานมีรายการหยิบบ่อยที่สุด และนำไปจับ Zone ตาม Master Zone_V2</div>
+      <div style="margin-top:25px;display:flex;justify-content:flex-end;gap:10px;">
+        <button id="btnCancelUpload"
+          style="border:1px solid #cbd5e1;background:#fff;padding:9px 18px;border-radius:10px;cursor:pointer;font-weight:500;color:#475569;">ยกเลิก</button>
+        <button id="btnStartUpload"
+          style="border:0;background:#2563eb;color:#fff;padding:9px 22px;border-radius:10px;cursor:pointer;font-weight:600;display:none;">เริ่มส่งเข้า
+          BigQuery</button>
       </div>
-    </section>
-
-    <section class="page" data-page="time">
-      <div class="card wide">
-        <h3>ช่วงเวลาที่หยิบ (Time Slot)</h3><div class="sub">ปริมาณตามหน่วยที่เลือก แยกตามชั่วโมง — ดูช่วงงานหนัก</div>
-        <div id="slotLoadStatus" style="min-height:20px;margin-top:8px;color:#64748b;font-size:12px;"></div>
-        <div class="chartbox tall"><canvas id="slot"></canvas></div>
-      </div>
-    </section>
-
-    <section class="page" data-page="items">
-      <!-- แถบแสดงรายการสินค้าที่ถูกยกเว้นจากการคำนวณ -->
-      <div id="excludedBar" style="display:none;margin-bottom:18px;background:#fff7ed;border:1px solid #ffedd5;border-radius:16px;padding:14px 18px;box-shadow:0 4px 12px rgba(249,115,22,0.08);">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:8px;">
-          <div style="font-weight:600;color:#c2410c;font-size:14px;display:flex;align-items:center;gap:6px;">
-            <span>🚫 สินค้าที่ถูกยกเว้นจากการคำนวณ</span>
-            <span id="excludedCountBadge" style="background:#ea580c;color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;font-weight:700;">0</span>
-          </div>
-          <button id="btnClearExcluded" style="border:0;background:#ffedd5;color:#c2410c;padding:5px 12px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;">🧹 ยกเลิกการยกเว้นทั้งหมด</button>
-        </div>
-        <div id="excludedSavedAt" style="font-size:12px;color:#c2410c;margin:0 0 10px 2px;opacity:.85;"></div>
-        <div id="excludedBadges" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
-      </div>
-
-      <div class="card wide" style="margin-bottom:20px;">
-        <h3>สินค้าหยิบเยอะสุด — Top 10</h3><div class="sub">ชื่อสินค้า (Owner) · ปริมาณตามหน่วยที่เลือก (เฉพาะรายการที่ไม่ถูกยกเว้น)</div>
-        <div class="chartbox tall"><canvas id="item"></canvas></div>
-      </div>
-
-      <div class="card wide">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
-          <div>
-            <h3 style="margin:0;">รายการสินค้า &amp; ตั้งค่ายกเว้นคำนวณ</h3>
-            <div class="sub" style="margin:2px 0 0;">ค้นหา คัดเลือก หรือกด <b>🚫 ยกเว้น</b> สินค้าที่ต้องการให้ตัดออกจากระบบ</div>
-          </div>
-          <div style="position:relative;width:100%;max-width:320px;">
-            <input type="text" id="itemSearch" placeholder="🔍 ค้นหารหัส SKU / ชื่อสินค้า / Owner..." style="width:100%;padding:9px 14px;border:1px solid #cbd5e1;border-radius:12px;font-size:13px;outline:none;font-family:inherit;transition:.2s;" />
-          </div>
-        </div>
-        <div style="overflow-x:auto"><table id="itable"></table></div>
-      </div>
-    </section>
-
-    <section class="page" data-page="report">
-      <div id="reportPage"></div>
-    </section>
-
-    <section class="page" data-page="simulator">
-      <div id="simulatorPage"></div>
-    </section>
-  </main>
-</div>
-<!-- Modal สำหรับอัปโหลดไฟล์ CSV/Excel ตรงเข้า BigQuery -->
-<div id="uploadModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.65);z-index:9999;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
-  <div style="background:#fff;border-radius:20px;padding:30px;width:90%;max-width:550px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
-      <h2 style="font-size:20px;font-weight:700;margin:0;color:#1e293b;">📤 อัปโหลดไฟล์เข้า BigQuery โดยตรง</h2>
-      <button id="btnCloseUpload" style="background:none;border:none;font-size:24px;cursor:pointer;color:#64748b;">&times;</button>
-    </div>
-    <p style="font-size:13px;color:#64748b;margin-bottom:20px;">เลือกหรือลากวางไฟล์ <b>Pick Detail (.xlsx, .csv)</b> ชื่อไฟล์เป็นอะไรก็ได้ ระบบจะตรวจโครงสร้างและทุกแถวก่อนโหลดแบบ Batch เข้า <b>BigQuery</b> พร้อมตรวจผลและรีเฟรชหน้าเว็บอัตโนมัติครับ</p>
-    
-    <div id="dropZone" style="border:2px dashed #3b82f6;background:#eff6ff;border-radius:14px;padding:35px 20px;text-align:center;cursor:pointer;transition:.2s;">
-      <div style="font-size:36px;margin-bottom:10px;">📄</div>
-      <div style="font-size:15px;font-weight:600;color:#1d4ed8;">คลิกเพื่อเลือกไฟล์ หรือ ลากวางไฟล์ Excel / CSV ที่นี่</div>
-      <div style="font-size:12px;color:#64748b;margin-top:6px;">รองรับไฟล์ Pick Detail (.xlsx, .xls, .csv) สกัดโดยตรงจาก WMS</div>
-    </div>
-    <input type="file" id="csvFileInput" accept=".csv, .xlsx, .xls" style="display:none;" />
-
-    <div id="uploadProgress" style="display:none;margin-top:20px;">
-      <div style="font-size:13.5px;font-weight:600;color:#334155;margin-bottom:8px;" id="uploadStatusText">กำลังอ่านและประมวลผลไฟล์...</div>
-      <div style="width:100%;background:#e2e8f0;border-radius:10px;height:10px;overflow:hidden;">
-        <div id="progressBar" style="width:0%;background:linear-gradient(90deg,#2563eb,#3b82f6);height:100%;transition:width .3s;"></div>
-      </div>
-    </div>
-
-    <div style="margin-top:25px;display:flex;justify-content:flex-end;gap:10px;">
-      <button id="btnCancelUpload" style="border:1px solid #cbd5e1;background:#fff;padding:9px 18px;border-radius:10px;cursor:pointer;font-weight:500;color:#475569;">ยกเลิก</button>
-      <button id="btnStartUpload" style="border:0;background:#2563eb;color:#fff;padding:9px 22px;border-radius:10px;cursor:pointer;font-weight:600;display:none;">เริ่มส่งเข้า BigQuery</button>
     </div>
   </div>
-</div>
 
-<!-- Modal แจ้งเตือนเมื่อนำเข้าไฟล์สำเร็จ -->
-<div id="uploadSuccessModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.65);z-index:10000;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
-  <div style="background:#fff;border-radius:22px;padding:30px;width:90%;max-width:480px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.35);text-align:center;animation:modalPop 0.22s ease-out;border:1px solid rgba(255,255,255,0.2);">
-    <div style="width:68px;height:68px;background:linear-gradient(135deg,#dcfce7 0%,#bbf7d0 100%);color:#16a34a;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 16px auto;box-shadow:0 10px 20px -5px rgba(22,163,74,0.3);">✓</div>
-    <h3 style="font-size:21px;font-weight:700;color:#0f172a;margin:0 0 6px 0;">นำเข้าข้อมูลสำเร็จแล้ว! 🎉</h3>
-    <p style="font-size:13px;color:#64748b;margin:0 0 20px 0;">ข้อมูล Pick Detail ได้ถูกนำเข้าสู่ BigQuery และอัปเดตบนหน้าเว็บเรียบร้อยแล้ว</p>
+  <!-- Modal แจ้งเตือนเมื่อนำเข้าไฟล์สำเร็จ -->
+  <div id="uploadSuccessModal"
+    style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.65);z-index:10000;align-items:center;justify-content:center;backdrop-filter:blur(4px);">
+    <div
+      style="background:#fff;border-radius:22px;padding:30px;width:90%;max-width:480px;box-shadow:0 25px 50px -12px rgba(0,0,0,0.35);text-align:center;animation:modalPop 0.22s ease-out;border:1px solid rgba(255,255,255,0.2);">
+      <div
+        style="width:68px;height:68px;background:linear-gradient(135deg,#dcfce7 0%,#bbf7d0 100%);color:#16a34a;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:36px;margin:0 auto 16px auto;box-shadow:0 10px 20px -5px rgba(22,163,74,0.3);">
+        ✓</div>
+      <h3 style="font-size:21px;font-weight:700;color:#0f172a;margin:0 0 6px 0;">นำเข้าข้อมูลสำเร็จแล้ว! 🎉</h3>
+      <p style="font-size:13px;color:#64748b;margin:0 0 20px 0;">ข้อมูล Pick Detail ได้ถูกนำเข้าสู่ BigQuery
+        และอัปเดตบนหน้าเว็บเรียบร้อยแล้ว</p>
 
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin-bottom:22px;text-align:left;font-size:13px;color:#334155;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2e8f0;">
-        <span style="color:#64748b;font-weight:500;">⏱️ เวลาที่นำเข้าเสร็จ:</span>
-        <span id="succModalTime" style="font-weight:700;color:#0f172a;">-</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2e8f0;">
-        <span style="color:#64748b;font-weight:500;">📄 ชื่อไฟล์:</span>
-        <span id="succModalFilename" style="font-weight:600;color:#2563eb;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">-</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2e8f0;">
-        <span style="color:#64748b;font-weight:500;">📊 แถวทั้งหมดที่นำเข้า:</span>
-        <span id="succModalTotalRows" style="font-weight:700;color:#16a34a;font-size:14px;">-</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#64748b;padding-top:2px;">
-        <span>➕ เพิ่มใหม่: <b id="succModalInserted" style="color:#1e293b;font-weight:600;">-</b></span>
-        <span>✏️ แก้ไข: <b id="succModalUpdated" style="color:#1e293b;font-weight:600;">-</b></span>
-        <span>🔁 มีอยู่แล้ว: <b id="succModalUnchanged" style="color:#1e293b;font-weight:600;">-</b></span>
-      </div>
-    </div>
-
-    <button id="btnCloseUploadSuccess" style="width:100%;border:0;background:linear-gradient(135deg,#16a34a 0%,#15803d 100%);color:#fff;padding:12px 20px;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(22,163,74,0.3);transition:.2s;">ตกลง (ปิดหน้าต่าง)</button>
-  </div>
-</div>
-
-<!-- 🎯 MODAL SETTING TARGET PRODUCTIVITY (PROD TARGET SETTINGS) -->
-<div id="targetSettingsModal" class="modal-overlay" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(11,15,25,0.78); backdrop-filter:blur(10px); z-index:10000; align-items:center; justify-content:center; padding:16px; box-sizing:border-box;">
-  <div style="background:linear-gradient(145deg, #0f172a 0%, #111827 50%, #0b0f19 100%); width:100%; max-width:540px; max-height:92vh; border-radius:24px; box-shadow:0 25px 60px -15px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.08); display:flex; flex-direction:column; overflow:hidden; animation:modalPop 0.22s ease-out; color:#e2e8f0;">
-    
-    <!-- Modal Header -->
-    <div style="padding:24px 28px 18px 28px; display:flex; justify-content:space-between; align-items:flex-start; border-bottom:1px solid rgba(255,255,255,0.07);">
-      <div>
-        <div style="font-size:11px; font-weight:800; letter-spacing:1.5px; color:#38bdf8; text-transform:uppercase; display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-          <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#38bdf8; box-shadow:0 0 8px #38bdf8;"></span>
-          TARGET SETTINGS
+      <div
+        style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;padding:16px;margin-bottom:22px;text-align:left;font-size:13px;color:#334155;">
+        <div
+          style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2e8f0;">
+          <span style="color:#64748b;font-weight:500;">⏱️ เวลาที่นำเข้าเสร็จ:</span>
+          <span id="succModalTime" style="font-weight:700;color:#0f172a;">-</span>
         </div>
-        <h2 style="margin:0; font-size:22px; font-weight:800; color:#f8fafc; letter-spacing:-0.5px;">ตั้งค่า Target</h2>
-        <p style="margin:6px 0 0 0; font-size:12.5px; color:#94a3b8; line-height:1.4;">
-          เปลี่ยนค่า Target แล้ว Dashboard จะคำนวณสี สถานะ และคำสรุปใหม่ทันทีในเครื่องนี้
-        </p>
+        <div
+          style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2e8f0;">
+          <span style="color:#64748b;font-weight:500;">📄 ชื่อไฟล์:</span>
+          <span id="succModalFilename"
+            style="font-weight:600;color:#2563eb;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">-</span>
+        </div>
+        <div
+          style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #e2e8f0;">
+          <span style="color:#64748b;font-weight:500;">📊 แถวทั้งหมดที่นำเข้า:</span>
+          <span id="succModalTotalRows" style="font-weight:700;color:#16a34a;font-size:14px;">-</span>
+        </div>
+        <div
+          style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#64748b;padding-top:2px;">
+          <span>➕ เพิ่มใหม่: <b id="succModalInserted" style="color:#1e293b;font-weight:600;">-</b></span>
+          <span>✏️ แก้ไข: <b id="succModalUpdated" style="color:#1e293b;font-weight:600;">-</b></span>
+          <span>🔁 มีอยู่แล้ว: <b id="succModalUnchanged" style="color:#1e293b;font-weight:600;">-</b></span>
+        </div>
       </div>
-      <button id="btnCloseTargetSettings" style="border:0; background:rgba(255,255,255,0.06); color:#94a3b8; width:34px; height:34px; border-radius:10px; font-size:18px; font-weight:600; cursor:pointer; transition:.18s; display:flex; align-items:center; justify-content:center; margin-left:10px;" onmouseover="this.style.background='rgba(255,255,255,0.12)';this.style.color='#fff';" onmouseout="this.style.background='rgba(255,255,255,0.06)';this.style.color='#94a3b8';">&times;</button>
-    </div>
 
-    <!-- Modal Body / Form Inputs (Scrollable) -->
-    <div style="padding:20px 28px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:12px;">
-      
-      <!-- Input Card 1: Overall -->
-      <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(56,189,248,0.3); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center; transition:.2s; box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+      <button id="btnCloseUploadSuccess"
+        style="width:100%;border:0;background:linear-gradient(135deg,#16a34a 0%,#15803d 100%);color:#fff;padding:12px 20px;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(22,163,74,0.3);transition:.2s;">ตกลง
+        (ปิดหน้าต่าง)</button>
+    </div>
+  </div>
+
+  <!-- 🎯 MODAL SETTING TARGET PRODUCTIVITY (PROD TARGET SETTINGS) -->
+  <div id="targetSettingsModal" class="modal-overlay"
+    style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(11,15,25,0.78); backdrop-filter:blur(10px); z-index:10000; align-items:center; justify-content:center; padding:16px; box-sizing:border-box;">
+    <div
+      style="background:linear-gradient(145deg, #0f172a 0%, #111827 50%, #0b0f19 100%); width:100%; max-width:540px; max-height:92vh; border-radius:24px; box-shadow:0 25px 60px -15px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.08); display:flex; flex-direction:column; overflow:hidden; animation:modalPop 0.22s ease-out; color:#e2e8f0;">
+
+      <!-- Modal Header -->
+      <div
+        style="padding:24px 28px 18px 28px; display:flex; justify-content:space-between; align-items:flex-start; border-bottom:1px solid rgba(255,255,255,0.07);">
         <div>
-          <div style="font-size:14px; font-weight:700; color:#f8fafc; display:flex; align-items:center; gap:8px;">
-            <span style="font-size:16px;">🏢</span> Overall / Shift / BU
+          <div
+            style="font-size:11px; font-weight:800; letter-spacing:1.5px; color:#38bdf8; text-transform:uppercase; display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+            <span
+              style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#38bdf8; box-shadow:0 0 8px #38bdf8;"></span>
+            TARGET SETTINGS
           </div>
-          <div style="font-size:11px; color:#64748b; margin-top:2px;">เป้าหมายรวมภาพรวมทุกประเภท</div>
+          <h2 style="margin:0; font-size:22px; font-weight:800; color:#f8fafc; letter-spacing:-0.5px;">ตั้งค่า Target
+          </h2>
+          <p style="margin:6px 0 0 0; font-size:12.5px; color:#94a3b8; line-height:1.4;">
+            เปลี่ยนค่า Target แล้ว Dashboard จะคำนวณสี สถานะ และคำสรุปใหม่ทันทีในเครื่องนี้
+          </p>
         </div>
-        <input type="number" id="targetInputOverall" min="1" max="1000" style="width:90px; background:#090d16; border:1px solid #3b82f6; color:#38bdf8; font-weight:800; font-size:16px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;" onfocus="this.style.borderColor='#60a5fa';this.style.boxShadow='0 0 0 3px rgba(96,165,250,0.3)';" onblur="this.style.borderColor='#3b82f6';this.style.boxShadow='none';">
+        <button id="btnCloseTargetSettings"
+          style="border:0; background:rgba(255,255,255,0.06); color:#94a3b8; width:34px; height:34px; border-radius:10px; font-size:18px; font-weight:600; cursor:pointer; transition:.18s; display:flex; align-items:center; justify-content:center; margin-left:10px;"
+          onmouseover="this.style.background='rgba(255,255,255,0.12)';this.style.color='#fff';"
+          onmouseout="this.style.background='rgba(255,255,255,0.06)';this.style.color='#94a3b8';">&times;</button>
       </div>
 
-      <!-- Input Card 2: Full Rack -->
-      <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
-        <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
-          <span style="font-size:16px;">📦</span> Full Rack
+      <!-- Modal Body / Form Inputs (Scrollable) -->
+      <div style="padding:20px 28px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:12px;">
+
+        <!-- Input Card 1: Overall -->
+        <div
+          style="background:rgba(255,255,255,0.03); border:1px solid rgba(56,189,248,0.3); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center; transition:.2s; box-shadow:0 4px 12px rgba(0,0,0,0.15);">
+          <div>
+            <div style="font-size:14px; font-weight:700; color:#f8fafc; display:flex; align-items:center; gap:8px;">
+              <span style="font-size:16px;">🏢</span> Overall / Shift / BU
+            </div>
+            <div style="font-size:11px; color:#64748b; margin-top:2px;">เป้าหมายรวมภาพรวมทุกประเภท</div>
+          </div>
+          <input type="number" id="targetInputOverall" min="1" max="1000"
+            style="width:90px; background:#090d16; border:1px solid #3b82f6; color:#38bdf8; font-weight:800; font-size:16px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;"
+            onfocus="this.style.borderColor='#60a5fa';this.style.boxShadow='0 0 0 3px rgba(96,165,250,0.3)';"
+            onblur="this.style.borderColor='#3b82f6';this.style.boxShadow='none';">
         </div>
-        <input type="number" id="targetInputFullRack" min="1" max="1000" style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;" onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
+
+        <!-- Input Card 2: Full Rack -->
+        <div
+          style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:16px;">📦</span> Full Rack
+          </div>
+          <input type="number" id="targetInputFullRack" min="1" max="1000"
+            style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;"
+            onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
+        </div>
+
+        <!-- Input Card 3: Half Rack -->
+        <div
+          style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:16px;">📦</span> Half Rack
+          </div>
+          <input type="number" id="targetInputHalfRack" min="1" max="1000"
+            style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;"
+            onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
+        </div>
+
+        <!-- Input Card 4: Micro Rack -->
+        <div
+          style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:16px;">📦</span> Micro Rack
+          </div>
+          <input type="number" id="targetInputMicroRack" min="1" max="1000"
+            style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;"
+            onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
+        </div>
+
+        <!-- Input Card 5: Pick to Sort -->
+        <div
+          style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:16px;">⚡</span> Pick to Sort
+          </div>
+          <input type="number" id="targetInputPickToSort" min="1" max="1000"
+            style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;"
+            onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
+        </div>
+
+        <!-- Input Card 6: Mezzanine -->
+        <div
+          style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:16px;">🏗️</span> Mezzanine
+          </div>
+          <input type="number" id="targetInputMezzanine" min="1" max="1000"
+            style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;"
+            onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
+        </div>
+
+        <!-- Input Card 7: Training -->
+        <div
+          style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:16px;">🎓</span> Training
+          </div>
+          <input type="number" id="targetInputTraining" min="1" max="1000"
+            style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;"
+            onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
+        </div>
+
+        <!-- Info Callout Box -->
+        <div
+          style="background:rgba(30,58,138,0.25); border:1px solid rgba(59,130,246,0.3); border-radius:12px; padding:12px 14px; font-size:11.5px; color:#93c5fd; line-height:1.45; display:flex; gap:8px; align-items:flex-start; margin-top:4px;">
+          <span style="font-size:14px; margin-top:1px;">ℹ️</span>
+          <div>Zone จะใช้ Target ตามประเภท Rack / EA, Pick to Sort ใช้ Target แยก และ Training ใช้ Target ของ Training
+            โดยตรง</div>
+        </div>
+
       </div>
 
-      <!-- Input Card 3: Half Rack -->
-      <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
-        <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
-          <span style="font-size:16px;">📦</span> Half Rack
-        </div>
-        <input type="number" id="targetInputHalfRack" min="1" max="1000" style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;" onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
-      </div>
-
-      <!-- Input Card 4: Micro Rack -->
-      <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
-        <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
-          <span style="font-size:16px;">📦</span> Micro Rack
-        </div>
-        <input type="number" id="targetInputMicroRack" min="1" max="1000" style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;" onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
-      </div>
-
-      <!-- Input Card 5: Pick to Sort -->
-      <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
-        <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
-          <span style="font-size:16px;">⚡</span> Pick to Sort
-        </div>
-        <input type="number" id="targetInputPickToSort" min="1" max="1000" style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;" onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
-      </div>
-
-      <!-- Input Card 6: Mezzanine -->
-      <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
-        <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
-          <span style="font-size:16px;">🏗️</span> Mezzanine
-        </div>
-        <input type="number" id="targetInputMezzanine" min="1" max="1000" style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;" onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
-      </div>
-
-      <!-- Input Card 7: Training -->
-      <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:14px; padding:14px 18px; display:flex; justify-content:space-between; align-items:center;">
-        <div style="font-size:14px; font-weight:600; color:#cbd5e1; display:flex; align-items:center; gap:8px;">
-          <span style="font-size:16px;">🎓</span> Training
-        </div>
-        <input type="number" id="targetInputTraining" min="1" max="1000" style="width:90px; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:8px 10px; border-radius:10px; outline:none; transition:.2s;" onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
-      </div>
-
-      <!-- Info Callout Box -->
-      <div style="background:rgba(30,58,138,0.25); border:1px solid rgba(59,130,246,0.3); border-radius:12px; padding:12px 14px; font-size:11.5px; color:#93c5fd; line-height:1.45; display:flex; gap:8px; align-items:flex-start; margin-top:4px;">
-        <span style="font-size:14px; margin-top:1px;">ℹ️</span>
-        <div>Zone จะใช้ Target ตามประเภท Rack / EA, Pick to Sort ใช้ Target แยก และ Training ใช้ Target ของ Training โดยตรง</div>
+      <!-- Modal Footer / Action Buttons -->
+      <div
+        style="padding:16px 28px 24px 28px; display:flex; justify-content:flex-end; gap:12px; border-top:1px solid rgba(255,255,255,0.07); background:rgba(0,0,0,0.2);">
+        <button id="btnResetTargetDefaults"
+          style="border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.04); color:#cbd5e1; padding:10px 18px; border-radius:12px; font-size:13.5px; font-weight:600; cursor:pointer; transition:.18s;"
+          onmouseover="this.style.background='rgba(255,255,255,0.08)';"
+          onmouseout="this.style.background='rgba(255,255,255,0.04)';">กลับค่าเริ่มต้น</button>
+        <button id="btnSaveTargetSettings"
+          style="border:0; background:linear-gradient(135deg, #0284c7 0%, #2563eb 100%); color:#ffffff; padding:10px 24px; border-radius:12px; font-size:13.5px; font-weight:700; cursor:pointer; box-shadow:0 4px 14px rgba(37,99,235,0.4); transition:.2s;"
+          onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 6px 18px rgba(37,99,235,0.55)';"
+          onmouseout="this.style.transform='none';this.style.boxShadow='0 4px 14px rgba(37,99,235,0.4)';">บันทึก
+          Target</button>
       </div>
 
     </div>
-
-    <!-- Modal Footer / Action Buttons -->
-    <div style="padding:16px 28px 24px 28px; display:flex; justify-content:flex-end; gap:12px; border-top:1px solid rgba(255,255,255,0.07); background:rgba(0,0,0,0.2);">
-      <button id="btnResetTargetDefaults" style="border:1px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.04); color:#cbd5e1; padding:10px 18px; border-radius:12px; font-size:13.5px; font-weight:600; cursor:pointer; transition:.18s;" onmouseover="this.style.background='rgba(255,255,255,0.08)';" onmouseout="this.style.background='rgba(255,255,255,0.04)';">กลับค่าเริ่มต้น</button>
-      <button id="btnSaveTargetSettings" style="border:0; background:linear-gradient(135deg, #0284c7 0%, #2563eb 100%); color:#ffffff; padding:10px 24px; border-radius:12px; font-size:13.5px; font-weight:700; cursor:pointer; box-shadow:0 4px 14px rgba(37,99,235,0.4); transition:.2s;" onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 6px 18px rgba(37,99,235,0.55)';" onmouseout="this.style.transform='none';this.style.boxShadow='0 4px 14px rgba(37,99,235,0.4)';">บันทึก Target</button>
-    </div>
-
   </div>
-</div>
 
-<!-- 📍 ZONE DETAIL POPUP MODAL -->
-<div id="zoneDetailModal" class="modal-overlay" style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(15,23,42,0.68); backdrop-filter:blur(6px); z-index:9999; align-items:center; justify-content:center; padding:16px; box-sizing:border-box;">
-  <div class="modal-card" style="background:#ffffff; width:100%; max-width:880px; max-height:92vh; border-radius:18px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.35); display:flex; flex-direction:column; overflow:hidden; animation:modalPop 0.22s ease-out; border:1px solid rgba(255,255,255,0.2);">
-    <!-- Header -->
-    <div style="background:linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color:#ffffff; padding:18px 24px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #312e81;">
-      <div>
-        <h3 id="zoneModalTitle" style="margin:0; font-size:18px; font-weight:700; display:flex; align-items:center; gap:10px;">
-          <span>📍 รายละเอียดและผลงานเจาะลึกประจำโซน</span>
-        </h3>
-        <div id="zoneModalSub" style="font-size:12.5px; opacity:0.85; margin-top:3px; color:#cbd5e1;">ภาพรวมการหยิบสินค้า, พนักงานปฏิบัติงาน และชั่วโมงทำงานประจำโซน</div>
+  <!-- 📍 ZONE DETAIL POPUP MODAL -->
+  <div id="zoneDetailModal" class="modal-overlay"
+    style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(15,23,42,0.68); backdrop-filter:blur(6px); z-index:9999; align-items:center; justify-content:center; padding:16px; box-sizing:border-box;">
+    <div class="modal-card"
+      style="background:#ffffff; width:100%; max-width:880px; max-height:92vh; border-radius:18px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.35); display:flex; flex-direction:column; overflow:hidden; animation:modalPop 0.22s ease-out; border:1px solid rgba(255,255,255,0.2);">
+      <!-- Header -->
+      <div
+        style="background:linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color:#ffffff; padding:18px 24px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #312e81;">
+        <div>
+          <h3 id="zoneModalTitle"
+            style="margin:0; font-size:18px; font-weight:700; display:flex; align-items:center; gap:10px;">
+            <span>📍 รายละเอียดและผลงานเจาะลึกประจำโซน</span>
+          </h3>
+          <div id="zoneModalSub" style="font-size:12.5px; opacity:0.85; margin-top:3px; color:#cbd5e1;">
+            ภาพรวมการหยิบสินค้า, พนักงานปฏิบัติงาน และชั่วโมงทำงานประจำโซน</div>
+        </div>
+        <button onclick="closeZoneDetailModal()"
+          style="border:0; background:rgba(255,255,255,0.15); color:#ffffff; width:34px; height:34px; border-radius:50%; font-size:16px; font-weight:700; cursor:pointer; transition:.18s; display:flex; align-items:center; justify-content:center;">✕</button>
       </div>
-      <button onclick="closeZoneDetailModal()" style="border:0; background:rgba(255,255,255,0.15); color:#ffffff; width:34px; height:34px; border-radius:50%; font-size:16px; font-weight:700; cursor:pointer; transition:.18s; display:flex; align-items:center; justify-content:center;">✕</button>
-    </div>
-    
-    <!-- Body Content (Scrollable) -->
-    <div id="zoneModalBody" style="padding:22px 24px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:22px;"></div>
-  </div>
-</div>
 
-<script src="picker_names_fallback.js?v=20260727-picker-fallback-v1"></script>
-<script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
-<script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
-<script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-<script src="app.js?v=20260808-roster-refresh-v35"></script>
+      <!-- Body Content (Scrollable) -->
+      <div id="zoneModalBody"
+        style="padding:22px 24px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:22px;"></div>
+    </div>
+  </div>
+
+  <script src="picker_names_fallback.js?v=20260727-picker-fallback-v1"></script>
+  <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
+  <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
+  <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
+  <script src="app.js?v=20260808-planner-pu-v37"></script>
 </body>
+
 </html>
