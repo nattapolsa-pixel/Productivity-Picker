@@ -5203,17 +5203,10 @@ const builders = {
 
     // ไม่มี Workload เริ่มต้นจาก BigQuery: ต้องนำเข้า ESTIMATED ก่อนจึงเริ่มวางแผน
     const activeWorkload = SState.customWorkload || {};
-<<<<<<< HEAD
-    const zones = Object.keys(activeWorkload).filter(z => Number(activeWorkload[z].vol)>0).sort();
-    const ratioA = Math.max(0, Math.min(1, Number(SState.shiftARatio||0)/100));
-    const ratioB = 1-ratioA;
-    SState.shiftBRatio = 100 - Number(SState.shiftARatio||0);
-=======
     const zones = Object.keys(activeWorkload).filter(z => Number(activeWorkload[z].vol) > 0).sort();
     const ratioA = Math.max(0, Math.min(1, Number(SState.shiftARatio || 0) / 100));
     const ratioB = 1 - ratioA;
     SState.shiftBRatio = 100 - Number(SState.shiftARatio || 0);
->>>>>>> bb63887 (feat: refine empty state messages and workload reset guidance in Workforce Planner)
 
     const rows = zones.map(name => {
       const z = activeWorkload[name] || {};
