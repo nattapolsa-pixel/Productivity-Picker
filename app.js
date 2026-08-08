@@ -5120,21 +5120,9 @@ const builders = {
     const coreRoster = roster.countA + roster.countB;
     const defaultRatioA = coreRoster > 0 ? Math.round(roster.countA / coreRoster * 100) : 50;
 
-    if(!window._simState || window._simState.version !== 40){
+    if(!window._simState || window._simState.version !== 42){
       window._simState = {
-<<<<<<< HEAD
-        version:41,
-        shiftARatio:defaultRatioA,
-        shiftBRatio:100-defaultRatioA,
-        customWorkload:null,
-        customSourceName:'',
-        productivitySystem:'',
-        productivityOverrides:null,
-        productivityDraft:null,
-        userPickersA:{},
-        userPickersB:{}
-=======
-        version: 41,
+        version: 42,
         shiftARatio: defaultRatioA,
         shiftBRatio: 100 - defaultRatioA,
         customWorkload: null,
@@ -5144,7 +5132,6 @@ const builders = {
         productivityDraft: null,
         userPickersA: {},
         userPickersB: {}
->>>>>>> bb63887 (feat: refine empty state messages and workload reset guidance in Workforce Planner)
       };
     }
     const SState = window._simState;
