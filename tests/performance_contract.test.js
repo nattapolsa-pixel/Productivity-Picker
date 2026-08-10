@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260810-history-productivity-v46'), 'HTML must cache-bust the historical V1 productivity release');
+assert(html.includes('app.js?v=20260810-history-daily-v47'), 'HTML must cache-bust the historical V1 daily chart release');
 assert(html.includes('data-page="history"') && html.includes('id="historyPage"'), 'Historical V1 page must be reachable from the dashboard');
 assert(app.includes("endDate: '2026-07-19'") && app.includes("v2StartDate: '2026-07-20'"),
   'Historical V1 totals must stop before the first reliable V2 shift date');
@@ -16,6 +16,22 @@ assert(app.includes('ไม่ถูกนำไปปนกับ Pick Units/UO
   'Historical V1 page must explain that legacy totals are isolated from V2 calculations');
 assert(app.includes('productivity: 137.6') && app.includes('ค่าเฉลี่ย Column AF เฉพาะแถวที่ AF &gt; 0'),
   'Historical V1 page must preserve and explain the original AF productivity formula');
+assert(app.includes('HISTORICAL_V1_DAILY') && app.includes('id="historyMonthSelect"') && app.includes('id="historyTrend"'),
+  'Historical V1 page must provide selectable monthly daily charts');
+assert(app.includes("page === 'history' ? 'none' : 'flex'"), 'V2-only filters must be hidden on the historical page');
+const historicalDailyMatch = app.match(/const HISTORICAL_V1_DAILY = '([^']+)'/);
+assert(historicalDailyMatch, 'Historical V1 daily snapshot is missing');
+const historicalDaily = historicalDailyMatch[1].split(';').map(value => {
+  const [date, total, productivity, productiveRows] = value.split('|');
+  return { date, total: Number(total), productivity: Number(productivity), productiveRows: Number(productiveRows) };
+});
+assert.strictEqual(historicalDaily.length, 184, 'Historical V1 must contain all 184 active days');
+assert.strictEqual(historicalDaily.reduce((sum, row) => sum + row.total, 0), 17475482,
+  'Historical V1 daily totals must reconcile to the published historical total');
+assert.strictEqual(historicalDaily[historicalDaily.length - 1].date, '2026-07-19',
+  'Historical V1 daily data must stop before V2 starts');
+assert(historicalDaily.every(row => row.productivity > 0 && row.productiveRows > 0),
+  'Every historical active day must include V1 productivity evidence');
 assert(app.includes('function ensureXlsxLoaded()'), 'XLSX must be lazy-loaded by the upload flow');
 assert(app.includes('IndexedDB cache: แสดงข้อมูลรอบล่าสุดทันที'), 'Dashboard IndexedDB cache is missing');
 assert(app.includes("'mode=revision&' + dashboardScopeQuery()"), 'Frontend scoped revision probe is missing');

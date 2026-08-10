@@ -69,6 +69,8 @@ const HISTORICAL_V1 = Object.freeze({
     { month: '2026-07', total: 1695403, rows: 1436, days: 19, productivity: 147.7, productiveRows: 1290 }
   ])
 });
+const HISTORICAL_V1_DAILY = '2026-01-02|48453|102.7|59;2026-01-03|94750|125.1|68;2026-01-04|27939|138.6|30;2026-01-05|97018|126.4|108;2026-01-06|37194|139.3|35;2026-01-07|119703|138.3|78;2026-01-08|61455|132.2|72;2026-01-09|117698|136.8|83;2026-01-10|99466|124.8|77;2026-01-11|80226|140.2|33;2026-01-12|158099|146.7|75;2026-01-13|159822|122.4|38;2026-01-14|95115|127|37;2026-01-15|96310|122.9|83;2026-01-16|46862|114|77;2026-01-22|16682|204|3;2026-01-23|141456|126.5|123;2026-01-24|120595|141.3|88;2026-01-25|91353|146.4|73;2026-01-26|146117|145.1|76;2026-01-27|122832|145.4|78;2026-01-28|138170|151.1|81;2026-01-29|139205|146.4|88;2026-01-30|123028|139.6|84;2026-01-31|110640|120.3|107;2026-02-02|70629|123.1|73;2026-02-03|97917|133.2|77;2026-02-04|110475|134.5|80;2026-02-05|111756|148.4|104;2026-02-06|86798|142.8|70;2026-02-07|102596|160.2|67;2026-02-09|67126|179|58;2026-02-10|93188|132|69;2026-02-11|74456|130.4|65;2026-02-12|52227|137|65;2026-02-13|84713|132.3|74;2026-02-14|259980|133|100;2026-02-16|55224|142.9|69;2026-02-17|417575|142.7|76;2026-02-18|241255|141.8|76;2026-02-19|40253|141.1|37;2026-02-20|89480|140.1|74;2026-02-21|142478|153.2|110;2026-02-23|72662|158|62;2026-02-24|38006|159.9|32;2026-02-25|91836|143.1|77;2026-02-26|96763|135.5|77;2026-02-27|79763|128|71;2026-02-28|80000|138.9|69;2026-03-02|83116|133.5|104;2026-03-03|93839|147|66;2026-03-04|99467|143.5|74;2026-03-05|139342|145.9|108;2026-03-06|112027|143.3|80;2026-03-07|102857|138.1|78;2026-03-08|38716|162.7|31;2026-03-09|67873|149.2|64;2026-03-10|105921|129.2|86;2026-03-11|185165|146|81;2026-03-12|100058|126.3|81;2026-03-14|210876|116.2|203;2026-03-15|24837|108.8|36;2026-03-16|117868|133.1|76;2026-03-17|99704|136.5|89;2026-03-18|201103|132.9|157;2026-03-20|101967|125.3|84;2026-03-21|102890|134.6|81;2026-03-22|30263|138.8|36;2026-03-23|71432|143.2|72;2026-03-24|105247|132.7|82;2026-03-25|86572|121.3|75;2026-03-26|106966|124|86;2026-03-27|88296|120.3|84;2026-03-28|91332|112.3|87;2026-03-29|34480|137.9|39;2026-03-30|69392|125|69;2026-03-31|97091|119.1|82;2026-04-01|101280|120.8|86;2026-04-02|102517|127.4|82;2026-04-03|108925|128.2|88;2026-04-04|109576|131|87;2026-04-05|116447|148.1|111;2026-04-06|52570|138.7|33;2026-04-07|118004|141.3|84;2026-04-08|126551|147|90;2026-04-09|124667|147.2|86;2026-04-10|136450|165.4|86;2026-04-11|120621|159.2|79;2026-04-12|69048|128.8|61;2026-04-13|12211|107.4|16;2026-04-15|11614|154.3|6;2026-04-16|51730|120|60;2026-04-17|80781|116.6|73;2026-04-18|105636|126.9|85;2026-04-19|62945|126.3|69;2026-04-20|68221|138|69;2026-04-21|228111|133.4|77;2026-04-22|54526|136.9|35;2026-04-23|107552|128.3|78;2026-04-24|95556|128.2|77;2026-04-25|121667|136.2|105;2026-04-27|85394|125.8|104;2026-04-28|98026|123|87;2026-04-29|108653|141.6|84;2026-04-30|153030|125.1|48;2026-05-01|30821|139.2|39;2026-05-02|91835|189.3|69;2026-05-03|33521|178.5|30;2026-05-04|70417|192.4|48;2026-05-05|105392|133.3|78;2026-05-06|102870|122.9|81;2026-05-07|93778|120.6|79;2026-05-08|139650|119.1|128;2026-05-09|100771|125.1|88;2026-05-10|107994|138.5|80;2026-05-11|33780|124.8|38;2026-05-12|149129|129.3|79;2026-05-13|51197|121.5|31;2026-05-14|120134|125.2|81;2026-05-15|85775|120.3|82;2026-05-16|123379|134.8|113;2026-05-18|72009|136.9|87;2026-05-19|107862|137.7|123;2026-05-20|89089|133.8|87;2026-05-21|94324|126.6|87;2026-05-22|89936|137.7|85;2026-05-23|88164|130.5|88;2026-05-24|24305|121.1|40;2026-05-25|64034|131.5|80;2026-05-26|93262|141.6|88;2026-05-27|113764|147.7|88;2026-05-28|94952|133.8|82;2026-05-29|88153|137.6|82;2026-05-30|94276|138|82;2026-05-31|24877|135.9|36;2026-06-01|65497|146.7|75;2026-06-02|67591|123.5|80;2026-06-03|94636|137.5|84;2026-06-04|94984|142.3|82;2026-06-05|139893|202.3|86;2026-06-06|159787|202.3|80;2026-06-07|34063|177.7|34;2026-06-08|80798|132.1|65;2026-06-09|185438|146.3|72;2026-06-10|174046|134.9|75;2026-06-11|146403|133|75;2026-06-12|82096|126.5|71;2026-06-13|74680|131.1|74;2026-06-14|17968|129.4|32;2026-06-15|60848|125.6|72;2026-06-16|87268|134.8|77;2026-06-17|79088|136.4|79;2026-06-18|86415|144.4|76;2026-06-19|73019|138.2|75;2026-06-20|82019|139|79;2026-06-21|17960|141.3|27;2026-06-22|61550|137.6|75;2026-06-23|76583|133.1|76;2026-06-24|76566|136.9|74;2026-06-25|84866|145.9|77;2026-06-26|83167|136.7|81;2026-06-27|88106|144.3|71;2026-06-28|19455|161.6|29;2026-06-29|64522|153.6|70;2026-06-30|92967|144.4|71;2026-07-01|92643|155.1|71;2026-07-02|158295|149.1|71;2026-07-03|91265|136.5|80;2026-07-04|106552|139.7|78;2026-07-05|27308|121.4|34;2026-07-06|99850|154.2|67;2026-07-07|107097|142.3|76;2026-07-08|91367|138.8|77;2026-07-09|84172|141.1|78;2026-07-10|74057|136.8|74;2026-07-11|74575|137.1|72;2026-07-12|17132|123.9|31;2026-07-13|55098|133.9|74;2026-07-14|149571|146.4|78;2026-07-15|126557|142.7|78;2026-07-16|83103|149.2|74;2026-07-17|104061|179.6|74;2026-07-18|123370|186.6|75;2026-07-19|29330|197.9|28'
+  .split(';').map(value => { const [date, total, productivity, productiveRows] = value.split('|'); return Object.freeze({ date, total: Number(total), productivity: Number(productivity), productiveRows: Number(productiveRows) }); });
 const SHIFT_LABEL = { morning: '🅰️ กะ A', night: '🅱️ กะ B', '-': '-' };
 
 Chart.register(ChartDataLabels);
@@ -3824,6 +3826,7 @@ const builders = {
       </div>`).join('');
     const rows = data.months.map((row, index) => `
       <tr><td>${index + 1}</td><td>${monthLabel(row.month)}</td><td style="text-align:right;font-weight:800;color:#3730a3">${fmt(row.total)}</td><td style="text-align:right;font-weight:800;color:#0e7490">${row.productivity.toFixed(1)}</td><td style="text-align:right">${fmt(row.productiveRows)}</td><td style="text-align:right">${fmt(row.days)}</td></tr>`).join('');
+    const monthOptions = data.months.map(row => `<option value="${row.month}">${monthLabel(row.month)}</option>`).join('');
     host.innerHTML = `
       <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:14px;padding:14px 16px;color:#92400e;font-size:12px;line-height:1.7;margin-bottom:16px">
         <b>ข้อมูลอ้างอิงจาก V1 เท่านั้น</b> — ใช้เฉพาะยอดตัวเลขจาก ${data.source} และตัดข้อมูลที่ ${data.endDate} ก่อน V2 เริ่มทำงาน
@@ -3831,6 +3834,16 @@ const builders = {
         และไม่ถูกนำไปปนกับ Pick Units/UOM, Productivity, OT, พนักงาน, สินค้า หรือ Zone ของ V2
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:16px">${cards}</div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;box-shadow:0 8px 22px rgba(15,23,42,.05);margin-bottom:16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+          <div><h3 style="margin:0;color:#0f172a">แนวโน้มรายวัน V1</h3><div style="font-size:11px;color:#64748b;margin-top:3px">แท่ง = Total pick · เส้น = Productivity V1 (Pick/ชม.)</div></div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:#475569">เลือกเดือน
+            <select id="historyMonthSelect" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:#0f172a;font-family:inherit;font-weight:600">${monthOptions}</select>
+          </label>
+        </div>
+        <div style="height:330px;position:relative"><canvas id="historyTrend"></canvas></div>
+        <div style="overflow:auto;margin-top:18px;max-height:420px"><table id="historyDailyTable" style="width:100%;border-collapse:collapse;font-size:12px"></table></div>
+      </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:16px">
         <div style="background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;box-shadow:0 8px 22px rgba(15,23,42,.05)">
           <h3 style="margin:0 0 6px;color:#0f172a">ยอดและ Productivity รายเดือน</h3>
@@ -3841,6 +3854,32 @@ const builders = {
           <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th>#</th><th>เดือน</th><th style="text-align:right">Total pick</th><th style="text-align:right">Pick/ชม.</th><th style="text-align:right">แถวคำนวณ</th><th style="text-align:right">วัน</th></tr></thead><tbody>${rows}</tbody></table>
         </div>
       </div>`;
+    const select = document.getElementById('historyMonthSelect');
+    const drawDaily = month => {
+      const daily = HISTORICAL_V1_DAILY.filter(row => row.date.startsWith(month));
+      const summary = data.months.find(row => row.month === month);
+      const chart = Chart.getChart('historyTrend'); if (chart) chart.destroy();
+      new Chart(document.getElementById('historyTrend'), {
+        data: {
+          labels: daily.map(row => row.date.slice(8, 10) + '/' + row.date.slice(5, 7)),
+          datasets: [
+            { type: 'bar', label: 'Total pick', data: daily.map(row => row.total), backgroundColor: '#6366f1cc', borderRadius: 7, yAxisID: 'y' },
+            { type: 'line', label: 'Productivity V1', data: daily.map(row => row.productivity), borderColor: '#0891b2', backgroundColor: '#0891b2', borderWidth: 2.5, pointRadius: 3, pointHoverRadius: 5, tension: .3, yAxisID: 'y1' }
+          ]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+          plugins: { legend: { position: 'top' }, datalabels: { display: false }, tooltip: { callbacks: { label: context => context.datasetIndex === 0 ? ` Total pick: ${fmt(context.raw)}` : ` Productivity: ${Number(context.raw).toFixed(1)} Pick/ชม.` } } },
+          scales: { y: { beginAtZero: true, position: 'left', ticks: { callback: value => fmt(value) }, title: { display: true, text: 'Total pick' } }, y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Pick/ชม.' } } }
+        }
+      });
+      const table = document.getElementById('historyDailyTable');
+      table.innerHTML = `<thead><tr><th>#</th><th>วันที่</th><th style="text-align:right">Total pick</th><th style="text-align:right">Productivity</th><th style="text-align:right">แถวคำนวณ</th></tr></thead><tbody>${daily.map((row, index) => `<tr><td>${index + 1}</td><td>${row.date.slice(8, 10)}/${row.date.slice(5, 7)}/${row.date.slice(0, 4)}</td><td style="text-align:right;font-weight:800;color:#3730a3">${fmt(row.total)}</td><td style="text-align:right;font-weight:800;color:#0e7490">${row.productivity.toFixed(1)}</td><td style="text-align:right">${fmt(row.productiveRows)}</td></tr>`).join('')}</tbody>`;
+      if (summary) select.title = `${monthLabel(month)} · Total pick ${fmt(summary.total)} · Productivity ${summary.productivity.toFixed(1)} Pick/ชม.`;
+    };
+    select.value = data.months[data.months.length - 1].month;
+    select.onchange = () => drawDaily(select.value);
+    drawDaily(select.value);
   },
   overview() {
     const daily = A.daily;
@@ -5870,14 +5909,18 @@ function renderExcludedBadges() {
   badgeContainer.innerHTML = h;
 }
 
-function destroyCharts() { ['trend', 'cat', 'picker', 'zone', 'slot', 'item', 'typepickRadar'].forEach(id => { const c = Chart.getChart(id); if (c) c.destroy(); }); }
+function destroyCharts() { ['trend', 'cat', 'picker', 'zone', 'slot', 'item', 'typepickRadar', 'historyTrend'].forEach(id => { const c = Chart.getChart(id); if (c) c.destroy(); }); }
 
 function show(page) {
   if (!hasLiveData) return;
   currentPage = page;
+  const sysbar = document.querySelector('.sysbar');
+  if (sysbar) sysbar.style.display = page === 'history' ? 'none' : 'flex';
   document.querySelectorAll('.nav').forEach(n => n.classList.toggle('active', n.dataset.page === page));
   document.querySelectorAll('.page').forEach(s => s.classList.toggle('active', s.dataset.page === page));
   document.getElementById('ptitle').textContent = TITLES[page];
+  if (page === 'history') document.getElementById('daterange').textContent = `ช่วงข้อมูลย้อนหลัง: ${HISTORICAL_V1.startDate} ถึง ${HISTORICAL_V1.endDate}`;
+  else updateDateHeader();
   if (!built[page]) { builders[page](); built[page] = true; }
 }
 function preloadAllCubes() {
