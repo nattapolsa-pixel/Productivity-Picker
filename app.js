@@ -1780,28 +1780,6 @@ function ensureStyles() {
     + '.preset-range-group button{border:0;background:transparent;font-family:inherit;font-size:12px;font-weight:600;color:#475569;padding:6px 12px;border-radius:9px;cursor:pointer;transition:all .2s}'
     + '.preset-range-group button:hover{color:#1e293b;background:rgba(255,255,255,0.6)}'
     + '.preset-range-group button.active{background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;font-weight:700;box-shadow:0 4px 12px -2px rgba(99,102,241,0.4)}'
-    + '.calendar-dropdown-wrap{position:relative;display:inline-block}'
-    + '.cal-dropdown-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid #cbd5e1;background:linear-gradient(135deg,#ffffff,#f8fafc);font-family:inherit;font-size:12.5px;font-weight:600;color:#1e293b;padding:6px 12px;border-radius:10px;cursor:pointer;transition:all .18s ease;box-shadow:0 2px 6px -2px rgba(0,0,0,0.06)}'
-    + '.cal-dropdown-btn:hover{border-color:#6366f1;color:#4338ca;background:#f5f3ff;box-shadow:0 4px 12px -2px rgba(99,102,241,0.18)}'
-    + '.cal-dropdown-btn.active{background:linear-gradient(135deg,#6366f1,#4f46e5);border-color:transparent;color:#ffffff;box-shadow:0 4px 14px -3px rgba(99,102,241,0.45)}'
-    + '.cal-popover{position:absolute;top:calc(100% + 6px);left:0;z-index:1000;width:270px;background:#ffffff;border:1px solid #cbd5e1;border-radius:14px;padding:12px;box-shadow:0 16px 36px -8px rgba(15,23,42,0.2),0 4px 12px -2px rgba(0,0,0,0.05);backdrop-filter:blur(16px);animation:calPopIn .18s cubic-bezier(0.16,1,0.3,1)}'
-    + '.cal-popover.hidden{display:none !important}'
-    + '@keyframes calPopIn{from{opacity:0;transform:translateY(-6px) scale(0.96)}to{opacity:1;transform:translateY(0) scale(1)}}'
-    + '.cal-pop-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}'
-    + '.cal-month-title{font-size:13.5px;font-weight:700;color:#0f172a}'
-    + '.cal-nav-btn{border:0;background:#f1f5f9;color:#475569;width:26px;height:26px;border-radius:7px;cursor:pointer;font-size:11px;display:inline-flex;align-items:center;justify-content:center;transition:all .15s}'
-    + '.cal-nav-btn:hover{background:#6366f1;color:#fff}'
-    + '.cal-weekdays{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center;font-size:11px;font-weight:700;color:#94a3b8;margin-bottom:6px}'
-    + '.cal-days-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}'
-    + '.cal-day-cell{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#334155;border-radius:8px;cursor:pointer;position:relative;transition:all .15s ease;border:1px solid transparent}'
-    + '.cal-day-cell:hover:not(.disabled){background:#eef2ff;color:#4338ca;border-color:#c7d2fe}'
-    + '.cal-day-cell.has-data::after{content:\'\';position:absolute;bottom:3px;width:4px;height:4px;background:#10b981;border-radius:50%}'
-    + '.cal-day-cell.selected{background:linear-gradient(135deg,#6366f1,#4338ca) !important;color:#ffffff !important;font-weight:700;box-shadow:0 4px 10px -2px rgba(99,102,241,0.5)}'
-    + '.cal-day-cell.selected::after{background:#ffffff !important}'
-    + '.cal-day-cell.disabled{color:#cbd5e1;cursor:not-allowed;opacity:0.4}'
-    + '.cal-pop-foot{display:flex;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #f1f5f9}'
-    + '.cal-foot-btn{flex:1;border:1px solid #e2e8f0;background:#f8fafc;font-family:inherit;font-size:11px;font-weight:600;color:#475569;padding:5px;border-radius:7px;cursor:pointer;transition:all .15s}'
-    + '.cal-foot-btn:hover{background:#6366f1;color:#fff;border-color:transparent}'
     + '.refreshbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid #cbd5e1;background:#fff;font-family:inherit;font-size:12px;font-weight:600;color:#0369a1;padding:7px 14px;border-radius:10px;cursor:pointer;transition:all .18s;box-shadow:0 2px 6px -2px rgba(0,0,0,0.05)}'
     + '.refreshbtn:hover{border-color:#0284c7;background:#f0fdfa;transform:translateY(-1px)}'
     + '.freshtxt{font-size:11.5px;color:#94a3b8}'
@@ -1809,118 +1787,11 @@ function ensureStyles() {
   document.head.appendChild(st);
 }
 
-let calViewYear = 2026;
-let calViewMonth = 7;
-const TH_MONTHS_SHORT = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
-
-function initCalViewDate() {
-  const refDate = (dfrom && dfrom !== DMIN) ? new Date(dfrom) : new Date(DMAX || Date.now());
-  if (!isNaN(refDate.getTime())) {
-    calViewYear = refDate.getFullYear();
-    calViewMonth = refDate.getMonth();
-  }
-}
-
-function renderCalPopoverGrid(bar) {
-  const grid = bar.querySelector('#calDaysGrid');
-  const monthTitle = bar.querySelector('#calMonthTitle');
-  if (!grid || !monthTitle) return;
-
-  monthTitle.textContent = `${TH_MONTHS_SHORT[calViewMonth]} ${calViewYear + 543}`;
-  grid.innerHTML = '';
-
-  const firstDay = new Date(calViewYear, calViewMonth, 1).getDay();
-  const daysInMonth = new Date(calViewYear, calViewMonth + 1, 0).getDate();
-
-  for (let i = 0; i < firstDay; i++) {
-    const blank = document.createElement('div');
-    blank.className = 'cal-day-cell disabled';
-    grid.appendChild(blank);
-  }
-
-  const activeDatesSet = new Set(ALL_DATES);
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    const mm = String(calViewMonth + 1).padStart(2, '0');
-    const dd = String(day).padStart(2, '0');
-    const dateStr = `${calViewYear}-${mm}-${dd}`;
-
-    const cell = document.createElement('div');
-    cell.className = 'cal-day-cell';
-    cell.textContent = day;
-
-    if (activeDatesSet.has(dateStr)) {
-      cell.classList.add('has-data');
-    }
-
-    if (datePresetMode === 'day' && dfrom === dateStr && dto === dateStr) {
-      cell.classList.add('selected');
-    }
-
-    if (dateStr < DMIN || dateStr > DMAX) {
-      cell.classList.add('disabled');
-    } else {
-      cell.onclick = (e) => {
-        e.stopPropagation();
-        datePresetMode = 'day';
-        trendMode = 'day';
-        dfrom = dateStr;
-        dto = dateStr;
-        const fromEl = bar.querySelector('#dfrom'), toEl = bar.querySelector('#dto');
-        if (fromEl) fromEl.value = dfrom;
-        if (toEl) toEl.value = dto;
-        closeCalPopover();
-        setPresetActive();
-        render();
-      };
-    }
-    grid.appendChild(cell);
-  }
-}
-
-function closeCalPopover() {
-  const popover = document.querySelector('#calPopover');
-  if (popover) popover.classList.add('hidden');
-}
-
-if (typeof window !== 'undefined' && !window.__calCloseListenerRegistered) {
-  window.__calCloseListenerRegistered = true;
-  document.addEventListener('click', (e) => {
-    const wrap = document.querySelector('.calendar-dropdown-wrap');
-    if (wrap && !wrap.contains(e.target)) {
-      closeCalPopover();
-    }
-  });
-}
-
 function buildControls() {
   ensureStyles();
   const old = document.querySelector('.sysbar'); if (old) old.remove();
   const rangeBtns = `<div class="preset-range-group"><button data-all="1">ทั้งหมด</button><button data-range="week">Weekly</button><button data-range="month">Monthly</button></div>`;
-  const calDropdown = `
-    <div class="calendar-dropdown-wrap">
-      <button id="btnCalendarDropdown" class="cal-dropdown-btn" title="คลิกเพื่อเลือกปฏิทินรายวัน">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-        <span id="calDropdownText">📅 เลือกรายวัน</span>
-        <span style="font-size:10px; opacity:0.7;">▼</span>
-      </button>
-      <div id="calPopover" class="cal-popover hidden">
-        <div class="cal-pop-head">
-          <button id="calPrevMonth" class="cal-nav-btn">◄</button>
-          <span id="calMonthTitle" class="cal-month-title">ส.ค. 2569</span>
-          <button id="calNextMonth" class="cal-nav-btn">►</button>
-        </div>
-        <div class="cal-weekdays">
-          <span>อา</span><span>จ</span><span>อ</span><span>พ</span><span>พฤ</span><span>ศ</span><span>ส</span>
-        </div>
-        <div id="calDaysGrid" class="cal-days-grid"></div>
-        <div class="cal-pop-foot">
-          <button id="calSelectToday" class="cal-foot-btn">ล่าสุด (${DMAX ? DMAX.slice(8) + '/' + DMAX.slice(5, 7) : 'วันนี้'})</button>
-          <button id="calSelectAll" class="cal-foot-btn">ทั้งหมดในระบบ</button>
-        </div>
-      </div>
-    </div>`;
-  const datePresetGroup = `<div class="datepreset">${rangeBtns}${calDropdown}</div>`;
+  const datePresetGroup = `<div class="datepreset">${rangeBtns}</div>`;
   const bar = document.createElement('div'); bar.className = 'sysbar';
   const targetUnitTxt = unitMode === 'pcs' ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
   bar.innerHTML =
@@ -2012,70 +1883,6 @@ function buildControls() {
   });
 
   const fromEl = bar.querySelector('#dfrom'), toEl = bar.querySelector('#dto');
-  const btnCalDrop = bar.querySelector('#btnCalendarDropdown');
-  const popover = bar.querySelector('#calPopover');
-  const calDropdownText = bar.querySelector('#calDropdownText');
-
-  if (btnCalDrop && popover) {
-    btnCalDrop.onclick = (e) => {
-      e.stopPropagation();
-      const isHidden = popover.classList.contains('hidden');
-      if (isHidden) {
-        initCalViewDate();
-        renderCalPopoverGrid(bar);
-        popover.classList.remove('hidden');
-      } else {
-        popover.classList.add('hidden');
-      }
-    };
-
-    const btnPrev = bar.querySelector('#calPrevMonth');
-    if (btnPrev) {
-      btnPrev.onclick = (e) => {
-        e.stopPropagation();
-        calViewMonth--;
-        if (calViewMonth < 0) { calViewMonth = 11; calViewYear--; }
-        renderCalPopoverGrid(bar);
-      };
-    }
-
-    const btnNext = bar.querySelector('#calNextMonth');
-    if (btnNext) {
-      btnNext.onclick = (e) => {
-        e.stopPropagation();
-        calViewMonth++;
-        if (calViewMonth > 11) { calViewMonth = 0; calViewYear++; }
-        renderCalPopoverGrid(bar);
-      };
-    }
-
-    const btnToday = bar.querySelector('#calSelectToday');
-    if (btnToday) {
-      btnToday.onclick = (e) => {
-        e.stopPropagation();
-        datePresetMode = 'day';
-        trendMode = 'day';
-        dfrom = DMAX; dto = DMAX;
-        fromEl.value = dfrom; toEl.value = dto;
-        popover.classList.add('hidden');
-        setPresetActive();
-        render();
-      };
-    }
-
-    const btnAll = bar.querySelector('#calSelectAll');
-    if (btnAll) {
-      btnAll.onclick = (e) => {
-        e.stopPropagation();
-        datePresetMode = 'all';
-        dfrom = DMIN; dto = DMAX;
-        fromEl.value = dfrom; toEl.value = dto;
-        popover.classList.add('hidden');
-        setPresetActive();
-        render();
-      };
-    }
-  }
 
   function setPresetActive() {
     bar.querySelectorAll('.datepreset button').forEach(x => x.classList.remove('active'));
@@ -2084,19 +1891,10 @@ function buildControls() {
       const r = bar.querySelector(`.datepreset button[data-range="${datePresetMode}"]`);
       if (r) r.classList.add('active');
     }
-
-    if (datePresetMode === 'day' && dfrom === dto) {
-      if (btnCalDrop) btnCalDrop.classList.add('active');
-      if (calDropdownText) calDropdownText.textContent = `📅 ${dfrom.slice(8)}/${dfrom.slice(5, 7)}`;
-    } else {
-      if (btnCalDrop) btnCalDrop.classList.remove('active');
-      if (calDropdownText) calDropdownText.textContent = '📅 เลือกรายวัน';
-    }
   }
   function applyDates() { if (dfrom > dto) { const t = dfrom; dfrom = dto; dto = t; fromEl.value = dfrom; toEl.value = dto; } setPresetActive(); render(); }
   fromEl.onchange = () => { datePresetMode = 'custom'; dfrom = fromEl.value || DMIN; applyDates(); };
   toEl.onchange = () => { datePresetMode = 'custom'; dto = toEl.value || DMAX; applyDates(); };
-  // ผูก preset เฉพาะ 3 ปุ่มช่วงเวลา ห้ามทับ onclick ของปุ่มเปิด/เลื่อนปฏิทิน
   bar.querySelectorAll('.preset-range-group button').forEach(b => b.onclick = () => {
     if (b.dataset.all) {
       datePresetMode = 'all';

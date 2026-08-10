@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260810-current-month-daily-v49'), 'HTML must cache-bust the current-month daily chart release');
+assert(html.includes('app.js?v=20260810-remove-daily-picker-v50'), 'HTML must cache-bust the removed daily picker release');
 assert(html.includes('data-page="history"') && html.includes('id="historyPage"'), 'Historical V1 page must be reachable from the dashboard');
 assert(app.includes("endDate: '2026-07-19'") && app.includes("v2StartDate: '2026-07-20'"),
   'Historical V1 totals must stop before the first reliable V2 shift date');
@@ -20,9 +20,9 @@ assert(app.includes('HISTORICAL_V1_DAILY') && app.includes('id="historyMonthSele
   'Historical V1 page must provide selectable monthly daily charts');
 assert(app.includes("page === 'history' ? 'none' : 'flex'"), 'V2-only filters must be hidden on the historical page');
 assert(app.includes("bar.querySelectorAll('.preset-range-group button').forEach(b => b.onclick"),
-  'Date preset handler must not overwrite the calendar dropdown controls');
-assert(!app.includes("bar.querySelectorAll('.datepreset button').forEach(b => b.onclick"),
-  'Calendar dropdown onclick must remain intact');
+  'Date preset handler must remain scoped to All/Weekly/Monthly');
+assert(!app.includes('btnCalendarDropdown') && !app.includes('calPopover') && !app.includes('เลือกหลายวัน'),
+  'The daily calendar dropdown must be removed from the overview controls');
 assert(app.includes("mode === 'day' && datePresetMode === 'all' && latestMonth") &&
   app.includes("daily.filter(d => String(d.date || '').startsWith(latestMonth))"),
   'Overview daily trend must default to the latest data month without changing weekly/monthly trends');
