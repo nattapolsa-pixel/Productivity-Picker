@@ -2096,7 +2096,8 @@ function buildControls() {
   function applyDates() { if (dfrom > dto) { const t = dfrom; dfrom = dto; dto = t; fromEl.value = dfrom; toEl.value = dto; } setPresetActive(); render(); }
   fromEl.onchange = () => { datePresetMode = 'custom'; dfrom = fromEl.value || DMIN; applyDates(); };
   toEl.onchange = () => { datePresetMode = 'custom'; dto = toEl.value || DMAX; applyDates(); };
-  bar.querySelectorAll('.datepreset button').forEach(b => b.onclick = () => {
+  // ผูก preset เฉพาะ 3 ปุ่มช่วงเวลา ห้ามทับ onclick ของปุ่มเปิด/เลื่อนปฏิทิน
+  bar.querySelectorAll('.preset-range-group button').forEach(b => b.onclick = () => {
     if (b.dataset.all) {
       datePresetMode = 'all';
       dfrom = DMIN; dto = DMAX;
