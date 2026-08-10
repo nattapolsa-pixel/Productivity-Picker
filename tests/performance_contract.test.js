@@ -8,7 +8,12 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260810-24h-shift-v44'), 'HTML must cache-bust the 24-hour shift frontend release');
+assert(html.includes('app.js?v=20260810-history-v45'), 'HTML must cache-bust the historical V1 frontend release');
+assert(html.includes('data-page="history"') && html.includes('id="historyPage"'), 'Historical V1 page must be reachable from the dashboard');
+assert(app.includes("endDate: '2026-07-19'") && app.includes("v2StartDate: '2026-07-20'"),
+  'Historical V1 totals must stop before the first reliable V2 shift date');
+assert(app.includes('ยอดนี้ไม่ถูกนำไปคำนวณ Pick Units/UOM'),
+  'Historical V1 page must explain that legacy totals are isolated from V2 calculations');
 assert(app.includes('function ensureXlsxLoaded()'), 'XLSX must be lazy-loaded by the upload flow');
 assert(app.includes('IndexedDB cache: แสดงข้อมูลรอบล่าสุดทันที'), 'Dashboard IndexedDB cache is missing');
 assert(app.includes("'mode=revision&' + dashboardScopeQuery()"), 'Frontend scoped revision probe is missing');

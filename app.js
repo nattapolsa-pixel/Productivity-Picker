@@ -47,7 +47,25 @@ const ZONE_TYPE_COLORS = Object.freeze({
   'on floor': '#475569',
   '-': '#94a3b8'
 });
-const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
+const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
+const HISTORICAL_V1 = Object.freeze({
+  source: 'Results Master!E (Total pick)',
+  startDate: '2026-01-02',
+  endDate: '2026-07-19',
+  v2StartDate: '2026-07-20',
+  total: 17475482,
+  sourceRows: 15699,
+  activeDays: 184,
+  months: Object.freeze([
+    { month: '2026-01', total: 2490188, rows: 2279, days: 25 },
+    { month: '2026-02', total: 2657156, rows: 2117, days: 24 },
+    { month: '2026-03', total: 2768697, rows: 2548, days: 28 },
+    { month: '2026-04', total: 2732309, rows: 2298, days: 28 },
+    { month: '2026-05', total: 2579450, rows: 2633, days: 30 },
+    { month: '2026-06', total: 2552279, rows: 2388, days: 30 },
+    { month: '2026-07', total: 1695403, rows: 1436, days: 19 }
+  ])
+});
 const SHIFT_LABEL = { morning: '🅰️ กะ A', night: '🅱️ กะ B', '-': '-' };
 
 Chart.register(ChartDataLabels);
@@ -3774,6 +3792,49 @@ function renderPickerDrilldown() {
 
 // ===== chart builders =====
 const builders = {
+  history() {
+    const host = document.getElementById('historyPage');
+    if (!host) return;
+    const data = HISTORICAL_V1;
+    const maxTotal = Math.max(...data.months.map(row => row.total), 1);
+    const monthLabel = value => new Intl.DateTimeFormat('th-TH', { month: 'long', year: 'numeric' })
+      .format(new Date(value + '-01T00:00:00'));
+    const cards = [
+      ['ยอดย้อนหลังรวม', fmt(data.total), 'Total pick จาก V1'],
+      ['ช่วงข้อมูล', `${data.startDate} – ${data.endDate}`, `${data.activeDays} วันที่มีข้อมูล`],
+      ['แถวต้นทาง', fmt(data.sourceRows), 'รวมก่อนตัดเข้า V2'],
+      ['เริ่มใช้ V2', data.v2StartDate, 'ไม่รวมซ้ำกับข้อมูลย้อนหลัง']
+    ].map(([label, value, note]) => `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:18px;box-shadow:0 8px 22px rgba(15,23,42,.05)">
+        <div style="font-size:12px;color:#64748b">${label}</div>
+        <div style="font-size:24px;font-weight:800;color:#0f172a;margin-top:5px">${value}</div>
+        <div style="font-size:11px;color:#94a3b8;margin-top:4px">${note}</div>
+      </div>`).join('');
+    const bars = data.months.map(row => `
+      <div style="display:grid;grid-template-columns:minmax(110px,160px) 1fr minmax(90px,130px);gap:12px;align-items:center;margin:12px 0">
+        <div style="font-size:12px;font-weight:600;color:#334155">${monthLabel(row.month)}</div>
+        <div style="height:24px;background:#eef2ff;border-radius:8px;overflow:hidden"><div style="height:100%;width:${Math.max(2, row.total / maxTotal * 100)}%;background:linear-gradient(90deg,#818cf8,#4f46e5);border-radius:8px"></div></div>
+        <div style="font-size:13px;font-weight:800;color:#3730a3;text-align:right">${fmt(row.total)}</div>
+      </div>`).join('');
+    const rows = data.months.map((row, index) => `
+      <tr><td>${index + 1}</td><td>${monthLabel(row.month)}</td><td style="text-align:right;font-weight:800;color:#3730a3">${fmt(row.total)}</td><td style="text-align:right">${fmt(row.rows)}</td><td style="text-align:right">${fmt(row.days)}</td></tr>`).join('');
+    host.innerHTML = `
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:14px;padding:14px 16px;color:#92400e;font-size:12px;line-height:1.7;margin-bottom:16px">
+        <b>ข้อมูลอ้างอิงจาก V1 เท่านั้น</b> — ใช้เฉพาะยอดตัวเลขจาก ${data.source} และตัดข้อมูลที่ ${data.endDate} ก่อน V2 เริ่มทำงาน
+        ยอดนี้ไม่ถูกนำไปคำนวณ Pick Units/UOM, Productivity, OT, พนักงาน, สินค้า หรือ Zone ของ V2
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:16px">${cards}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:16px">
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;box-shadow:0 8px 22px rgba(15,23,42,.05)">
+          <h3 style="margin:0 0 6px;color:#0f172a">ยอด Total pick รายเดือน</h3>
+          <div style="font-size:11px;color:#64748b;margin-bottom:18px">กรกฎาคมแสดงเฉพาะวันที่ 1–19 เพื่อไม่ให้ทับกับ V2</div>${bars}
+        </div>
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;box-shadow:0 8px 22px rgba(15,23,42,.05);overflow:auto">
+          <h3 style="margin:0 0 14px;color:#0f172a">ตารางยอดย้อนหลัง</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th>#</th><th>เดือน</th><th style="text-align:right">Total pick</th><th style="text-align:right">แถว</th><th style="text-align:right">วัน</th></tr></thead><tbody>${rows}</tbody></table>
+        </div>
+      </div>`;
+  },
   overview() {
     const daily = A.daily;
     const isPcs = unitMode === 'pcs';
