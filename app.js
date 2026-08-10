@@ -3888,7 +3888,14 @@ const builders = {
 
     function bucket(mode) {
       const map = {};
-      daily.forEach(d => {
+      const latestDailyDate = daily.length ? String(daily[daily.length - 1].date || '') : String(DMAX || '');
+      const latestMonth = latestDailyDate.slice(0, 7);
+      // หน้าแรกโหมดรายวัน + ช่วง "ทั้งหมด" แสดงเฉพาะเดือนล่าสุดเพื่อให้อ่านกราฟง่าย
+      // หากผู้ใช้เลือกวัน/ช่วงเดือนเอง ให้คงข้อมูลตาม Filter; รายสัปดาห์และรายเดือนไม่เปลี่ยน
+      const trendRows = mode === 'day' && datePresetMode === 'all' && latestMonth
+        ? daily.filter(d => String(d.date || '').startsWith(latestMonth))
+        : daily;
+      trendRows.forEach(d => {
         let k = d.date; const dt = new Date(d.date);
         if (mode === 'week') { const day = (dt.getDay() + 6) % 7; const mo = new Date(dt); mo.setDate(dt.getDate() - day); k = 'wk ' + mo.toISOString().slice(5, 10); }
         if (mode === 'month') k = d.date.slice(0, 7);
