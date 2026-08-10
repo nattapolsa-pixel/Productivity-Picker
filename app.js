@@ -3668,7 +3668,19 @@ const builders = {
         },
         options: {
           responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
-          plugins: { legend: { position: 'top' }, datalabels: { display: false }, tooltip: { callbacks: { label: context => context.datasetIndex === 0 ? ` Total pick: ${fmt(context.raw)}` : ` Productivity: ${Number(context.raw).toFixed(1)} Pick/ชม.` } } },
+          plugins: {
+            legend: { position: 'top' },
+            datalabels: {
+              display: context => context.datasetIndex === 1,
+              formatter: value => Number(value).toFixed(1),
+              anchor: 'end', align: 'top', offset: 4, clamp: true,
+              color: '#0e7490', backgroundColor: 'rgba(255,255,255,.92)',
+              borderColor: '#67e8f9', borderWidth: 1, borderRadius: 5,
+              padding: { top: 2, right: 5, bottom: 2, left: 5 },
+              font: { size: 10, weight: '700' }
+            },
+            tooltip: { callbacks: { label: context => context.datasetIndex === 0 ? ` Total pick: ${fmt(context.raw)}` : ` Productivity: ${Number(context.raw).toFixed(1)} Pick/ชม.` } }
+          },
           scales: { y: { beginAtZero: true, position: 'left', ticks: { callback: value => fmt(value) }, title: { display: true, text: 'Total pick' } }, y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Pick/ชม.' } } }
         }
       });
