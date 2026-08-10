@@ -5,9 +5,9 @@
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
-// v7 sends only the compact work cube first, then lazy-loads item/time detail in daily chunks.
-// its pick_qty may have the retired Pack Size semantics or row-level format.
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v12-shift-date-ptt-fix';
+// ส่ง compact work cube ก่อน แล้ว lazy-load item/time detail เป็นรายวัน
+// pick_qty ต้องมาจาก BigQuery Master_Item + Master_Pack เท่านั้น
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v13-24h-shift-cutoff';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -526,9 +526,9 @@ function prepShifts() {
       const offset = i * 9;
       const dateIdx = S.rows[offset];
       const timeShift = Number(S.rows[offset + 1]) === 1 ? 'night' : 'morning';
-      const pickerIdx = Number(S.rows[offset + 3]) || 0;
-      const pickerId = String(S.pickers[pickerIdx] || '').trim();
-      const sh = getPickerRosterShift(pickerId, timeShift);
+      // กะของรายการหยิบต้องอิง normalized timestamp เท่านั้น
+      // Team A/B จาก roster ใช้สำหรับ Workforce Planning แต่ห้าม override ผลงานจริง
+      const sh = timeShift;
       S._sh[i] = {
         sd: S.dates[dateIdx], sh,
         sm: Number(S.rows[offset + 7]) || 0,

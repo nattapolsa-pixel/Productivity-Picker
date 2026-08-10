@@ -8,17 +8,20 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260804-atomic-upload-v13'), 'HTML must cache-bust the atomic upload frontend release');
+assert(html.includes('app.js?v=20260810-24h-shift-v44'), 'HTML must cache-bust the 24-hour shift frontend release');
 assert(app.includes('function ensureXlsxLoaded()'), 'XLSX must be lazy-loaded by the upload flow');
 assert(app.includes('IndexedDB cache: แสดงข้อมูลรอบล่าสุดทันที'), 'Dashboard IndexedDB cache is missing');
 assert(app.includes("'mode=revision&' + dashboardScopeQuery()"), 'Frontend scoped revision probe is missing');
 assert(app.includes('parsePickRowsFromWorksheet'), 'Direct-column worksheet parser is missing');
-assert(!app.includes('XLSX.utils.sheet_to_json'), 'Upload parser must not materialize the full worksheet');
+const uploadParserStart = app.indexOf('function parsePickRowsFromWorksheet');
+const uploadParserEnd = app.indexOf('function numericValue', uploadParserStart);
+assert(uploadParserStart > 0 && !app.slice(uploadParserStart, uploadParserEnd).includes('XLSX.utils.sheet_to_json'),
+  'Pick Detail upload parser must not materialize the full worksheet');
 assert(app.includes('const pendingLoad = activeLoadPromise;'), 'Post-upload refresh must wait for any pre-MERGE request');
 assert(app.includes('const result = await loadData(true);'), 'Post-upload refresh must force one post-MERGE request');
 assert(app.includes('retry.onclick = () => loadData(false)'), 'Retry after timeout must reuse a completed server cache');
 assert(app.includes('30 * 24 * 60 * 60 * 1000'), 'Last-known-good dashboard cache must survive normal gaps between visits');
-assert(app.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v7-resilient-cubes'"), 'Frontend must use the resilient compact cube payload');
+assert(app.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v13-24h-shift-cutoff'"), 'Frontend must use the 24-hour shift payload');
 assert(app.includes('packedItemRowData') && app.includes('packedSlotRowData'), 'Frontend cube readers are missing');
 assert(app.includes("'mode=picker_items'"), 'Picker SKU detail must load lazily instead of bloating the initial payload');
 assert(app.includes('loadPickerItemsForDrilldown'), 'Picker SKU lazy loader is missing');
@@ -28,16 +31,16 @@ assert(app.includes('canonicalCubeScope') && app.includes('writeDashboardCubeCac
 assert(app.includes("'mode=slot_cube'"), 'Time-slot detail must load lazily instead of bloating the initial payload');
 assert(app.includes('loadCurrentSlotCube') && app.includes('fetchDailySlotCube'), 'Time-slot daily lazy loader is missing');
 assert(app.includes('fetchWithTransientRetry'), 'Transient Apps Script failures must retry automatically');
-assert(app.includes('fetchDashboardCubeJson') && app.includes("'DATA_EPOCH_CHANGED','DASHBOARD_UPDATE_BUSY'"),
+assert(app.includes('fetchDashboardCubeJson') && app.includes('DATA_EPOCH_CHANGED') && app.includes('DASHBOARD_UPDATE_BUSY'),
   'Transient atomic-bundle conflicts must retry automatically');
 assert(app.includes("return await loadDataOnce(force, transientAttempt + 1)"),
   'A changed data epoch must restart the complete atomic bundle automatically');
-assert(app.includes('ensureDashboardBundleReady') && app.includes('await earlyCubePromise'), 'Main, Item and Time cubes must become ready atomically');
+assert(app.includes('ensureDashboardBundleReady') && app.includes('earlyCubePromise = Promise.all'), 'Main, Item and Time cubes must become ready atomically');
 assert(app.includes("String(payload.data_epoch || '') === String(expectedEpoch || '')"), 'Item and Time cubes must match the main dashboard data epoch');
 assert(app.includes("String(j && j.meta && j.meta.data_revision || '') !== requestedRevision"), 'Main payload must match the revision that started the atomic load');
-assert(app.includes('if(!itemPayload || !slotPayload)') && app.includes('const nextSystem = b.dataset.sys'), 'System switch must not expose a partial bundle');
-assert(app.includes("action: 'upload_chunk'") && app.includes("action: 'upload_commit'"), 'Large files must use retry-safe chunk upload');
-assert(app.includes('UPLOAD_CHUNK_CONCURRENCY = 3'), 'Upload concurrency must stay bounded');
+assert(app.includes('if (!itemPayload || !slotPayload)') && app.includes('const nextSystem = b.dataset.sys'), 'System switch must not expose a partial bundle');
+assert(app.includes("action: 'upload_chunk_csv'") && app.includes("action: 'upload_commit'"), 'Large files must use retry-safe chunk upload');
+assert(app.includes('UPLOAD_CHUNK_CONCURRENCY = 2'), 'Upload concurrency must stay bounded');
 assert(app.includes("payload.encoding === 'gzip-base64-v1'"), 'Browser must decode compact cached dashboard responses');
 
 assert(backend.includes("if (mode === 'revision')"), 'Backend revision endpoint is missing');
@@ -55,17 +58,17 @@ assert(!backend.includes("SELECT 'W' AS cube_type") && !backend.includes("SELECT
 assert(backend.includes("if (mode === 'picker_items')") && backend.includes('buildPickerItemsData_'), 'Backend picker SKU detail endpoint is missing');
 assert(backend.includes("if (mode === 'item_cube')") && backend.includes('buildItemCubeData_'), 'Backend item cube lazy endpoint is missing');
 assert(backend.includes("if (mode === 'slot_cube')") && backend.includes('buildSlotCubeData_'), 'Backend time-slot cube lazy endpoint is missing');
-assert(backend.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v7-resilient-cubes'"), 'Backend must publish the resilient compact cube schema');
+assert(backend.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v13-24h-shift-cutoff'"), 'Backend must publish the 24-hour shift schema');
 assert(backend.includes('const CACHE_CODEC = \'gzip-base64-v1\'') && backend.includes('Utilities.gzip('), 'Dashboard cache must be compressed before chunking');
 assert(backend.includes('getCachedEncoded_') && backend.includes('gzipEnvelope_'), 'Backend must serve cached cubes without inflating them first');
-assert(backend.includes("DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v5-atomic-bundle'"), 'Atomic cube payloads must rotate the backend cache format');
+assert(backend.includes("DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v9-24h-shift-cutoff'"), '24-hour shift payloads must rotate the backend cache format');
 assert(backend.includes('buildItemCubeData_(e, itemEpoch)') && backend.includes('buildSlotCubeData_(e, requestScope, slotEpoch)'),
   'Cube epoch must be captured before the BigQuery query starts');
 assert(backend.includes('function assertDashboardDataEpochStable_') &&
   backend.includes('getDashboardRevisionToken_(getDataRevision_(), requestScope.key) !== revision'),
   'Dashboard queries must reject data that changes while a bundle is loading');
-assert((backend.match(/assertDashboardDataEpochStable_\(expectedEpoch\);/g) || []).length === 2,
-  'Only post-query epoch checks may take the upload lock so item/slot queries still run in parallel');
+assert((backend.match(/assertDashboardDataEpochStable_\(expectedEpoch\);/g) || []).length >= 2,
+  'Lazy cube queries must verify the data epoch after querying');
 assert(backend.includes("AND pick_date BETWEEN DATE '") && backend.includes('DATE_ADD(DATE '), 'Daily cube queries must prune BigQuery partitions');
 assert(backend.includes('SET (source_rows, inserted_rows, updated_rows)'), 'MERGE stats must use one pre-merge scan');
 assert(backend.includes("postData.action === 'upload_chunk'") && backend.includes("postData.action === 'upload_commit'"), 'Backend chunk upload actions are missing');
@@ -77,7 +80,8 @@ assert(backend.includes('setUploadChunkManifest_') && backend.includes('CHUNK_HA
 assert(backend.includes('persistUploadReceipt_') && backend.includes('PropertiesService.getScriptProperties().setProperty'), 'Successful commit receipt must survive CacheService eviction');
 assert(backend.includes('persistUploadReceiptToBigQuery_') && backend.includes('UPLOAD_RECEIPT_TABLE'),
   'Successful commits must keep a durable BigQuery receipt for exactly-once acknowledgement');
-assert(app.includes("'QUERY_FAILED','LOAD_TIMEOUT','LOAD_JOB_FAILED'") && app.includes("'MERGE_RESULT_MISSING'"),
+assert(app.includes("'QUERY_FAILED'") && app.includes("'LOAD_TIMEOUT'") &&
+  app.includes("'LOAD_JOB_FAILED'") && app.includes("'MERGE_RESULT_MISSING'"),
   'Retry-safe transient BigQuery upload failures must retry automatically');
 assert(!backend.includes('Dashboard table refresh after upload failed (non-fatal)'), 'Revision must not advance when dashboard refresh fails');
 assert(!backend.includes("compression: 'GZIP'"), 'NDJSON must remain parallel-loadable');

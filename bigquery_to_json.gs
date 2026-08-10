@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v12-shift-date-ptt-fix';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v13-24h-shift-cutoff';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -37,9 +37,9 @@ const MASTER_CACHE_TTL = 21600; // Master/BigQuery payload cache 6 ชม. เ�
 const PICKER_ROSTER_CACHE_TTL = 300; // รายชื่อพนักงานอ่านจาก Google Sheet ใหม่อย่างน้อยทุก 5 นาที
 const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่างเดียวกับ revision เพื่อลด cache chunk เก่าค้าง
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
-const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_shift_date_v2';
-const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_shift_date_v2';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v8-shift-date-ptt-fix';
+const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_shift_date_v3';
+const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_shift_date_v3';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v9-24h-shift-cutoff';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -330,6 +330,13 @@ function dashboardShiftDateSql_(pickDateExpression, tminExpression) {
   return 'IF(' + t + ' < 420, DATE_SUB(' + d + ', INTERVAL 1 DAY), ' + d + ')';
 }
 
+// กะคลัง 24 ชม. ต้องตัดจาก normalized timestamp เท่านั้น
+// A = 07:00–18:59, B = 19:00–06:59; ห้ามใช้ Team roster มา override ผลงานจริง
+function dashboardShiftCodeSql_(tminExpression) {
+  const t = String(tminExpression || 'tmin');
+  return "IF(" + t + " >= 420 AND " + t + " < 1140, 'M', 'N')";
+}
+
 
 function dashboardExclusionSql_(scope, ownerExpression, itemExpression) {
   const items = scope && Array.isArray(scope.excludedItems) ? scope.excludedItems : [];
@@ -441,7 +448,7 @@ function buildItemCubeData_(e, dataEpoch) {
     'WITH base_picks AS (',
     '  SELECT',
     '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
-    '    ' + pickerRosterShiftCodeSql_('picker_id', 'tmin') + ' AS shift_code,',
+    '    ' + dashboardShiftCodeSql_('tmin') + ' AS shift_code,',
     "    COALESCE(location, zone, '??') AS location_key,",
     "    COALESCE(zone, '??') AS zone_key,",
     "    UPPER(COALESCE(owner, '-')) AS owner_key,",
@@ -513,7 +520,7 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
     'WITH base AS (',
     '  SELECT',
     '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
-    '    ' + pickerRosterShiftCodeSql_('picker_id', 'tmin') + ' AS shift_code,',
+    '    ' + dashboardShiftCodeSql_('tmin') + ' AS shift_code,',
     "    COALESCE(zone, '??') AS zone,",
     "    COALESCE(picker_id, '(none)') AS picker,",
     "    UPPER(COALESCE(owner, '-')) AS owner_key,",
@@ -584,7 +591,7 @@ function buildPickerItemsData_(e, requestScope) {
     'WITH base AS (',
     '  SELECT',
     '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
-    '    ' + pickerRosterShiftCodeSql_('picker_id', 'tmin') + ' AS shift_code,',
+    '    ' + dashboardShiftCodeSql_('tmin') + ' AS shift_code,',
     "    COALESCE(zone, '??') AS zone,",
     "    UPPER(COALESCE(owner, '-')) AS owner_key,",
     "    COALESCE(CAST(sku AS STRING), '(none)') AS sku,",
@@ -2681,7 +2688,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
     '  SELECT',
     '    UPPER(category) AS category,',
     '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
-    '    ' + pickerRosterShiftCodeSql_('picker_id', 'tmin') + ' AS shift_code,',
+    '    ' + dashboardShiftCodeSql_('tmin') + ' AS shift_code,',
     '    COALESCE(zone, \'??\') AS zone,',
     '    COALESCE(picker_id, \'(none)\') AS picker,',
     "    UPPER(COALESCE(owner, '-')) AS owner_key,",
@@ -2951,6 +2958,30 @@ function testRun() {
     }
     pass('CSV parser', '11 คอลัมน์และรหัส 000123 ถูกต้อง');
   } catch (err) { fail('CSV parser', err); throw err; }
+
+  try {
+    const shiftCases = bqQueryAll_([
+      'WITH cases AS (',
+      "  SELECT 'PTT' AS category, DATETIME '2026-08-08 13:59:00' AS raw_ts, DATE '2026-08-07' AS expected_date, 'N' AS expected_shift UNION ALL",
+      "  SELECT 'PTT', DATETIME '2026-08-08 14:00:00', DATE '2026-08-08', 'M' UNION ALL",
+      "  SELECT 'PTT', DATETIME '2026-08-08 07:00:00', DATE '2026-08-07', 'N' UNION ALL",
+      "  SELECT 'BPS', DATETIME '2026-08-08 06:59:00', DATE '2026-08-07', 'N' UNION ALL",
+      "  SELECT 'BPS', DATETIME '2026-08-08 07:00:00', DATE '2026-08-08', 'M' UNION ALL",
+      "  SELECT 'BPS', DATETIME '2026-08-08 18:59:00', DATE '2026-08-08', 'M' UNION ALL",
+      "  SELECT 'BPS', DATETIME '2026-08-08 19:00:00', DATE '2026-08-08', 'N'",
+      '), normalized AS (',
+      "  SELECT *, IF(category = 'PTT', DATETIME_SUB(raw_ts, INTERVAL 7 HOUR), raw_ts) AS ts FROM cases",
+      ')',
+      'SELECT COUNTIF(',
+      '  IF(EXTRACT(HOUR FROM ts) < 7, DATE_SUB(DATE(ts), INTERVAL 1 DAY), DATE(ts)) != expected_date',
+      "  OR IF(EXTRACT(HOUR FROM ts) >= 7 AND EXTRACT(HOUR FROM ts) < 19, 'M', 'N') != expected_shift",
+      ') AS failed_cases FROM normalized'
+    ].join('\n'), 60000);
+    if (!shiftCases.length || Number(shiftCases[0][0] || 0) !== 0) {
+      throw new Error('PTT/BPS normalization หรือขอบเขตวันกะ 07:00 ไม่ถูกต้อง');
+    }
+    pass('24-hour shift boundaries', 'PTT -7 ชม., BPS เวลาเดิม, A 07:00–18:59, B 19:00–06:59');
+  } catch (err) { fail('24-hour shift boundaries', err); throw err; }
 
   try {
     const schemaCheck = bqQueryAll_([

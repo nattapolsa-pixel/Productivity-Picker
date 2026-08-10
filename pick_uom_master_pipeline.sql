@@ -165,7 +165,7 @@ SELECT
   SUBSTR(d.location, 1, 2) AS zone,
   d.pick_ts_source,
   d.pick_ts,
-  -- Existing business rule is preserved exactly: PTT local time = source - 7 h.
+  -- Normalized timestamp: PTT = raw - 7 hours; BPS = raw unchanged.
   CASE
     WHEN UPPER(d.category) = 'PTT' THEN DATETIME_SUB(d.pick_ts, INTERVAL 7 HOUR)
     ELSE d.pick_ts
@@ -174,6 +174,41 @@ FROM parsed AS d
 LEFT JOIN `productivity-pick.pick_analytics.dim_pick_master_current` AS m
   ON UPPER(TRIM(d.owner)) = m.owner
  AND UPPER(TRIM(d.sku)) = m.item;
+
+-- All downstream dates/shifts derive from the same normalized timestamp.
+-- Warehouse day starts at 07:00: 00:00–06:59 belongs to the previous shift date.
+CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_pick_enriched` AS
+SELECT
+  c.*,
+  DATE(c.pick_ts_local) AS pick_date,
+  IF(
+    EXTRACT(HOUR FROM c.pick_ts_local) < 7,
+    DATE_SUB(DATE(c.pick_ts_local), INTERVAL 1 DAY),
+    DATE(c.pick_ts_local)
+  ) AS shift_date,
+  IF(
+    EXTRACT(HOUR FROM c.pick_ts_local) >= 7
+      AND EXTRACT(HOUR FROM c.pick_ts_local) < 19,
+    'M',
+    'N'
+  ) AS shift_code,
+  EXTRACT(HOUR FROM c.pick_ts_local) AS pick_hour,
+  FORMAT('%02d:00-%02d:59',
+    EXTRACT(HOUR FROM c.pick_ts_local),
+    EXTRACT(HOUR FROM c.pick_ts_local)
+  ) AS time_slot,
+  DATE_TRUNC(
+    IF(EXTRACT(HOUR FROM c.pick_ts_local) < 7,
+      DATE_SUB(DATE(c.pick_ts_local), INTERVAL 1 DAY), DATE(c.pick_ts_local)),
+    WEEK(MONDAY)
+  ) AS week_start,
+  DATE_TRUNC(
+    IF(EXTRACT(HOUR FROM c.pick_ts_local) < 7,
+      DATE_SUB(DATE(c.pick_ts_local), INTERVAL 1 DAY), DATE(c.pick_ts_local)),
+    MONTH
+  ) AS month_start
+FROM `productivity-pick.pick_analytics.v_pick_clean` AS c
+WHERE c.pick_ts_local IS NOT NULL;
 
 -- -----------------------------------------------------------------------------
 -- 3) POST-CUTOVER — read only
