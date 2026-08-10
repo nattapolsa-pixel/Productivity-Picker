@@ -56,14 +56,17 @@ const HISTORICAL_V1 = Object.freeze({
   total: 17475482,
   sourceRows: 15699,
   activeDays: 184,
+  productivity: 137.6,
+  productiveRows: 13486,
+  excludedProductivityRows: 2213,
   months: Object.freeze([
-    { month: '2026-01', total: 2490188, rows: 2279, days: 25 },
-    { month: '2026-02', total: 2657156, rows: 2117, days: 24 },
-    { month: '2026-03', total: 2768697, rows: 2548, days: 28 },
-    { month: '2026-04', total: 2732309, rows: 2298, days: 28 },
-    { month: '2026-05', total: 2579450, rows: 2633, days: 30 },
-    { month: '2026-06', total: 2552279, rows: 2388, days: 30 },
-    { month: '2026-07', total: 1695403, rows: 1436, days: 19 }
+    { month: '2026-01', total: 2490188, rows: 2279, days: 25, productivity: 133.3, productiveRows: 1754 },
+    { month: '2026-02', total: 2657156, rows: 2117, days: 24, productivity: 141.5, productiveRows: 1732 },
+    { month: '2026-03', total: 2768697, rows: 2548, days: 28, productivity: 131.7, productiveRows: 2291 },
+    { month: '2026-04', total: 2732309, rows: 2298, days: 28, productivity: 134.5, productiveRows: 2046 },
+    { month: '2026-05', total: 2579450, rows: 2633, days: 30, productivity: 135.2, productiveRows: 2279 },
+    { month: '2026-06', total: 2552279, rows: 2388, days: 30, productivity: 143.7, productiveRows: 2094 },
+    { month: '2026-07', total: 1695403, rows: 1436, days: 19, productivity: 147.7, productiveRows: 1290 }
   ])
 });
 const SHIFT_LABEL = { morning: '🅰️ กะ A', night: '🅱️ กะ B', '-': '-' };
@@ -3801,6 +3804,7 @@ const builders = {
       .format(new Date(value + '-01T00:00:00'));
     const cards = [
       ['ยอดย้อนหลังรวม', fmt(data.total), 'Total pick จาก V1'],
+      ['Productivity V1', `${data.productivity.toFixed(1)} Pick/ชม.`, `เฉลี่ย AF > 0 จำนวน ${fmt(data.productiveRows)} แถว`],
       ['ช่วงข้อมูล', `${data.startDate} – ${data.endDate}`, `${data.activeDays} วันที่มีข้อมูล`],
       ['แถวต้นทาง', fmt(data.sourceRows), 'รวมก่อนตัดเข้า V2'],
       ['เริ่มใช้ V2', data.v2StartDate, 'ไม่รวมซ้ำกับข้อมูลย้อนหลัง']
@@ -3810,28 +3814,31 @@ const builders = {
         <div style="font-size:24px;font-weight:800;color:#0f172a;margin-top:5px">${value}</div>
         <div style="font-size:11px;color:#94a3b8;margin-top:4px">${note}</div>
       </div>`).join('');
+    const maxProductivity = Math.max(...data.months.map(row => row.productivity), 1);
     const bars = data.months.map(row => `
       <div style="display:grid;grid-template-columns:minmax(110px,160px) 1fr minmax(90px,130px);gap:12px;align-items:center;margin:12px 0">
         <div style="font-size:12px;font-weight:600;color:#334155">${monthLabel(row.month)}</div>
-        <div style="height:24px;background:#eef2ff;border-radius:8px;overflow:hidden"><div style="height:100%;width:${Math.max(2, row.total / maxTotal * 100)}%;background:linear-gradient(90deg,#818cf8,#4f46e5);border-radius:8px"></div></div>
-        <div style="font-size:13px;font-weight:800;color:#3730a3;text-align:right">${fmt(row.total)}</div>
+        <div><div style="height:15px;background:#eef2ff;border-radius:6px;overflow:hidden"><div style="height:100%;width:${Math.max(2, row.total / maxTotal * 100)}%;background:linear-gradient(90deg,#818cf8,#4f46e5);border-radius:6px"></div></div>
+          <div style="height:6px;background:#ecfeff;border-radius:4px;overflow:hidden;margin-top:4px"><div style="height:100%;width:${Math.max(2, row.productivity / maxProductivity * 100)}%;background:#0891b2;border-radius:4px"></div></div></div>
+        <div style="text-align:right"><div style="font-size:13px;font-weight:800;color:#3730a3">${fmt(row.total)}</div><div style="font-size:11px;font-weight:700;color:#0e7490">${row.productivity.toFixed(1)} Pick/ชม.</div></div>
       </div>`).join('');
     const rows = data.months.map((row, index) => `
-      <tr><td>${index + 1}</td><td>${monthLabel(row.month)}</td><td style="text-align:right;font-weight:800;color:#3730a3">${fmt(row.total)}</td><td style="text-align:right">${fmt(row.rows)}</td><td style="text-align:right">${fmt(row.days)}</td></tr>`).join('');
+      <tr><td>${index + 1}</td><td>${monthLabel(row.month)}</td><td style="text-align:right;font-weight:800;color:#3730a3">${fmt(row.total)}</td><td style="text-align:right;font-weight:800;color:#0e7490">${row.productivity.toFixed(1)}</td><td style="text-align:right">${fmt(row.productiveRows)}</td><td style="text-align:right">${fmt(row.days)}</td></tr>`).join('');
     host.innerHTML = `
       <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:14px;padding:14px 16px;color:#92400e;font-size:12px;line-height:1.7;margin-bottom:16px">
         <b>ข้อมูลอ้างอิงจาก V1 เท่านั้น</b> — ใช้เฉพาะยอดตัวเลขจาก ${data.source} และตัดข้อมูลที่ ${data.endDate} ก่อน V2 เริ่มทำงาน
-        ยอดนี้ไม่ถูกนำไปคำนวณ Pick Units/UOM, Productivity, OT, พนักงาน, สินค้า หรือ Zone ของ V2
+        Productivity ย้อนหลังใช้สูตรเดิมของ V1 คือค่าเฉลี่ย Column AF เฉพาะแถวที่ AF &gt; 0 (${fmt(data.excludedProductivityRows)} แถวที่ AF ไม่มากกว่า 0 ถูกตัดออก)
+        และไม่ถูกนำไปปนกับ Pick Units/UOM, Productivity, OT, พนักงาน, สินค้า หรือ Zone ของ V2
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:16px">${cards}</div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr));gap:16px">
         <div style="background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;box-shadow:0 8px 22px rgba(15,23,42,.05)">
-          <h3 style="margin:0 0 6px;color:#0f172a">ยอด Total pick รายเดือน</h3>
-          <div style="font-size:11px;color:#64748b;margin-bottom:18px">กรกฎาคมแสดงเฉพาะวันที่ 1–19 เพื่อไม่ให้ทับกับ V2</div>${bars}
+          <h3 style="margin:0 0 6px;color:#0f172a">ยอดและ Productivity รายเดือน</h3>
+          <div style="font-size:11px;color:#64748b;margin-bottom:18px"><span style="color:#4f46e5">■ Total pick</span> · <span style="color:#0891b2">■ Productivity V1</span> · กรกฎาคมแสดงเฉพาะวันที่ 1–19</div>${bars}
         </div>
         <div style="background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;box-shadow:0 8px 22px rgba(15,23,42,.05);overflow:auto">
           <h3 style="margin:0 0 14px;color:#0f172a">ตารางยอดย้อนหลัง</h3>
-          <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th>#</th><th>เดือน</th><th style="text-align:right">Total pick</th><th style="text-align:right">แถว</th><th style="text-align:right">วัน</th></tr></thead><tbody>${rows}</tbody></table>
+          <table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th>#</th><th>เดือน</th><th style="text-align:right">Total pick</th><th style="text-align:right">Pick/ชม.</th><th style="text-align:right">แถวคำนวณ</th><th style="text-align:right">วัน</th></tr></thead><tbody>${rows}</tbody></table>
         </div>
       </div>`;
   },
