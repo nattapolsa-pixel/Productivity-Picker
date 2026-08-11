@@ -4299,10 +4299,16 @@ const builders = {
       if (t < .35) e.style.color = '#334155';
       const mainTxt = isPcs ? `${fmt(x.pcs)} ชิ้น (${fmt(x.qty)} หน่วย)` : `${fmt(x.qty)} หน่วย (${fmt(x.pcs)} ชิ้น)`;
       const locations = masterLocationsByZone[x.zone] || x.locations || [];
+      const zoneProd = (A.zone_prod_map && A.zone_prod_map[x.zone]) || null;
+      const productivity = zoneProd ? Number(isPcs ? zoneProd.avg_pcs_prod : zoneProd.avg_prod) : 0;
+      const productivityText = productivity > 0
+        ? `${fmt1(productivity)} ${isPcs ? 'ชิ้น/ชม.' : 'หน่วยหยิบ/ชม.'}`
+        : '-';
       e.innerHTML =
         `<div class="z">${escapeZoneHtml(x.zone)}</div>` +
         `<div class="zone-tags"><span>${escapeZoneHtml(x.typePick || '-')}</span><span>${escapeZoneHtml(x.owner || '-')}</span></div>` +
         `<div class="q">${escapeZoneHtml(mainTxt)}</div>` +
+        `<div class="zone-card-productivity">Productivity: <strong>${escapeZoneHtml(productivityText)}</strong></div>` +
         `<div class="p">Location: ${escapeZoneHtml(locations.join(', ') || '-')} · ${fmt(x.pickers)} คน</div>`;
       heat.appendChild(e);
     });

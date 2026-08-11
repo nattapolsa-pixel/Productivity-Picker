@@ -8,7 +8,9 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260812-estimated-xlsx-loader-v58'), 'HTML must cache-bust the ESTIMATED Excel loader release');
+assert(html.includes('app.js?v=20260812-zone-productivity-card-v59'), 'HTML must cache-bust the Zone Productivity card release');
+assert(app.includes('class="zone-card-productivity"') && app.includes('A.zone_prod_map && A.zone_prod_map[x.zone]'),
+  'Zone heatmap cards must show Productivity from the shared Zone Productivity calculation');
 assert(app.includes('window._simHandleOrderFile = async function (e)') && app.includes('await window.ensureXlsxLoaded();') &&
   app.includes('window.ensureXlsxLoaded = ensureXlsxLoaded;'),
   'Workforce Planning must load the Excel parser before reading ESTIMATED xlsx files');
