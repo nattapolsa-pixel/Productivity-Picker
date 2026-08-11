@@ -2395,10 +2395,12 @@ async function loadCurrentItemCube(force, system = sys) {
   const timeout = setTimeout(() => controller.abort(), 60000);
   const task = (async () => {
     try {
-      await loadItemMaster(false);
+      // Master และ Item Cube ไม่จำเป็นต้องรอต่อคิวกัน เริ่มพร้อมกันเพื่อลดเวลาเปิดหน้าสินค้า
+      const masterPromise = loadItemMaster(false);
       if (!force) {
         const cached = await readDashboardCubeCache('item', requestKey);
         if (isValidItemCubePayload(cached, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)) {
+          await masterPromise;
           itemCubePayloadCache.set(requestKey, cached);
           itemCubeLoadState.set(requestKey, { status: 'done' });
           return cached;
@@ -2414,10 +2416,13 @@ async function loadCurrentItemCube(force, system = sys) {
         dashboardScopeQuery(),
         't=' + Date.now()
       ].join('&');
-      const payload = await fetchDashboardCubeJson(
-        DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
-        { cache: 'no-store', signal: controller.signal }
-      );
+      const [payload] = await Promise.all([
+        fetchDashboardCubeJson(
+          DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
+          { cache: 'no-store', signal: controller.signal }
+        ),
+        masterPromise
+      ]);
       if (!isValidItemCubePayload(payload, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)) {
         throw dashboardTransientError('ข้อมูลสินค้าเปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
       }
@@ -6114,13 +6119,11 @@ async function ensureDashboardBundleReady(force, totalRows, source) {
   dashboardBundleLoading = false;
   // แสดง Main Dashboard ทันที ไม่รอ Item/Time cube เพื่อไม่ย้อนกลับไปใช้ข้อมูลรอบเก่า
   finalizeDashboardBundle(totalRows, source);
-  setTimeout(() => {
-    void Promise.all([
-      loadItemMaster(force),
-      loadCurrentItemCube(force, sys),
-      loadCurrentSlotCube(force, sys)
-    ]);
-  }, 30);
+  void Promise.all([
+    loadItemMaster(force),
+    loadCurrentItemCube(force, sys),
+    loadCurrentSlotCube(force, sys)
+  ]);
   const otherSystem = sys === 'PTT' ? 'BPS' : 'PTT';
   setTimeout(() => {
     void Promise.all([loadCurrentItemCube(false, otherSystem), loadCurrentSlotCube(false, otherSystem)]);
