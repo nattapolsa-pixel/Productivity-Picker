@@ -5487,7 +5487,7 @@ const builders = {
       showPlannerActionPopup('loading', 'กำลังนำเข้าไฟล์ ESTIMATED', file.name);
       if (isXlsx) {
         try {
-          await ensureXlsxLibrary();
+          await window.ensureXlsxLoaded();
         } catch (err) {
           plannerSetButtonBusy(uploadBtn, false);
           e.target.value = '';
@@ -6469,6 +6469,8 @@ bootstrapDashboard();
     });
     return xlsxLoadPromise;
   }
+  // Workforce Planning uses the same lazy Excel loader as the Pick Detail uploader.
+  window.ensureXlsxLoaded = ensureXlsxLoaded;
 
   const openModal = () => {
     modal.style.display = 'flex';
