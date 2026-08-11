@@ -6138,8 +6138,9 @@ async function ensureDashboardBundleReady(force, totalRows, source) {
   // แสดง Main Dashboard ทันที ไม่รอ Item/Time cube เพื่อไม่ย้อนกลับไปใช้ข้อมูลรอบเก่า
   finalizeDashboardBundle(totalRows, source);
   void Promise.all([
-    loadItemMaster(force),
-    loadCurrentItemCube(force, sys),
+    loadItemMaster(false),
+    // Keep the exclusion-independent Item Cube visible during background sync.
+    loadCurrentItemCube(false, sys),
     loadCurrentSlotCube(force, sys)
   ]);
   const otherSystem = sys === 'PTT' ? 'BPS' : 'PTT';
@@ -6289,8 +6290,9 @@ async function loadDataOnce(force, transientAttempt = 0) {
           dto = previous.dto && previous.dto >= DMIN && previous.dto <= DMAX ? previous.dto : DMAX;
           showLoading(true, 'กำลังดึงข้อมูลพนักงาน สินค้า และช่วงเวลาพร้อมกัน…');
           earlyCubePromise = Promise.all([
-            loadItemMaster(force),
-            loadCurrentItemCube(force, sys),
+            loadItemMaster(false),
+            // Item exclusions are applied locally, so a ready Item Cube must not reload here.
+            loadCurrentItemCube(false, sys),
             loadCurrentSlotCube(force, sys)
           ]);
           // ตัว loader แปลง error เป็น null อยู่แล้ว; catch นี้ป้องกัน unhandled rejection หาก browser ปิดคำขอ

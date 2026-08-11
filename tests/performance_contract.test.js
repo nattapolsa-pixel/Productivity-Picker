@@ -8,7 +8,8 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260811-instant-item-exclusion-v54'), 'HTML must cache-bust the instant item exclusion release');
+assert(html.includes('app.js?v=20260811-nonblocking-item-exclusion-v55'), 'HTML must cache-bust the non-blocking item exclusion release');
+assert(!app.includes('loadCurrentItemCube(force, sys)'), 'Background refresh must not force-reload the exclusion-independent Item Cube');
 assert(html.includes('data-page="history"') && html.includes('id="historyPage"'), 'Historical V1 page must be reachable from the dashboard');
 assert(app.includes("endDate: '2026-07-19'") && app.includes("v2StartDate: '2026-07-20'"),
   'Historical V1 totals must stop before the first reliable V2 shift date');
@@ -72,8 +73,8 @@ assert(app.includes('render();\n  // รวมหลายคลิกติด�
   'Item exclusion must render locally before background synchronization');
 assert(app.includes('const masterPromise = loadItemMaster(false);') && app.includes('masterPromise\n      ]'),
   'Item Master and Item Cube must load concurrently');
-assert(app.includes('void Promise.all([\n    loadItemMaster(force),\n    loadCurrentItemCube(force, sys)'),
-  'Current-system item preload must start immediately after the main dashboard is ready');
+assert(app.includes('void Promise.all([\n    loadItemMaster(false),\n    // Keep the exclusion-independent Item Cube visible during background sync.\n    loadCurrentItemCube(false, sys)'),
+  'Current-system item preload must reuse the ready exclusion-independent cube');
 assert(app.includes('canonicalCubeScope') && app.includes('writeDashboardCubeCache'), 'Full-range item/time cubes must persist across reloads');
 assert(app.includes("'mode=slot_cube'"), 'Time-slot detail must load lazily instead of bloating the initial payload');
 assert(app.includes('loadCurrentSlotCube') && app.includes('fetchDailySlotCube'), 'Time-slot daily lazy loader is missing');
