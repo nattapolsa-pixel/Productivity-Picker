@@ -8,8 +8,10 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260811-nonblocking-item-exclusion-v55'), 'HTML must cache-bust the non-blocking item exclusion release');
+assert(html.includes('app.js?v=20260811-silent-item-exclusion-v56'), 'HTML must cache-bust the silent item exclusion release');
 assert(!app.includes('loadCurrentItemCube(force, sys)'), 'Background refresh must not force-reload the exclusion-independent Item Cube');
+assert(app.includes('void loadData(true, { silent: true })'), 'Item exclusions must sync without a full-screen loader');
+assert(app.includes('if (!silent) showLoading(true'), 'Silent refresh must keep the current dashboard interactive');
 assert(html.includes('data-page="history"') && html.includes('id="historyPage"'), 'Historical V1 page must be reachable from the dashboard');
 assert(app.includes("endDate: '2026-07-19'") && app.includes("v2StartDate: '2026-07-20'"),
   'Historical V1 totals must stop before the first reliable V2 shift date');
@@ -81,7 +83,7 @@ assert(app.includes('loadCurrentSlotCube') && app.includes('fetchDailySlotCube')
 assert(app.includes('fetchWithTransientRetry'), 'Transient Apps Script failures must retry automatically');
 assert(app.includes('fetchDashboardCubeJson') && app.includes('DATA_EPOCH_CHANGED') && app.includes('DASHBOARD_UPDATE_BUSY'),
   'Transient atomic-bundle conflicts must retry automatically');
-assert(app.includes("return await loadDataOnce(force, transientAttempt + 1)"),
+assert(app.includes("return await loadDataOnce(force, transientAttempt + 1, { silent })"),
   'A changed data epoch must restart the complete atomic bundle automatically');
 assert(app.includes('ensureDashboardBundleReady') && app.includes('earlyCubePromise = Promise.all'), 'Main, Item and Time cubes must become ready atomically');
 assert(app.includes("String(payload.data_epoch || '') === String(expectedEpoch || '')"), 'Item and Time cubes must match the main dashboard data epoch');

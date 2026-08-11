@@ -5606,7 +5606,7 @@ function scheduleExclusionBackgroundRefresh() {
   if (exclusionRefreshTimer) clearTimeout(exclusionRefreshTimer);
   exclusionRefreshTimer = setTimeout(() => {
     exclusionRefreshTimer = null;
-    void loadData(true);
+    void loadData(true, { silent: true });
   }, 700);
 }
 
@@ -6219,18 +6219,19 @@ async function fetchRevisionOrDashboard(signal) {
 }
 
 // ===== โหลดข้อมูล: ดึงตรงจาก BigQuery และกันคำขอซ้อน =====
-function loadData(force) {
+function loadData(force, options = {}) {
+  const silent = Boolean(options && options.silent);
   if (activeLoadPromise) {
     if (!force || activeLoadIsFresh) return activeLoadPromise;
     if (!queuedFreshPromise) {
       queuedFreshPromise = activeLoadPromise
-        .then(() => loadData(true))
+        .then(() => loadData(true, { silent }))
         .finally(() => { queuedFreshPromise = null; });
     }
     return queuedFreshPromise;
   }
   activeLoadIsFresh = Boolean(force);
-  const task = loadDataOnce(Boolean(force));
+  const task = loadDataOnce(Boolean(force), 0, { silent });
   let wrapped;
   wrapped = task.finally(() => {
     if (activeLoadPromise === wrapped) {
@@ -6242,7 +6243,8 @@ function loadData(force) {
   return wrapped;
 }
 
-async function loadDataOnce(force, transientAttempt = 0) {
+async function loadDataOnce(force, transientAttempt = 0, options = {}) {
+  const silent = Boolean(options && options.silent);
   document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
   const previous = { sys, shiftF, dfrom, dto, datePresetMode, trendMode };
   const hadLiveData = hasLiveData;
@@ -6254,7 +6256,7 @@ async function loadDataOnce(force, transientAttempt = 0) {
 
   if (!hadLiveData) {
     showDataState('loading', 'กำลังเชื่อมต่อ BigQuery กรุณารอสักครู่');
-    showLoading(true, 'กำลังดึงข้อมูลสด 100% ตรงจาก BigQuery…');
+    if (!silent) showLoading(true, 'กำลังดึงข้อมูลสด 100% ตรงจาก BigQuery…');
   }
   setUpdating(true);
 
@@ -6276,7 +6278,7 @@ async function loadDataOnce(force, transientAttempt = 0) {
         if (!force && hadLiveData && probe.revision === dashboardCacheRevision) {
           const currentRows = dashboardPayloadRowCount(DATA);
           if (!hasCurrentItemCube() || !hasCurrentSlotCube()) {
-            showLoading(true, 'กำลังเตรียมข้อมูลพนักงาน สินค้า และช่วงเวลาให้พร้อมกัน…');
+            if (!silent) showLoading(true, 'กำลังเตรียมข้อมูลพนักงาน สินค้า และช่วงเวลาให้พร้อมกัน…');
           }
           await ensureDashboardBundleReady(false, currentRows, 'live');
           return { ok: true, rows: currentRows, unchanged: true };
@@ -6288,7 +6290,7 @@ async function loadDataOnce(force, transientAttempt = 0) {
           DMAX = probe.maxDate;
           dfrom = previous.dfrom && previous.dfrom >= DMIN && previous.dfrom <= DMAX ? previous.dfrom : DMIN;
           dto = previous.dto && previous.dto >= DMIN && previous.dto <= DMAX ? previous.dto : DMAX;
-          showLoading(true, 'กำลังดึงข้อมูลพนักงาน สินค้า และช่วงเวลาพร้อมกัน…');
+          if (!silent) showLoading(true, 'กำลังดึงข้อมูลพนักงาน สินค้า และช่วงเวลาพร้อมกัน…');
           earlyCubePromise = Promise.all([
             loadItemMaster(false),
             // Item exclusions are applied locally, so a ready Item Cube must not reload here.
@@ -6338,7 +6340,7 @@ async function loadDataOnce(force, transientAttempt = 0) {
     }
 
     applyDashboardPayload(j, previous, 'live', { deferReady: true });
-    showLoading(true, 'กำลังเตรียมข้อมูลพนักงาน สินค้า และช่วงเวลาให้พร้อมกัน…');
+    if (!silent) showLoading(true, 'กำลังเตรียมข้อมูลพนักงาน สินค้า และช่วงเวลาให้พร้อมกัน…');
     if (earlyCubePromise) void earlyCubePromise.catch(() => null);
     await ensureDashboardBundleReady(force, totalRows, 'live');
     await writeDashboardResponseCache(body, j);
@@ -6355,7 +6357,7 @@ async function loadDataOnce(force, transientAttempt = 0) {
         shiftF = previous.shiftF;
       }
       await waitForRetry(1200 * (transientAttempt + 1));
-      return await loadDataOnce(force, transientAttempt + 1);
+      return await loadDataOnce(force, transientAttempt + 1, { silent });
     }
     const message = err && err.name === 'AbortError'
       ? 'BigQuery ใช้เวลาตอบกลับเกิน 3 นาที กรุณากดลองอีกครั้ง'
