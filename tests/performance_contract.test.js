@@ -8,7 +8,12 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260812-zone-productivity-card-v60'), 'HTML must cache-bust the Zone Productivity card release');
+assert(html.includes('app.js?v=20260812-shared-exclusions-v61'), 'HTML must cache-bust the shared exclusion release');
+assert(app.includes("action: 'set_dashboard_exclusions'") && app.includes("mode=dashboard_exclusions") &&
+  app.includes('startSharedExclusionsPolling()'), 'All browsers must use and poll the same shared exclusion state');
+assert(backend.includes("SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1'") &&
+  backend.includes("postData.action === 'set_dashboard_exclusions'") && backend.includes("mode === 'dashboard_exclusions'"),
+  'Apps Script must persist shared item and Zone exclusions');
 assert(app.includes('class="zone-card-productivity"') && app.includes('A.zone_prod_map && A.zone_prod_map[x.zone]') &&
   app.includes('fmtDecimal1(productivity)'),
   'Zone heatmap cards must show Productivity from the shared Zone Productivity calculation');

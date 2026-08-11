@@ -106,6 +106,10 @@ let excludedSkuRevision = 0;
 let dashboardCacheRevision = '';
 let activeZoneDetailCode = '';
 let exclusionRefreshTimer = null;
+let sharedExclusionsUpdatedAt = '';
+let sharedExclusionsPollTimer = null;
+let sharedExclusionsSyncPromise = null;
+let lastSharedExclusionsSavedJson = '';
 const DASHBOARD_TIMEOUT_MS = 180000;
 const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_items_v2';
 const LEGACY_EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
@@ -359,6 +363,96 @@ function saveExcludedZonesToStorage() {
   } catch (_) { }
 }
 
+function sharedExclusionSnapshot() {
+  return {
+    items: currentExcludedItemList(),
+    zones: [...excludedZones].map(z => String(z).trim().toUpperCase()).filter(Boolean).sort()
+  };
+}
+
+function applySharedExclusions(payload, refreshDashboard = true) {
+  if (!payload || payload.status !== 'success' || !Array.isArray(payload.items) || !Array.isArray(payload.zones)) return false;
+  const before = JSON.stringify(sharedExclusionSnapshot());
+  excludedSkus = new Set(payload.items.map(x => itemCompositeKey(x && x.owner, x && (x.item == null ? x.sku : x.item))).filter(Boolean));
+  excludedZones = new Set(payload.zones.map(z => String(z || '').trim().toUpperCase()).filter(Boolean));
+  sharedExclusionsUpdatedAt = String(payload.updated_at || '');
+  excludedSkusSavedAt = sharedExclusionsUpdatedAt || null;
+  excludedZonesSavedAt = sharedExclusionsUpdatedAt || null;
+  try {
+    localStorage.setItem(EXCLUDED_SKUS_STORAGE_KEY, JSON.stringify({ version: 2, updatedAt: sharedExclusionsUpdatedAt, items: currentExcludedItemList() }));
+    localStorage.setItem(EXCLUDED_ZONES_STORAGE_KEY, JSON.stringify({ version: 1, updatedAt: sharedExclusionsUpdatedAt, zones: [...excludedZones].sort() }));
+  } catch (_) { }
+  lastSharedExclusionsSavedJson = JSON.stringify(sharedExclusionSnapshot());
+  const changed = before !== JSON.stringify(sharedExclusionSnapshot());
+  if (changed) {
+    invalidateAggregationCache();
+    updateExcludedZonesBar();
+    if (hasLiveData) render();
+    if (refreshDashboard && hasLiveData) void loadData(true, { silent: true });
+  } else {
+    renderExcludedBadges();
+    updateExcludedZonesBar();
+  }
+  return changed;
+}
+
+async function fetchSharedExclusions(refreshDashboard = true) {
+  if (!DATA_URL) return false;
+  const url = DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + 'mode=dashboard_exclusions&t=' + Date.now();
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) throw new Error('HTTP ' + response.status);
+  const payload = await response.json();
+  if (payload && payload.status === 'success' && payload.initialized === false) {
+    const local = sharedExclusionSnapshot();
+    if (local.items.length || local.zones.length) return saveSharedExclusions();
+  }
+  return applySharedExclusions(payload, refreshDashboard);
+}
+
+async function saveSharedExclusions() {
+  if (!DATA_URL) return false;
+  if (sharedExclusionsSyncPromise) {
+    await sharedExclusionsSyncPromise;
+    if (JSON.stringify(sharedExclusionSnapshot()) !== lastSharedExclusionsSavedJson) return saveSharedExclusions();
+    return true;
+  }
+  const snapshot = sharedExclusionSnapshot();
+  const snapshotJson = JSON.stringify(snapshot);
+  if (snapshotJson === lastSharedExclusionsSavedJson && sharedExclusionsUpdatedAt) return true;
+  const syncPromise = (async () => {
+    const response = await fetch(DATA_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'set_dashboard_exclusions', items: snapshot.items, zones: snapshot.zones })
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const payload = await response.json();
+    if (!payload || payload.status !== 'success') throw new Error(String(payload && (payload.message || payload.code) || 'บันทึกรายการส่วนกลางไม่สำเร็จ'));
+    if (JSON.stringify(sharedExclusionSnapshot()) === snapshotJson) {
+      applySharedExclusions(payload, false);
+    } else {
+      lastSharedExclusionsSavedJson = snapshotJson;
+      sharedExclusionsUpdatedAt = String(payload.updated_at || '');
+    }
+    return true;
+  })();
+  sharedExclusionsSyncPromise = syncPromise;
+  try {
+    await syncPromise;
+  } finally {
+    if (sharedExclusionsSyncPromise === syncPromise) sharedExclusionsSyncPromise = null;
+  }
+  if (JSON.stringify(sharedExclusionSnapshot()) !== lastSharedExclusionsSavedJson) return saveSharedExclusions();
+  return true;
+}
+
+function startSharedExclusionsPolling() {
+  if (sharedExclusionsPollTimer) clearInterval(sharedExclusionsPollTimer);
+  sharedExclusionsPollTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && !sharedExclusionsSyncPromise) void fetchSharedExclusions(true).catch(() => null);
+  }, 15000);
+}
+
 function toggleZoneExclusion(zoneCode) {
   const z = String(zoneCode || '').trim().toUpperCase();
   if (!z) return;
@@ -371,6 +465,7 @@ function toggleZoneExclusion(zoneCode) {
   invalidateAggregationCache();
   updateExcludedZonesBar();
   render();
+  scheduleExclusionBackgroundRefresh();
 }
 
 function clearExcludedZones() {
@@ -379,6 +474,7 @@ function clearExcludedZones() {
   invalidateAggregationCache();
   updateExcludedZonesBar();
   render();
+  scheduleExclusionBackgroundRefresh();
 }
 
 function updateExcludedZonesBar() {
@@ -398,8 +494,8 @@ function updateExcludedZonesBar() {
   if (countBadge) countBadge.textContent = excludedZones.size.toLocaleString();
   if (savedAtBadge) {
     savedAtBadge.textContent = excludedZonesSavedAt
-      ? `บันทึกล่าสุด: ${formatThaiDateTime(excludedZonesSavedAt)}`
-      : '';
+      ? `บันทึกส่วนกลางล่าสุด: ${formatThaiDateTime(excludedZonesSavedAt)}`
+      : 'กำลังซิงก์รายการส่วนกลาง…';
   }
 
   if (badgesContainer) {
@@ -5628,9 +5724,15 @@ function exportPDF() {
 
 function scheduleExclusionBackgroundRefresh() {
   if (exclusionRefreshTimer) clearTimeout(exclusionRefreshTimer);
-  exclusionRefreshTimer = setTimeout(() => {
+  exclusionRefreshTimer = setTimeout(async () => {
     exclusionRefreshTimer = null;
-    void loadData(true, { silent: true });
+    try {
+      await saveSharedExclusions();
+      await loadData(true, { silent: true });
+    } catch (err) {
+      console.warn('Shared exclusions sync failed:', err);
+      showPlannerActionPopup('error', 'บันทึกรายการส่วนกลางไม่สำเร็จ', String(err && err.message || err), { autoClose: 5000 });
+    }
   }, 700);
 }
 
@@ -5723,6 +5825,7 @@ window.resetDashboardFiltersAndCache = async function () {
 
     updateExcludedZonesBar();
     renderExcludedBadges();
+    await saveSharedExclusions();
 
     // fresh=true บังคับข้าม Apps Script cache; query scope ตอนนี้ไม่มี Excluded Item แล้ว
     const result = await loadData(true);
@@ -5759,7 +5862,7 @@ function renderExcludedBadges() {
   if (excludedSkus.size === 0) { bar.style.display = 'none'; if (savedAtBadge) savedAtBadge.textContent = ''; return; }
   bar.style.display = 'block';
   countBadge.textContent = excludedSkus.size.toLocaleString();
-  if (savedAtBadge) savedAtBadge.textContent = excludedSkusSavedAt ? `บันทึกล่าสุด: ${formatThaiDateTime(excludedSkusSavedAt)}` : 'รายการนี้จะถูกจำไว้ในเครื่องนี้อัตโนมัติ';
+  if (savedAtBadge) savedAtBadge.textContent = excludedSkusSavedAt ? `บันทึกส่วนกลางล่าสุด: ${formatThaiDateTime(excludedSkusSavedAt)}` : 'กำลังซิงก์รายการส่วนกลาง…';
   let h = '';
   excludedSkus.forEach(key => {
     const parsed = parseItemCompositeKey(key);
@@ -6408,10 +6511,16 @@ bindDataStateActions();
 updateExcludedZonesBar();
 document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
 async function bootstrapDashboard() {
+  try { await fetchSharedExclusions(false); } catch (err) { console.warn('Shared exclusions initial load failed:', err); }
   await restoreDashboardFromCache();
-  return loadData(false);
+  const result = await loadData(false);
+  startSharedExclusionsPolling();
+  return result;
 }
 bootstrapDashboard();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !sharedExclusionsSyncPromise) void fetchSharedExclusions(true).catch(() => null);
+});
 
 // ===== ระบบอัปโหลดไฟล์ Pick Detail (.csv) ตรงเข้า BigQuery =====
 (function initWebUploader() {

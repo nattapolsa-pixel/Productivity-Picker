@@ -39,6 +39,7 @@ const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_shift_date_v3';
 const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_shift_date_v3';
+const SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1';
 const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v9-24h-shift-cutoff';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
@@ -72,6 +73,9 @@ function doGet(e) {
     const mode = String(e && e.parameter && e.parameter.mode || '').toLowerCase();
     const wantsGzipEnvelope = String(e && e.parameter && e.parameter.encoding || '').toLowerCase() === 'gzip';
     const requestScope = getDashboardRequestScope_(e);
+    if (mode === 'dashboard_exclusions') {
+      return json_(getSharedDashboardExclusions_());
+    }
     // Roster เป็น payload เล็กจาก Google Sheet โดยตรง ไม่ Query BigQuery
     // fresh=1 ใช้กับปุ่ม "อัปเดตรายชื่อ Picker" เพื่อบังคับอ่านชีตใหม่ทันที
     if (mode === 'roster') {
@@ -237,6 +241,53 @@ function doGet(e) {
 
 function getDataRevision_() {
   return PropertiesService.getScriptProperties().getProperty(CACHE_REVISION_PROPERTY) || '0';
+}
+
+function getSharedDashboardExclusions_() {
+  const raw = PropertiesService.getScriptProperties().getProperty(SHARED_EXCLUSIONS_PROPERTY);
+  if (!raw) return { status: 'success', version: 1, initialized: false, items: [], zones: [], updated_at: '' };
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      status: 'success',
+      version: 1,
+      initialized: true,
+      items: Array.isArray(parsed.items) ? parsed.items : [],
+      zones: Array.isArray(parsed.zones) ? parsed.zones : [],
+      updated_at: String(parsed.updated_at || '')
+    };
+  } catch (_) {
+    return { status: 'success', version: 1, initialized: false, items: [], zones: [], updated_at: '' };
+  }
+}
+
+function saveSharedDashboardExclusions_(postData) {
+  const scope = getDashboardRequestScope_({
+    parameter: { excluded_items: JSON.stringify(Array.isArray(postData.items) ? postData.items : []) }
+  });
+  const seenZones = {};
+  const zones = (Array.isArray(postData.zones) ? postData.zones : []).slice(0, 200).map(function(value) {
+    return String(value == null ? '' : value).replace(/\u00a0/g, ' ').trim().toUpperCase();
+  }).filter(function(value) {
+    if (!value || value.length > 40 || seenZones[value]) return false;
+    seenZones[value] = true;
+    return true;
+  }).sort();
+  const payload = {
+    version: 1,
+    initialized: true,
+    items: scope.excludedItems,
+    zones: zones,
+    updated_at: new Date().toISOString()
+  };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    PropertiesService.getScriptProperties().setProperty(SHARED_EXCLUSIONS_PROPERTY, JSON.stringify(payload));
+  } finally {
+    lock.releaseLock();
+  }
+  return Object.assign({ status: 'success' }, payload);
 }
 
 function getDashboardRefreshBucket_() {
@@ -721,6 +772,9 @@ function doPost(e) {
       });
     }
     const postData = JSON.parse(e.postData.contents);
+    if (postData.action === 'set_dashboard_exclusions') {
+      return json_(saveSharedDashboardExclusions_(postData));
+    }
     // รุ่นใหม่: Browser อ่าน XLSX แล้วส่งเฉพาะ 11 คอลัมน์เป็น CSV UTF-8
     if (postData.action === 'upload_chunk_csv' && typeof postData.csv === 'string') {
       const chunkResult = uploadChunkToBigQuery_(postData);
@@ -2958,6 +3012,14 @@ function testRun() {
     }
     pass('CSV parser', '11 คอลัมน์และรหัส 000123 ถูกต้อง');
   } catch (err) { fail('CSV parser', err); throw err; }
+
+  try {
+    const sharedExclusions = getSharedDashboardExclusions_();
+    if (!Array.isArray(sharedExclusions.items) || !Array.isArray(sharedExclusions.zones)) {
+      throw new Error('Shared exclusions payload ไม่ถูกต้อง');
+    }
+    pass('Shared exclusions', sharedExclusions.items.length + ' สินค้า · ' + sharedExclusions.zones.length + ' Zone');
+  } catch (err) { fail('Shared exclusions', err); throw err; }
 
   try {
     const shiftCases = bqQueryAll_([
