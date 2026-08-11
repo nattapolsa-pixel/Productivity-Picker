@@ -8,7 +8,9 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260811-silent-item-exclusion-v56'), 'HTML must cache-bust the silent item exclusion release');
+assert(html.includes('app.js?v=20260812-estimated-xlsx-loader-v57'), 'HTML must cache-bust the ESTIMATED Excel loader release');
+assert(app.includes('window._simHandleOrderFile = async function (e)') && app.includes('await ensureXlsxLibrary();'),
+  'Workforce Planning must load the Excel parser before reading ESTIMATED xlsx files');
 assert(!app.includes('loadCurrentItemCube(force, sys)'), 'Background refresh must not force-reload the exclusion-independent Item Cube');
 assert(app.includes('void loadData(true, { silent: true })'), 'Item exclusions must sync without a full-screen loader');
 assert(app.includes('if (!silent) showLoading(true'), 'Silent refresh must keep the current dashboard interactive');

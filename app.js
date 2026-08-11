@@ -5479,11 +5479,26 @@ const builders = {
       SState.customWorkload = null; SState.customSourceName = ''; SState.userPickersA = {}; SState.userPickersB = {}; built.simulator = false; show('simulator');
       setTimeout(() => { const b = document.getElementById('btnSimResetWorkload'); plannerSetButtonBusy(b, false); showPlannerActionPopup('success', 'ล้าง Workload เรียบร้อย', 'ระบบกลับสู่สถานะรออัปโหลดไฟล์ ESTIMATED และยังไม่คำนวณแผนกำลังคน'); }, 120);
     };
-    window._simHandleOrderFile = function (e) {
-      const file = e.target.files && e.target.files[0]; if (!file) return; const isXlsx = /\.(xlsx|xls)$/i.test(file.name); const reader = new FileReader(); const uploadBtn = document.getElementById('btnSimUploadOrder'); plannerSetButtonBusy(uploadBtn, true, 'กำลังอ่านไฟล์...'); showPlannerActionPopup('loading', 'กำลังนำเข้าไฟล์ ESTIMATED', file.name);
+    window._simHandleOrderFile = async function (e) {
+      const file = e.target.files && e.target.files[0]; if (!file) return;
+      const isXlsx = /\.(xlsx|xls)$/i.test(file.name);
+      const uploadBtn = document.getElementById('btnSimUploadOrder');
+      plannerSetButtonBusy(uploadBtn, true, 'กำลังอ่านไฟล์...');
+      showPlannerActionPopup('loading', 'กำลังนำเข้าไฟล์ ESTIMATED', file.name);
+      if (isXlsx) {
+        try {
+          await ensureXlsxLibrary();
+        } catch (err) {
+          plannerSetButtonBusy(uploadBtn, false);
+          e.target.value = '';
+          showPlannerActionPopup('error', 'โหลดตัวอ่าน Excel ไม่สำเร็จ', String(err && err.message || err), { autoClose: false });
+          return;
+        }
+      }
+      const reader = new FileReader();
       reader.onload = function (evt) {
         try {
-          let matrix = []; if (isXlsx && typeof XLSX !== 'undefined') { const wb = XLSX.read(new Uint8Array(evt.target.result), { type: 'array' }); matrix = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' }); } else { const txt = typeof evt.target.result === 'string' ? evt.target.result : new TextDecoder().decode(evt.target.result); matrix = txt.split(/\r?\n/).map(x => x.split(',')); }
+          let matrix = []; if (isXlsx) { const wb = XLSX.read(new Uint8Array(evt.target.result), { type: 'array' }); matrix = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' }); } else { const txt = typeof evt.target.result === 'string' ? evt.target.result : new TextDecoder().decode(evt.target.result); matrix = txt.split(/\r?\n/).map(x => x.split(',')); }
           if (!matrix || matrix.length < 2) throw new Error('ไฟล์ไม่มีข้อมูล'); let headerRow = 0, header = [];
           for (let i = 0; i < Math.min(20, matrix.length); i++) {
             const h = (matrix[i] || []).map(v => String(v || '').trim().toLowerCase());
