@@ -30,6 +30,9 @@ const SHIFT_WORK_INTERVALS = Object.freeze({
 // ====================================
 
 const fmt = n => Number(n).toLocaleString('en-US');
+const fmtDecimal1 = n => Number.isFinite(Number(n))
+  ? Number(n).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+  : '-';
 const PALETTE = ['#6366f1', '#14b8a6', '#f59e0b', '#f43f5e', '#0ea5e9', '#8b5cf6', '#10b981', '#ec4899', '#f97316', '#22c55e', '#3b82f6', '#eab308'];
 const ZONE_OWNER_COLORS = Object.freeze({
   'max mart': '#0f766e',
@@ -4302,7 +4305,7 @@ const builders = {
       const zoneProd = (A.zone_prod_map && A.zone_prod_map[x.zone]) || null;
       const productivity = zoneProd ? Number(isPcs ? zoneProd.avg_pcs_prod : zoneProd.avg_prod) : 0;
       const productivityText = productivity > 0
-        ? `${fmt1(productivity)} ${isPcs ? 'ชิ้น/ชม.' : 'หน่วยหยิบ/ชม.'}`
+        ? `${fmtDecimal1(productivity)} ${isPcs ? 'ชิ้น/ชม.' : 'หน่วยหยิบ/ชม.'}`
         : '-';
       e.innerHTML =
         `<div class="z">${escapeZoneHtml(x.zone)}</div>` +
