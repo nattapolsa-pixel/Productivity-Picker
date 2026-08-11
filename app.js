@@ -102,6 +102,7 @@ let aggregateCache = new Map();
 let excludedSkuRevision = 0;
 let dashboardCacheRevision = '';
 let activeZoneDetailCode = '';
+let exclusionRefreshTimer = null;
 const DASHBOARD_TIMEOUT_MS = 180000;
 const EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_items_v2';
 const LEGACY_EXCLUDED_SKUS_STORAGE_KEY = 'pick_dashboard_excluded_skus_v1';
@@ -2083,8 +2084,8 @@ function canonicalCubeScope(system = sys, from = dfrom, to = dto) {
 }
 function itemCubeRequestKey(system = sys, from = dfrom, to = dto) {
   const scope = canonicalCubeScope(system, from, to);
-  return [dashboardDataEpoch(), scope.system, scope.from, scope.to, scope.shift,
-  JSON.stringify(currentExcludedItemList())].join('|');
+  // Item Cube เก็บข้อมูลเต็มและกรอง Exclude ใน Browser เพื่อให้กดแล้วตอบสนองทันที
+  return [dashboardDataEpoch(), scope.system, scope.from, scope.to, scope.shift].join('|');
 }
 function isValidItemCubePayload(payload, system, from, to, shift, expectedEpoch = dashboardDataEpoch()) {
   return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
@@ -2095,7 +2096,7 @@ function isValidItemCubePayload(payload, system, from, to, shift, expectedEpoch 
 }
 function dailyCubeRequestKey(kind, system, date, sf) {
   return [kind, dashboardDataEpoch(), system, date, sf,
-    (kind === 'slot' || kind === 'item') ? JSON.stringify(currentExcludedItemList()) : ''].join('|');
+    kind === 'slot' ? JSON.stringify(currentExcludedItemList()) : ''].join('|');
 }
 
 function cubeRequestDates(system, from, to) {
@@ -2413,7 +2414,6 @@ async function loadCurrentItemCube(force, system = sys) {
         'to=' + encodeURIComponent(requestTo),
         'shift=' + encodeURIComponent(requestShift),
         dashboardResponseEncodingQuery(),
-        dashboardScopeQuery(),
         't=' + Date.now()
       ].join('&');
       const [payload] = await Promise.all([
@@ -5602,6 +5602,14 @@ function exportPDF() {
   window.print();
 }
 
+function scheduleExclusionBackgroundRefresh() {
+  if (exclusionRefreshTimer) clearTimeout(exclusionRefreshTimer);
+  exclusionRefreshTimer = setTimeout(() => {
+    exclusionRefreshTimer = null;
+    void loadData(true);
+  }, 700);
+}
+
 window.toggleExcludeSku = function (owner, sku) {
   const ownerKey = normalizeOwnerKey(owner);
   const item = normalizeSkuKey(sku);
@@ -5612,22 +5620,18 @@ window.toggleExcludeSku = function (owner, sku) {
   else if (item) excludedSkus.add(key);
   saveExcludedSkusToStorage();
   invalidateAggregationCache();
-  dashboardCacheRevision = '';
-  itemCubePayloadCache.clear();
-  itemCubeLoadState.clear();
-  slotCubePayloadCache.clear();
-  slotCubeLoadState.clear();
-  void loadData(false);
+  // Item Cube เป็นข้อมูลเต็ม จึงกรองและวาดใหม่ได้ทันทีโดยไม่รอ BigQuery
+  render();
+  // รวมหลายคลิกติดกันเป็นการ Sync BigQuery เพียงรอบเดียวสำหรับ KPI/Picker/Zone/Time
+  scheduleExclusionBackgroundRefresh();
 };
 
 window.clearExcludedSkus = function () {
   excludedSkus.clear();
   saveExcludedSkusToStorage();
   invalidateAggregationCache();
-  dashboardCacheRevision = '';
-  itemCubePayloadCache.clear(); itemCubeLoadState.clear();
-  slotCubePayloadCache.clear(); slotCubeLoadState.clear();
-  void loadData(false);
+  render();
+  scheduleExclusionBackgroundRefresh();
 };
 
 

@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260811-item-exclusion-loading-v53'), 'HTML must cache-bust the item exclusion loading fix');
+assert(html.includes('app.js?v=20260811-instant-item-exclusion-v54'), 'HTML must cache-bust the instant item exclusion release');
 assert(html.includes('data-page="history"') && html.includes('id="historyPage"'), 'Historical V1 page must be reachable from the dashboard');
 assert(app.includes("endDate: '2026-07-19'") && app.includes("v2StartDate: '2026-07-20'"),
   'Historical V1 totals must stop before the first reliable V2 shift date');
@@ -63,6 +63,13 @@ assert(html.includes('id="itemLoadStatus"') && app.includes('const itemCubeReady
   'Items page must guard rendering while a new scoped item cube is loading');
 assert(app.includes('กำลังอัปเดตข้อมูลหลังเปลี่ยนรายการยกเว้น') && app.includes('if (itemChartBox) itemChartBox.style.display = \'none\''),
   'Items page must not show zero charts or zero master rows during exclusion refresh');
+assert(app.includes('function scheduleExclusionBackgroundRefresh()') && app.includes('}, 700);'),
+  'Exclusion changes must debounce the background BigQuery refresh');
+assert(app.includes('// Item Cube เก็บข้อมูลเต็มและกรอง Exclude ใน Browser') &&
+  !app.includes("dashboardResponseEncodingQuery(),\n        dashboardScopeQuery(),\n        't=' + Date.now()"),
+  'Item Cube must be exclusion-independent so item clicks can render instantly');
+assert(app.includes('render();\n  // รวมหลายคลิกติดกันเป็นการ Sync BigQuery เพียงรอบเดียว'),
+  'Item exclusion must render locally before background synchronization');
 assert(app.includes('const masterPromise = loadItemMaster(false);') && app.includes('masterPromise\n      ]'),
   'Item Master and Item Cube must load concurrently');
 assert(app.includes('void Promise.all([\n    loadItemMaster(force),\n    loadCurrentItemCube(force, sys)'),
