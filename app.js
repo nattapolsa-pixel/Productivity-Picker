@@ -4413,7 +4413,21 @@ const builders = {
     });
   },
   items() {
-    if (!hasCurrentItemCube()) setTimeout(() => void loadCurrentItemCube(false), 0);
+    const itemCubeReady = hasCurrentItemCube();
+    const itemLoadStatus = document.getElementById('itemLoadStatus');
+    const itemChartBox = document.getElementById('item') && document.getElementById('item').closest('.chartbox');
+    if (!itemCubeReady) {
+      setTimeout(() => void loadCurrentItemCube(false), 0);
+      if (itemLoadStatus) itemLoadStatus.style.display = 'block';
+      if (itemChartBox) itemChartBox.style.display = 'none';
+      const itemTable = document.getElementById('itable');
+      if (itemTable) itemTable.innerHTML = '<tbody><tr><td style="text-align:center;color:#1d4ed8;padding:30px;font-weight:600;">⏳ กำลังอัปเดตข้อมูลหลังเปลี่ยนรายการยกเว้น กรุณารอสักครู่…</td></tr></tbody>';
+      const pagination = document.getElementById('itablePagination');
+      if (pagination) pagination.innerHTML = '';
+      return;
+    }
+    if (itemLoadStatus) itemLoadStatus.style.display = 'none';
+    if (itemChartBox) itemChartBox.style.display = '';
     const isPcs = unitMode === 'pcs';
     let it = [...A.by_item];
     it.sort((a, b) => (b.qty - a.qty) || (b.pcs - a.pcs));
