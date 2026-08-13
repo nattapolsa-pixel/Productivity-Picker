@@ -6543,9 +6543,12 @@ document.addEventListener('visibilitychange', () => {
   const MAX_UPLOAD_ROWS = 100000;
   const MAX_FILE_BYTES = 50 * 1024 * 1024;
   // ส่งข้อมูลเป็น CSV UTF-8 ก้อนใหญ่ขึ้น เพื่อลดจำนวนรอบ Apps Script/BigQuery Load Job
-  const UPLOAD_CHUNK_TARGET_BYTES = 2 * 1024 * 1024;
-  const UPLOAD_CHUNK_MAX_ROWS = 6000;
-  const UPLOAD_CHUNK_CONCURRENCY = 2;
+  // Pick Detail only: keep each Apps Script/BigQuery request small and send it
+  // sequentially. Concurrent load jobs sometimes leave the final chunk without
+  // a response even though the browser retries it.
+  const UPLOAD_CHUNK_TARGET_BYTES = 1024 * 1024;
+  const UPLOAD_CHUNK_MAX_ROWS = 3000;
+  const UPLOAD_CHUNK_CONCURRENCY = 1;
   const XLSX_SCRIPT_URL = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
   const REQUIRED_HEADERS = [
     { index: 1, name: 'PICKDETAILKEY' },

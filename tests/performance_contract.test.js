@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260812-shared-exclusions-v61'), 'HTML must cache-bust the shared exclusion release');
+assert(html.includes('app.js?v=20260813-pick-upload-stable-v62'), 'HTML must cache-bust the stable Pick Detail upload release');
 assert(app.includes("action: 'set_dashboard_exclusions'") && app.includes("mode=dashboard_exclusions") &&
   app.includes('startSharedExclusionsPolling()'), 'All browsers must use and poll the same shared exclusion state');
 assert(backend.includes("SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1'") &&
@@ -101,7 +101,11 @@ assert(app.includes("String(payload.data_epoch || '') === String(expectedEpoch |
 assert(app.includes("String(j && j.meta && j.meta.data_revision || '') !== requestedRevision"), 'Main payload must match the revision that started the atomic load');
 assert(app.includes('if (!itemPayload || !slotPayload)') && app.includes('const nextSystem = b.dataset.sys'), 'System switch must not expose a partial bundle');
 assert(app.includes("action: 'upload_chunk_csv'") && app.includes("action: 'upload_commit'"), 'Large files must use retry-safe chunk upload');
-assert(app.includes('UPLOAD_CHUNK_CONCURRENCY = 2'), 'Upload concurrency must stay bounded');
+assert(app.includes('const UPLOAD_CHUNK_TARGET_BYTES = 1024 * 1024;') &&
+  app.includes('const UPLOAD_CHUNK_MAX_ROWS = 3000;') &&
+  app.includes('const UPLOAD_CHUNK_CONCURRENCY = 1;'),
+  'Pick Detail chunks must be small and sequential to avoid Apps Script/BigQuery response loss');
+assert(app.includes('UPLOAD_CHUNK_CONCURRENCY = 1'), 'Pick Detail upload must stay sequential');
 assert(app.includes("payload.encoding === 'gzip-base64-v1'"), 'Browser must decode compact cached dashboard responses');
 
 assert(backend.includes("if (mode === 'revision')"), 'Backend revision endpoint is missing');
