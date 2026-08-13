@@ -2603,8 +2603,8 @@ function isValidSlotCubePayload(payload, system, from, to, shift, expectedEpoch 
   return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
     String(payload.data_epoch || '') === String(expectedEpoch || '') &&
     payload.system === system && payload.from === from && payload.to === to &&
-    payload.shift === shift && Number(payload.row_width) === 8 &&
-    Array.isArray(payload.rows) && payload.rows.length % 8 === 0;
+    payload.shift === shift && (Number(payload.row_width) === 6 || Number(payload.row_width) === 8) &&
+    Array.isArray(payload.rows) && payload.rows.length % Number(payload.row_width) === 0;
 }
 
 function hasCurrentSlotCube(system = sys, from = dfrom, to = dto, sf = shiftF) {
@@ -2616,21 +2616,33 @@ function forEachCurrentSlotRow(system, from, to, sf, callback) {
   const payload = slotCubePayloadCache.get(slotCubeRequestKey(system, from, to, sf));
   if (payload) {
     const rows = payload.rows;
-    for (let offset = 0; offset < rows.length; offset += 8) {
+    const width = Number(payload.row_width) || 0;
+    for (let offset = 0; offset < rows.length; offset += width) {
       const date = String(rows[offset] || '');
-      const timeShift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
-      const picker = String(rows[offset + 3] || '(none)');
-      const team = getPickerReportTeam(picker);
-      if (date < from || date > to || !matchesReportTeam({ team }, picker, sf)) continue;
+      if (width === 8) {
+        const timeShift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+        const picker = String(rows[offset + 3] || '(none)');
+        const team = getPickerReportTeam(picker);
+        if (date < from || date > to || !matchesReportTeam({ team }, picker, sf)) continue;
+        callback({
+          date, shift: timeShift, team, zone: rows[offset + 2], picker,
+          hour: Number(rows[offset + 4]) || 0, pcs: Number(rows[offset + 5]) || 0,
+          pickQty: readBigQueryPickQty(rows[offset + 6]), lines: Number(rows[offset + 7]) || 0
+        });
+        continue;
+      }
+      const teamCode = Number(rows[offset + 1]) || 0;
+      const team = teamCode === 2 ? 'X' : (teamCode === 1 ? 'B' : 'A');
+      const reportTeam = team === 'X' ? 'NOT_FOUND' : team;
+      if (date < from || date > to || !matchesReportTeam({ team: reportTeam }, '', sf)) continue;
       callback({
         date,
-        shift: timeShift, team,
-        zone: rows[offset + 2],
-        picker,
-        hour: Number(rows[offset + 4]) || 0,
-        pcs: Number(rows[offset + 5]) || 0,
-        pickQty: readBigQueryPickQty(rows[offset + 6]),
-        lines: Number(rows[offset + 7]) || 0
+        shift: team === 'B' ? 'night' : 'morning', team,
+        zone: 'ALL', picker: '(aggregated)',
+        hour: Number(rows[offset + 2]) || 0,
+        pcs: Number(rows[offset + 3]) || 0,
+        pickQty: readBigQueryPickQty(rows[offset + 4]),
+        lines: Number(rows[offset + 5]) || 0
       });
     }
     return true;
@@ -2674,8 +2686,8 @@ async function fetchDailySlotCube(system, date, shift, signal, force) {
   if (!payload || payload.schema_version !== DASHBOARD_SCHEMA_VERSION ||
     String(payload.data_epoch || '') !== String(requestEpoch || '') ||
     payload.system !== system || payload.from !== date || payload.to !== date ||
-    payload.shift !== shift || Number(payload.row_width) !== 8 ||
-    !Array.isArray(payload.rows) || payload.rows.length % 8 !== 0) {
+    payload.shift !== shift || (Number(payload.row_width) !== 6 && Number(payload.row_width) !== 8) ||
+    !Array.isArray(payload.rows) || payload.rows.length % Number(payload.row_width) !== 0) {
     throw dashboardTransientError('ข้อมูลช่วงเวลาเปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
   }
   slotCubeDailyPayloadCache.set(dailyKey, payload);

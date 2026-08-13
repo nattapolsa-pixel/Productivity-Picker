@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260813-sunday-ot-calendar-v64'), 'HTML must cache-bust the Sunday OT calendar release');
+assert(html.includes('app.js?v=20260813-compact-timeslot-v65'), 'HTML must cache-bust the compact time-slot release');
 assert(app.includes("action: 'set_dashboard_exclusions'") && app.includes("mode=dashboard_exclusions") &&
   app.includes('startSharedExclusionsPolling()'), 'All browsers must use and poll the same shared exclusion state');
 assert(backend.includes("SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1'") &&
@@ -126,6 +126,8 @@ assert(backend.includes("if (mode === 'slot_cube')") && backend.includes('buildS
 assert(backend.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v15-sunday-ot-calendar'"), 'Backend must publish the Sunday OT calendar schema');
 assert(backend.includes('function loadPickerSundayOtCalendar_') && backend.includes("/^OT_([A-Za-z]{3})(\\d{4})$/i"),
   'Backend must load monthly Picker OT sheets for Sunday reporting');
+assert(backend.includes("GROUP BY shift_date, report_team, hour_of_day") && backend.includes("row_width: 6"),
+  'Time-slot endpoint must aggregate by date/team/hour before returning data');
 assert(backend.includes('const CACHE_CODEC = \'gzip-base64-v1\'') && backend.includes('Utilities.gzip('), 'Dashboard cache must be compressed before chunking');
 assert(backend.includes('getCachedEncoded_') && backend.includes('gzipEnvelope_'), 'Backend must serve cached cubes without inflating them first');
 assert(backend.includes("DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v9-24h-shift-cutoff'"), '24-hour shift payloads must rotate the backend cache format');

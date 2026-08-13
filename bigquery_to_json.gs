@@ -654,15 +654,13 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
   const scope = requestScope || { excludedItems: [] };
   const excludedSql = dashboardExclusionSql_(scope, 'owner_key', 'sku_key');
   const shiftSql = shift === 'morning'
-    ? "AND shift_code = 'M'"
-    : (shift === 'night' ? "AND shift_code = 'N'" : '');
+    ? "AND report_team = 'A'"
+    : (shift === 'night' ? "AND report_team = 'B'" : (shift === 'not_found' ? "AND report_team = 'X'" : ''));
   const sql = [
     'WITH base AS (',
     '  SELECT',
     '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
-    '    ' + dashboardShiftCodeSql_('tmin') + ' AS shift_code,',
-    "    COALESCE(zone, '??') AS zone,",
-    "    COALESCE(picker_id, '(none)') AS picker,",
+    '    ' + pickerRosterTeamCodeSql_('picker_id') + ' AS report_team,',
     "    UPPER(COALESCE(owner, '-')) AS owner_key,",
     "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
     '    CAST(DIV(tmin, 60) AS INT64) AS hour_of_day,',
@@ -678,19 +676,19 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
     '    ' + shiftSql,
     '    ' + excludedSql,
     ')',
-    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, picker, hour_of_day,",
+    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), report_team, hour_of_day,",
     '       SUM(pcs), SUM(pick_qty), COUNT(*)',
     'FROM filtered',
-    'GROUP BY shift_date, shift_code, zone, picker, hour_of_day',
-    'ORDER BY shift_date, hour_of_day, zone, picker'
+    'GROUP BY shift_date, report_team, hour_of_day',
+    'ORDER BY shift_date, report_team, hour_of_day'
   ].join('\n');
 
   const rows = [];
   bqQueryEach_(sql, function(r) {
     rows.push(
-      String(r[0] || ''), r[1] === 'N' ? 1 : 0,
-      String(r[2] || '??'), String(r[3] || '(none)'), Number(r[4]) || 0,
-      Number(r[5]) || 0, Number(r[6]) || 0, Number(r[7]) || 0
+      String(r[0] || ''), r[1] === 'X' ? 2 : (r[1] === 'B' ? 1 : 0),
+      Number(r[2]) || 0, Number(r[3]) || 0,
+      Number(r[4]) || 0, Number(r[5]) || 0
     );
   }, JOB_DEADLINE_MS, true);
   assertDashboardDataEpochStable_(expectedEpoch);
@@ -702,7 +700,7 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
     from: from,
     to: to,
     shift: shift,
-    row_width: 8,
+    row_width: 6,
     rows: rows,
     generated: new Date().toISOString()
   };
