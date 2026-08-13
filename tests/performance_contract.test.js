@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260813-pick-upload-stable-v62'), 'HTML must cache-bust the stable Pick Detail upload release');
+assert(html.includes('app.js?v=20260813-roster-team-hotfix-v63'), 'HTML must cache-bust the roster-team hotfix release');
 assert(app.includes("action: 'set_dashboard_exclusions'") && app.includes("mode=dashboard_exclusions") &&
   app.includes('startSharedExclusionsPolling()'), 'All browsers must use and poll the same shared exclusion state');
 assert(backend.includes("SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1'") &&
