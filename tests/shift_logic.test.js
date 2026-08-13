@@ -57,7 +57,12 @@ assert(backend.includes('function dashboardShiftDateSql_'));
 assert(backend.includes('function dashboardShiftCodeSql_'));
 assert(backend.includes('function pickerRosterTeamCodeSql_'));
 const dateHelper = backend.slice(backend.indexOf('function dashboardShiftDateSql_'), backend.indexOf('function dashboardShiftCodeSql_'));
-assert(!dateHelper.includes('DATE_SUB('));
+assert(dateHelper.includes('loadPickerSundayOtCalendar_()'));
+assert(dateHelper.includes('DATE_SUB('));
+assert(dateHelper.includes('closedSundays'));
+assert(backend.includes("if (!text || text === '-' || /^sun(day)?$/i.test(text)) return 0;"));
+assert(backend.includes('if (dateCount > bestDateCount)'));
+assert(backend.includes('rosterPayload.picker_sunday_ot = loadPickerSundayOtCalendar_(forceRoster)'));
 assert.equal((backend.match(/pickerRosterShiftCodeSql_\('picker_id', 'tmin'\)/g) || []).length, 0);
 
 const pipeline = fs.readFileSync(path.join(root, 'pick_uom_master_pipeline.sql'), 'utf8');

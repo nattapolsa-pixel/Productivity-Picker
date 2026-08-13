@@ -7,7 +7,7 @@
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 // ส่ง compact work cube ก่อน แล้ว lazy-load item/time detail เป็นรายวัน
 // pick_qty ต้องมาจาก BigQuery Master_Item + Master_Pack เท่านั้น
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v14-roster-team-calendar-date';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v15-sunday-ot-calendar';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};

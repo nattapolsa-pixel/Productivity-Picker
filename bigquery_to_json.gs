@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v14-roster-team-calendar-date';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v15-sunday-ot-calendar';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -80,7 +80,9 @@ function doGet(e) {
     // fresh=1 ใช้กับปุ่ม "อัปเดตรายชื่อ Picker" เพื่อบังคับอ่านชีตใหม่ทันที
     if (mode === 'roster') {
       const forceRoster = String(e && e.parameter && e.parameter.fresh || '') === '1';
-      return json_(buildPickerRosterPayload_(forceRoster));
+      const rosterPayload = buildPickerRosterPayload_(forceRoster);
+      rosterPayload.picker_sunday_ot = loadPickerSundayOtCalendar_(forceRoster);
+      return json_(rosterPayload);
     }
     // รายการ SKU รายพนักงานมีจำนวนมากกว่าข้อมูลสรุปหลัก จึงโหลดเฉพาะ
     // เมื่อผู้ใช้เปิดรายละเอียดพนักงานคนนั้น เพื่อไม่ให้หน้าแรกต้องแบกทุก SKU
@@ -373,11 +375,99 @@ function sqlStringLiteral_(value) {
   return "'" + String(value == null ? '' : value).replace(/'/g, "''") + "'";
 }
 
-// วันกะของ Dashboard: 00:00–06:59 ต้องนับเป็นวันกะก่อนหน้า
-// ใช้ helper เดียวกันทุก Main/Item/Time/Picker cube และ Bounds เพื่อป้องกันยอดแต่ละหน้าคลาดกัน
+function pickerSundayOtCacheKey_() {
+  return 'picker_sunday_ot_calendar_v1';
+}
+
+function parsePickerSundayOtDate_(value, year, month) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{1,2})[-\/]([A-Za-z]{3}|\d{1,2})(?:[-\/](\d{2,4}))?$/);
+  if (!match) return '';
+  const day = Number(match[1]);
+  let parsedMonth = Number(match[2]);
+  if (!Number.isFinite(parsedMonth)) {
+    const names = { JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12 };
+    parsedMonth = names[String(match[2]).toUpperCase()] || month;
+  }
+  let parsedYear = match[3] ? Number(match[3]) : year;
+  if (parsedYear < 100) parsedYear += 2000;
+  if (!day || !parsedMonth || !parsedYear) return '';
+  return Utilities.formatString('%04d-%02d-%02d', parsedYear, parsedMonth, day);
+}
+
+function parsePickerOtHours_(value) {
+  const text = String(value == null ? '' : value).replace(/,/g, '').trim();
+  if (!text || text === '-' || /^sun(day)?$/i.test(text)) return 0;
+  const number = Number(text);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+// Sunday reporting is driven by the Picker OT sheet, not by pick time.
+// false = normal Sunday closure, so its early-hours workload belongs to Saturday.
+// true = Picker OT was opened, so Sunday remains a standalone reporting date.
+function loadPickerSundayOtCalendar_(forceRefresh) {
+  const cache = CacheService.getScriptCache();
+  if (!forceRefresh) {
+    try {
+      const cached = cache.get(pickerSundayOtCacheKey_());
+      if (cached) return JSON.parse(cached);
+    } catch (_) {}
+  }
+  const result = { status:{}, sources:[], loadedAt:new Date().toISOString() };
+  try {
+    const ss = SpreadsheetApp.openById(PICKER_NAME_SHEET_ID);
+    ss.getSheets().forEach(function(sheet) {
+      const title = String(sheet.getName() || '').trim();
+      const match = title.match(/^OT_([A-Za-z]{3})(\d{4})$/i);
+      if (!match) return;
+      const months = { JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12 };
+      const month = months[String(match[1]).toUpperCase()];
+      const year = Number(match[2]);
+      if (!month || !year) return;
+      const values = sheet.getDataRange().getDisplayValues();
+      if (!values.length) return;
+      let dateRow = -1, pickerRow = -1, bestDateCount = 0;
+      for (let r = 0; r < values.length; r++) {
+        const dateCount = values[r].reduce(function(count, cell) {
+          return count + (parsePickerSundayOtDate_(cell, year, month) ? 1 : 0);
+        }, 0);
+        if (dateCount > bestDateCount) {
+          bestDateCount = dateCount;
+          dateRow = r;
+        }
+        if (pickerRow < 0 && values[r].some(function(cell) { return String(cell || '').trim().toUpperCase() === 'PICKER'; })) pickerRow = r;
+      }
+      if (dateRow < 0 || pickerRow < 0 || bestDateCount < 2) return;
+      const dates = values[dateRow];
+      const picker = values[pickerRow];
+      for (let c = 0; c < Math.min(dates.length, picker.length); c++) {
+        const date = parsePickerSundayOtDate_(dates[c], year, month);
+        if (!date) continue;
+        const parsed = new Date(date + 'T00:00:00+07:00');
+        if (parsed.getDay() !== 0) continue;
+        result.status[date] = parsePickerOtHours_(picker[c]) > 0;
+      }
+      result.sources.push(title);
+    });
+  } catch (err) {
+    console.warn('loadPickerSundayOtCalendar_ failed: ' + err);
+  }
+  try { cache.put(pickerSundayOtCacheKey_(), JSON.stringify(result), PICKER_ROSTER_CACHE_TTL); } catch (_) {}
+  return result;
+}
+
+// Reporting date follows the normalized calendar date, except a closed Sunday
+// from the Picker OT calendar is merged into Saturday across every dashboard cube.
 function dashboardShiftDateSql_(pickDateExpression, tminExpression) {
   const d = String(pickDateExpression || 'pick_date');
-  return d;
+  const sundayCalendar = loadPickerSundayOtCalendar_();
+  const closedSundays = Object.keys(sundayCalendar.status || {}).filter(function(date) {
+    return sundayCalendar.status[date] === false;
+  }).sort();
+  if (!closedSundays.length) return d;
+  return 'IF(' + d + ' IN (' + closedSundays.map(function(date) {
+    return 'DATE ' + sqlStringLiteral_(date);
+  }).join(',') + '), DATE_SUB(' + d + ', INTERVAL 1 DAY), ' + d + ')';
 }
 
 // กะคลัง 24 ชม. ต้องตัดจาก normalized timestamp เท่านั้น
@@ -2847,6 +2937,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
             picker_roster_zones: pickerRosterZones,
             picker_roster_generated: pickerDirectory.loadedAt || '',
             picker_roster_cache_ttl_seconds: PICKER_ROSTER_CACHE_TTL,
+            picker_sunday_ot: loadPickerSundayOtCalendar_(false),
             picker_shift_source: PICKER_NAME_SHEET_ID + '/' + PICKER_NAME_TAB + '!I:I',
             picker_role_source: PICKER_NAME_SHEET_ID + '/' + PICKER_NAME_TAB + '!F:F',
             zone_master: zoneMaster,
@@ -3075,6 +3166,22 @@ function testRun() {
     }
     pass('Calendar date + time bands', 'PTT -7 ชม., BPS เวลาเดิม, ไม่ย้อนวันหลังเที่ยงคืน; time band 07:00–18:59 / 19:00–06:59 ใช้คำนวณเวลาและ OT');
   } catch (err) { fail('24-hour shift boundaries', err); throw err; }
+
+  try {
+    const sundayOt = loadPickerSundayOtCalendar_(true);
+    const sundayDates = Object.keys((sundayOt && sundayOt.status) || {});
+    const invalidSundayDates = sundayDates.filter(function(date) {
+      const value = sundayOt.status[date];
+      const parsed = new Date(date + 'T00:00:00+07:00');
+      return isNaN(parsed.getTime()) || parsed.getDay() !== 0 || typeof value !== 'boolean';
+    });
+    if (!sundayDates.length || invalidSundayDates.length) {
+      throw new Error('ไม่พบปฏิทินวันอาทิตย์ของ Picker หรือรูปแบบสถานะ OT ไม่ถูกต้อง');
+    }
+    const openCount = sundayDates.filter(function(date) { return sundayOt.status[date]; }).length;
+    pass('Picker Sunday OT calendar',
+      sundayDates.length + ' วันอาทิตย์; เปิด OT=' + openCount + ', ปิด=' + (sundayDates.length - openCount));
+  } catch (err) { fail('Picker Sunday OT calendar', err); throw err; }
 
   try {
     const schemaCheck = bqQueryAll_([
