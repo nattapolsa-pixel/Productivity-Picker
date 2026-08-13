@@ -8,7 +8,9 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260813-compact-timeslot-v65'), 'HTML must cache-bust the compact time-slot release');
+assert(html.includes('app.js?v=20260813-not-found-detail-v66'), 'HTML must cache-bust the Not Found detail release');
+assert(app.includes('ดูรหัสพนักงานและสาเหตุ') && app.includes('ค่า Team ที่พบ') && app.includes('สาเหตุที่เป็น Not Found'),
+  'Not Found banner must expose picker codes, raw teams and reasons');
 assert(app.includes("action: 'set_dashboard_exclusions'") && app.includes("mode=dashboard_exclusions") &&
   app.includes('startSharedExclusionsPolling()'), 'All browsers must use and poll the same shared exclusion state');
 assert(backend.includes("SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1'") &&

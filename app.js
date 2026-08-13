@@ -2100,9 +2100,43 @@ function renderUnmappedTeamBanner() {
     return;
   }
   box.style.cssText = 'display:flex;margin:10px 0 16px;padding:10px 14px;border:1px solid #fdba74;border-left:5px solid #f97316;border-radius:12px;background:#fff7ed;color:#9a3412;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;';
-  box.innerHTML = '<b>⚠️ Not Found:</b> ไม่พบ Team A/B ของพนักงาน ' + fmt(Number(k.pickers || 0)) +
+  const missingPickers = [...(missing.by_picker || [])].sort((a, b) => b.qty - a.qty || b.pcs - a.pcs);
+  const rows = missingPickers.map(function(p, index) {
+    const picker = String(p.picker || '').trim() || '(ไม่มีรหัส)';
+    const rawTeam = getPickerRosterRawTeam(picker);
+    const responsibility = getPickerResponsibility(picker);
+    let reason = 'ไม่พบรหัสพนักงานใน Master บันทึกเวลาทำงาน';
+    if (rawTeam && rawTeam !== 'A' && rawTeam !== 'B') reason = 'ค่า Team เป็น “' + rawTeam + '” ซึ่งไม่ใช่ A/B';
+    else if (responsibility && !rawTeam) reason = 'พบรหัสแล้ว แต่ช่อง Team ว่าง';
+    return '<tr>' +
+      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:center;">' + (index + 1) + '</td>' +
+      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;font-weight:800;white-space:nowrap;">' + escapeZoneHtml(picker) + '</td>' +
+      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;">' + escapeZoneHtml(p.name && p.name !== picker ? p.name : '-') + '</td>' +
+      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:center;">' + escapeZoneHtml(rawTeam || '-') + '</td>' +
+      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;">' + escapeZoneHtml(reason) + '</td>' +
+      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:right;font-weight:700;">' + fmt(Math.ceil(Number(p.qty || 0))) + '</td>' +
+      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:right;">' + fmt(Math.ceil(Number(p.pcs || 0))) + '</td>' +
+      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:right;">' + fmt(Number(p.lines || 0)) + '</td>' +
+      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:right;">' + fmtDecimal1(Number(p.avg_prod || 0)) + '</td>' +
+    '</tr>';
+  }).join('');
+  box.innerHTML = '<div style="width:100%;"><b>⚠️ Not Found:</b> ไม่พบ Team A/B ของพนักงาน ' + fmt(Number(k.pickers || 0)) +
     ' คน · ' + fmt(Math.ceil(Number(k.qty || 0))) + ' หน่วยหยิบ · ' + fmt(Math.ceil(Number(k.pcs || 0))) +
-    ' ชิ้น · Productivity ' + fmtDecimal1(Number(k.avg_prod || 0)) + ' หยิบ/ชม. <span style="opacity:.8">กดตัวกรอง Not Found เพื่อดูรายละเอียด</span>';
+    ' ชิ้น · Productivity ' + fmtDecimal1(Number(k.avg_prod || 0)) + ' หยิบ/ชม.' +
+    '<details style="margin-top:8px;">' +
+      '<summary style="cursor:pointer;font-weight:800;color:#c2410c;user-select:none;">ดูรหัสพนักงานและสาเหตุ (' + fmt(missingPickers.length) + ' รายการ)</summary>' +
+      '<div style="overflow:auto;max-height:320px;margin-top:8px;border:1px solid #fed7aa;border-radius:10px;background:#fff;">' +
+        '<table style="width:100%;border-collapse:collapse;min-width:940px;font-size:11.5px;color:#7c2d12;">' +
+          '<thead style="position:sticky;top:0;background:#ffedd5;z-index:1;"><tr>' +
+            '<th style="padding:7px 8px;">#</th><th style="padding:7px 8px;text-align:left;">รหัส Picker</th>' +
+            '<th style="padding:7px 8px;text-align:left;">ชื่อพนักงาน</th><th style="padding:7px 8px;">ค่า Team ที่พบ</th>' +
+            '<th style="padding:7px 8px;text-align:left;">สาเหตุที่เป็น Not Found</th>' +
+            '<th style="padding:7px 8px;text-align:right;">หน่วยหยิบ</th><th style="padding:7px 8px;text-align:right;">ชิ้น</th>' +
+            '<th style="padding:7px 8px;text-align:right;">แถว</th><th style="padding:7px 8px;text-align:right;">Productivity</th>' +
+          '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '</div>' +
+      '<div style="margin-top:6px;opacity:.82;">ช่วงข้อมูล ' + escapeZoneHtml(dfrom) + ' ถึง ' + escapeZoneHtml(dto) + ' · แก้ Team ของรหัสเหล่านี้เป็น A หรือ B ใน Sheet บันทึกเวลาทำงาน แล้วกดรีเฟรชรายชื่อ</div>' +
+    '</details></div>';
 }
 
 function renderTargetAlertBanner() {
