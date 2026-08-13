@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v13-24h-shift-cutoff';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v14-roster-team-calendar-date';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -377,8 +377,7 @@ function sqlStringLiteral_(value) {
 // ใช้ helper เดียวกันทุก Main/Item/Time/Picker cube และ Bounds เพื่อป้องกันยอดแต่ละหน้าคลาดกัน
 function dashboardShiftDateSql_(pickDateExpression, tminExpression) {
   const d = String(pickDateExpression || 'pick_date');
-  const t = String(tminExpression || 'tmin');
-  return 'IF(' + t + ' < 420, DATE_SUB(' + d + ', INTERVAL 1 DAY), ' + d + ')';
+  return d;
 }
 
 // กะคลัง 24 ชม. ต้องตัดจาก normalized timestamp เท่านั้น
@@ -485,7 +484,7 @@ function buildItemCubeData_(e, dataEpoch) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
     throw new Error('ช่วงวันที่ไม่ถูกต้อง');
   }
-  if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
+  if (shift !== 'all' && shift !== 'morning' && shift !== 'night' && shift !== 'not_found') throw new Error('กะไม่ถูกต้อง');
   if (getDashboardDataEpoch_() !== expectedEpoch) {
     throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล BigQuery เปลี่ยนก่อนเริ่มโหลด กรุณาลองใหม่อีกครั้ง');
   }
@@ -493,13 +492,13 @@ function buildItemCubeData_(e, dataEpoch) {
   const scope = getDashboardRequestScope_(e);
   const excludedSql = dashboardExclusionSql_(scope, 'owner_key', 'sku_key');
   const shiftSql = shift === 'morning'
-    ? "AND shift_code = 'M'"
-    : (shift === 'night' ? "AND shift_code = 'N'" : '');
+    ? "AND report_team = 'A'"
+    : (shift === 'night' ? "AND report_team = 'B'" : (shift === 'not_found' ? "AND report_team = 'X'" : ''));
   const sql = [
     'WITH base_picks AS (',
     '  SELECT',
     '    ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' AS shift_date,',
-    '    ' + dashboardShiftCodeSql_('tmin') + ' AS shift_code,',
+    '    ' + pickerRosterTeamCodeSql_('picker_id') + ' AS report_team,',
     "    COALESCE(location, zone, '??') AS location_key,",
     "    COALESCE(zone, '??') AS zone_key,",
     "    UPPER(COALESCE(owner, '-')) AS owner_key,",
@@ -516,17 +515,17 @@ function buildItemCubeData_(e, dataEpoch) {
     '    ' + shiftSql,
     '    ' + excludedSql,
     ')',
-    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, location_key, zone_key, owner_key, sku_key,",
+    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), report_team, location_key, zone_key, owner_key, sku_key,",
     '       SUM(pcs), SUM(pick_qty), COUNT(*)',
     'FROM filtered_picks',
-    'GROUP BY shift_date, shift_code, location_key, zone_key, owner_key, sku_key',
+    'GROUP BY shift_date, report_team, location_key, zone_key, owner_key, sku_key',
     'ORDER BY shift_date, location_key, zone_key, owner_key, sku_key'
   ].join('\n');
 
   const rows = [];
   bqQueryEach_(sql, function(r) {
     rows.push(
-      String(r[0] || ''), r[1] === 'N' ? 1 : 0,
+      String(r[0] || ''), r[1] === 'X' ? 2 : (r[1] === 'B' ? 1 : 0),
       String(r[2] || '??'), String(r[3] || '??'), String(r[4] || '-'), String(r[5] || '(none)'),
       Number(r[6]) || 0, Number(r[7]) || 0, Number(r[8]) || 0
     );
@@ -557,7 +556,7 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
     throw new Error('ช่วงวันที่ไม่ถูกต้อง');
   }
-  if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
+  if (shift !== 'all' && shift !== 'morning' && shift !== 'night' && shift !== 'not_found') throw new Error('กะไม่ถูกต้อง');
 
   if (getDashboardDataEpoch_() !== expectedEpoch) {
     throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล BigQuery เปลี่ยนก่อนเริ่มโหลด กรุณาลองใหม่อีกครั้ง');
@@ -631,13 +630,13 @@ function buildPickerItemsData_(e, requestScope) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
     throw new Error('ช่วงวันที่ไม่ถูกต้อง');
   }
-  if (shift !== 'all' && shift !== 'morning' && shift !== 'night') throw new Error('กะไม่ถูกต้อง');
+  if (shift !== 'all' && shift !== 'morning' && shift !== 'night' && shift !== 'not_found') throw new Error('กะไม่ถูกต้อง');
 
   const scope = requestScope || { excludedItems: [] };
   const excludedSql = dashboardExclusionSql_(scope, 'owner_key', 'sku_key');
-  const shiftSql = shift === 'morning'
-    ? "AND shift_code = 'M'"
-    : (shift === 'night' ? "AND shift_code = 'N'" : '');
+  // This endpoint is already scoped to one picker. Team filtering is performed
+  // from picker_roster_teams in the client; keep all time bands for work/OT detail.
+  const shiftSql = '';
   const sql = [
     'WITH base AS (',
     '  SELECT',
@@ -2124,6 +2123,38 @@ function pickerRosterShiftCodeSql_(pickerExpr, tminExpr) {
   return parts.join(' ');
 }
 
+// Report grouping is owned by the employee roster, never inferred from pick time.
+// X is retained so unmapped employee IDs remain visible and auditable.
+function pickerRosterTeamCodeSql_(pickerExpr) {
+  const directory = loadPickerDirectory_();
+  const teams = directory.rosterTeams || {};
+  const aIds = [];
+  const bIds = [];
+  const addVariants = function(target, rawId) {
+    const id = String(rawId || '').trim();
+    if (!id) return;
+    target.push(id);
+    if (/^\d+$/.test(id)) {
+      const noZero = id.replace(/^0+(?=\d)/, '');
+      if (noZero && noZero !== id) target.push(noZero);
+    }
+  };
+  Object.keys(teams).forEach(function(id) {
+    const team = String(teams[id] || '').trim().toUpperCase();
+    if (team === 'A') addVariants(aIds, id);
+    else if (team === 'B') addVariants(bIds, id);
+  });
+  const unique = function(list) { return Array.from(new Set(list)); };
+  const pickerSql = 'CAST(' + pickerExpr + ' AS STRING)';
+  const parts = ['CASE'];
+  const a = unique(aIds);
+  const b = unique(bIds);
+  if (a.length) parts.push('WHEN ' + pickerSql + ' IN (' + a.map(sqlStringLiteral_).join(',') + ") THEN 'A'");
+  if (b.length) parts.push('WHEN ' + pickerSql + ' IN (' + b.map(sqlStringLiteral_).join(',') + ") THEN 'B'");
+  parts.push("ELSE 'X'", 'END');
+  return parts.join(' ');
+}
+
 function loadZoneMasterMap_() {
   const cached = readMasterCache_('zone_master_v1');
   if (cached) return cached;
@@ -3024,10 +3055,10 @@ function testRun() {
   try {
     const shiftCases = bqQueryAll_([
       'WITH cases AS (',
-      "  SELECT 'PTT' AS category, DATETIME '2026-08-08 13:59:00' AS raw_ts, DATE '2026-08-07' AS expected_date, 'N' AS expected_shift UNION ALL",
+      "  SELECT 'PTT' AS category, DATETIME '2026-08-08 13:59:00' AS raw_ts, DATE '2026-08-08' AS expected_date, 'N' AS expected_shift UNION ALL",
       "  SELECT 'PTT', DATETIME '2026-08-08 14:00:00', DATE '2026-08-08', 'M' UNION ALL",
-      "  SELECT 'PTT', DATETIME '2026-08-08 07:00:00', DATE '2026-08-07', 'N' UNION ALL",
-      "  SELECT 'BPS', DATETIME '2026-08-08 06:59:00', DATE '2026-08-07', 'N' UNION ALL",
+      "  SELECT 'PTT', DATETIME '2026-08-08 07:00:00', DATE '2026-08-08', 'N' UNION ALL",
+      "  SELECT 'BPS', DATETIME '2026-08-08 06:59:00', DATE '2026-08-08', 'N' UNION ALL",
       "  SELECT 'BPS', DATETIME '2026-08-08 07:00:00', DATE '2026-08-08', 'M' UNION ALL",
       "  SELECT 'BPS', DATETIME '2026-08-08 18:59:00', DATE '2026-08-08', 'M' UNION ALL",
       "  SELECT 'BPS', DATETIME '2026-08-08 19:00:00', DATE '2026-08-08', 'N'",
@@ -3035,14 +3066,14 @@ function testRun() {
       "  SELECT *, IF(category = 'PTT', DATETIME_SUB(raw_ts, INTERVAL 7 HOUR), raw_ts) AS ts FROM cases",
       ')',
       'SELECT COUNTIF(',
-      '  IF(EXTRACT(HOUR FROM ts) < 7, DATE_SUB(DATE(ts), INTERVAL 1 DAY), DATE(ts)) != expected_date',
+      '  DATE(ts) != expected_date',
       "  OR IF(EXTRACT(HOUR FROM ts) >= 7 AND EXTRACT(HOUR FROM ts) < 19, 'M', 'N') != expected_shift",
       ') AS failed_cases FROM normalized'
     ].join('\n'), 60000);
     if (!shiftCases.length || Number(shiftCases[0][0] || 0) !== 0) {
       throw new Error('PTT/BPS normalization หรือขอบเขตวันกะ 07:00 ไม่ถูกต้อง');
     }
-    pass('24-hour shift boundaries', 'PTT -7 ชม., BPS เวลาเดิม, A 07:00–18:59, B 19:00–06:59');
+    pass('Calendar date + time bands', 'PTT -7 ชม., BPS เวลาเดิม, ไม่ย้อนวันหลังเที่ยงคืน; time band 07:00–18:59 / 19:00–06:59 ใช้คำนวณเวลาและ OT');
   } catch (err) { fail('24-hour shift boundaries', err); throw err; }
 
   try {

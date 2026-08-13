@@ -19,12 +19,12 @@ const context = vm.createContext({
 vm.runInContext(source.slice(0, initMarker), context, {filename:'app.js'});
 
 const cases = [
-  ['2026-08-08', 419, 'night', '2026-08-07', 719],
+  ['2026-08-08', 419, 'night', '2026-08-08', 719],
   ['2026-08-08', 420, 'morning', '2026-08-08', 0],
   ['2026-08-08', 1139, 'morning', '2026-08-08', 719],
   ['2026-08-08', 1140, 'night', '2026-08-08', 0],
   ['2026-08-08', 1439, 'night', '2026-08-08', 299],
-  ['2026-08-09', 0, 'night', '2026-08-08', 300]
+  ['2026-08-09', 0, 'night', '2026-08-09', 300]
 ];
 for (const [date, minute, shift, shiftDate, shiftMinute] of cases) {
   context.__case = context.shiftOf(date, minute);
@@ -34,7 +34,7 @@ for (const [date, minute, shift, shiftDate, shiftMinute] of cases) {
 // Work cube shift code must win over roster Team; roster is planning metadata only.
 vm.runInContext(`
   DATA = {
-    meta:{picker_shift_teams:{P1:'B'}},
+    meta:{picker_shift_teams:{P1:'B'},picker_roster_teams:{P1:'B'}},
     PTT:{row_width:9,dates:['2026-08-08'],pickers:['P1'],rows:[0,0,'AA',0,1,1,1,0,180]},
     BPS:{row_width:9,dates:[],pickers:[],rows:[]}
   };
@@ -43,10 +43,21 @@ vm.runInContext(`
 `, context);
 assert.equal(context.__prepared.sh, 'morning');
 assert.equal(context.__prepared.sd, '2026-08-08');
+assert.equal(context.__prepared.team, 'B');
+
+vm.runInContext(`
+  DATA.meta.picker_roster_teams = {};
+  prepShifts();
+  globalThis.__unmapped = DATA.PTT._sh[0];
+`, context);
+assert.equal(context.__unmapped.team, 'NOT_FOUND');
 
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 assert(backend.includes('function dashboardShiftDateSql_'));
 assert(backend.includes('function dashboardShiftCodeSql_'));
+assert(backend.includes('function pickerRosterTeamCodeSql_'));
+const dateHelper = backend.slice(backend.indexOf('function dashboardShiftDateSql_'), backend.indexOf('function dashboardShiftCodeSql_'));
+assert(!dateHelper.includes('DATE_SUB('));
 assert.equal((backend.match(/pickerRosterShiftCodeSql_\('picker_id', 'tmin'\)/g) || []).length, 0);
 
 const pipeline = fs.readFileSync(path.join(root, 'pick_uom_master_pipeline.sql'), 'utf8');

@@ -7,7 +7,7 @@
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 // ส่ง compact work cube ก่อน แล้ว lazy-load item/time detail เป็นรายวัน
 // pick_qty ต้องมาจาก BigQuery Master_Item + Master_Pack เท่านั้น
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v13-24h-shift-cutoff';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v14-roster-team-calendar-date';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -74,7 +74,7 @@ const HISTORICAL_V1 = Object.freeze({
 });
 const HISTORICAL_V1_DAILY = '2026-01-02|48453|102.7|59;2026-01-03|94750|125.1|68;2026-01-04|27939|138.6|30;2026-01-05|97018|126.4|108;2026-01-06|37194|139.3|35;2026-01-07|119703|138.3|78;2026-01-08|61455|132.2|72;2026-01-09|117698|136.8|83;2026-01-10|99466|124.8|77;2026-01-11|80226|140.2|33;2026-01-12|158099|146.7|75;2026-01-13|159822|122.4|38;2026-01-14|95115|127|37;2026-01-15|96310|122.9|83;2026-01-16|46862|114|77;2026-01-22|16682|204|3;2026-01-23|141456|126.5|123;2026-01-24|120595|141.3|88;2026-01-25|91353|146.4|73;2026-01-26|146117|145.1|76;2026-01-27|122832|145.4|78;2026-01-28|138170|151.1|81;2026-01-29|139205|146.4|88;2026-01-30|123028|139.6|84;2026-01-31|110640|120.3|107;2026-02-02|70629|123.1|73;2026-02-03|97917|133.2|77;2026-02-04|110475|134.5|80;2026-02-05|111756|148.4|104;2026-02-06|86798|142.8|70;2026-02-07|102596|160.2|67;2026-02-09|67126|179|58;2026-02-10|93188|132|69;2026-02-11|74456|130.4|65;2026-02-12|52227|137|65;2026-02-13|84713|132.3|74;2026-02-14|259980|133|100;2026-02-16|55224|142.9|69;2026-02-17|417575|142.7|76;2026-02-18|241255|141.8|76;2026-02-19|40253|141.1|37;2026-02-20|89480|140.1|74;2026-02-21|142478|153.2|110;2026-02-23|72662|158|62;2026-02-24|38006|159.9|32;2026-02-25|91836|143.1|77;2026-02-26|96763|135.5|77;2026-02-27|79763|128|71;2026-02-28|80000|138.9|69;2026-03-02|83116|133.5|104;2026-03-03|93839|147|66;2026-03-04|99467|143.5|74;2026-03-05|139342|145.9|108;2026-03-06|112027|143.3|80;2026-03-07|102857|138.1|78;2026-03-08|38716|162.7|31;2026-03-09|67873|149.2|64;2026-03-10|105921|129.2|86;2026-03-11|185165|146|81;2026-03-12|100058|126.3|81;2026-03-14|210876|116.2|203;2026-03-15|24837|108.8|36;2026-03-16|117868|133.1|76;2026-03-17|99704|136.5|89;2026-03-18|201103|132.9|157;2026-03-20|101967|125.3|84;2026-03-21|102890|134.6|81;2026-03-22|30263|138.8|36;2026-03-23|71432|143.2|72;2026-03-24|105247|132.7|82;2026-03-25|86572|121.3|75;2026-03-26|106966|124|86;2026-03-27|88296|120.3|84;2026-03-28|91332|112.3|87;2026-03-29|34480|137.9|39;2026-03-30|69392|125|69;2026-03-31|97091|119.1|82;2026-04-01|101280|120.8|86;2026-04-02|102517|127.4|82;2026-04-03|108925|128.2|88;2026-04-04|109576|131|87;2026-04-05|116447|148.1|111;2026-04-06|52570|138.7|33;2026-04-07|118004|141.3|84;2026-04-08|126551|147|90;2026-04-09|124667|147.2|86;2026-04-10|136450|165.4|86;2026-04-11|120621|159.2|79;2026-04-12|69048|128.8|61;2026-04-13|12211|107.4|16;2026-04-15|11614|154.3|6;2026-04-16|51730|120|60;2026-04-17|80781|116.6|73;2026-04-18|105636|126.9|85;2026-04-19|62945|126.3|69;2026-04-20|68221|138|69;2026-04-21|228111|133.4|77;2026-04-22|54526|136.9|35;2026-04-23|107552|128.3|78;2026-04-24|95556|128.2|77;2026-04-25|121667|136.2|105;2026-04-27|85394|125.8|104;2026-04-28|98026|123|87;2026-04-29|108653|141.6|84;2026-04-30|153030|125.1|48;2026-05-01|30821|139.2|39;2026-05-02|91835|189.3|69;2026-05-03|33521|178.5|30;2026-05-04|70417|192.4|48;2026-05-05|105392|133.3|78;2026-05-06|102870|122.9|81;2026-05-07|93778|120.6|79;2026-05-08|139650|119.1|128;2026-05-09|100771|125.1|88;2026-05-10|107994|138.5|80;2026-05-11|33780|124.8|38;2026-05-12|149129|129.3|79;2026-05-13|51197|121.5|31;2026-05-14|120134|125.2|81;2026-05-15|85775|120.3|82;2026-05-16|123379|134.8|113;2026-05-18|72009|136.9|87;2026-05-19|107862|137.7|123;2026-05-20|89089|133.8|87;2026-05-21|94324|126.6|87;2026-05-22|89936|137.7|85;2026-05-23|88164|130.5|88;2026-05-24|24305|121.1|40;2026-05-25|64034|131.5|80;2026-05-26|93262|141.6|88;2026-05-27|113764|147.7|88;2026-05-28|94952|133.8|82;2026-05-29|88153|137.6|82;2026-05-30|94276|138|82;2026-05-31|24877|135.9|36;2026-06-01|65497|146.7|75;2026-06-02|67591|123.5|80;2026-06-03|94636|137.5|84;2026-06-04|94984|142.3|82;2026-06-05|139893|202.3|86;2026-06-06|159787|202.3|80;2026-06-07|34063|177.7|34;2026-06-08|80798|132.1|65;2026-06-09|185438|146.3|72;2026-06-10|174046|134.9|75;2026-06-11|146403|133|75;2026-06-12|82096|126.5|71;2026-06-13|74680|131.1|74;2026-06-14|17968|129.4|32;2026-06-15|60848|125.6|72;2026-06-16|87268|134.8|77;2026-06-17|79088|136.4|79;2026-06-18|86415|144.4|76;2026-06-19|73019|138.2|75;2026-06-20|82019|139|79;2026-06-21|17960|141.3|27;2026-06-22|61550|137.6|75;2026-06-23|76583|133.1|76;2026-06-24|76566|136.9|74;2026-06-25|84866|145.9|77;2026-06-26|83167|136.7|81;2026-06-27|88106|144.3|71;2026-06-28|19455|161.6|29;2026-06-29|64522|153.6|70;2026-06-30|92967|144.4|71;2026-07-01|92643|155.1|71;2026-07-02|158295|149.1|71;2026-07-03|91265|136.5|80;2026-07-04|106552|139.7|78;2026-07-05|27308|121.4|34;2026-07-06|99850|154.2|67;2026-07-07|107097|142.3|76;2026-07-08|91367|138.8|77;2026-07-09|84172|141.1|78;2026-07-10|74057|136.8|74;2026-07-11|74575|137.1|72;2026-07-12|17132|123.9|31;2026-07-13|55098|133.9|74;2026-07-14|149571|146.4|78;2026-07-15|126557|142.7|78;2026-07-16|83103|149.2|74;2026-07-17|104061|179.6|74;2026-07-18|123370|186.6|75;2026-07-19|29330|197.9|28'
   .split(';').map(value => { const [date, total, productivity, productiveRows] = value.split('|'); return Object.freeze({ date, total: Number(total), productivity: Number(productivity), productiveRows: Number(productiveRows) }); });
-const SHIFT_LABEL = { morning: '🅰️ กะ A', night: '🅱️ กะ B', '-': '-' };
+const SHIFT_LABEL = { morning: '🅰️ กะ A', night: '🅱️ กะ B', not_found: '⚠️ Not Found', '-': '-' };
 
 Chart.register(ChartDataLabels);
 Chart.defaults.font.family = "'Prompt',sans-serif";
@@ -556,7 +556,7 @@ function rangeForPeriod(mode, baseDate) {
 function shiftOf(ds, t) {
   if (t >= 420 && t < 1140) return { sh: 'morning', sd: ds, sm: t - 420 };   // fallback กะ A: 07:00–18:59
   if (t >= 1140) return { sh: 'night', sd: ds, sm: t - 1140 };  // fallback กะ B: 19:00–23:59
-  return { sh: 'night', sd: addDays(ds, -1), sm: t + 300 };  // fallback กะ B: 00:00–06:59 ของวันกะก่อน
+  return { sh: 'night', sd: ds, sm: t + 300 };  // 00:00–06:59 ใช้วันที่จริง; time band ยังต่อเนื่องเพื่อคำนวณพัก/OT
 }
 // OT = จำนวนบล็อก 30 นาทีที่ทำครบ นับจากนาทีที่ 570 (16:30/04:30) ต้นกะ, สูงสุด OT_MAX
 function otHours(maxSm) {
@@ -652,8 +652,9 @@ function prepShifts() {
       // กะของรายการหยิบต้องอิง normalized timestamp เท่านั้น
       // Team A/B จาก roster ใช้สำหรับ Workforce Planning แต่ห้าม override ผลงานจริง
       const sh = timeShift;
+      const picker = S.pickers[S.rows[offset + 3]];
       S._sh[i] = {
-        sd: S.dates[dateIdx], sh,
+        sd: S.dates[dateIdx], sh, team: getPickerReportTeam(picker),
         sm: Number(S.rows[offset + 7]) || 0,
         smMin: Number(S.rows[offset + 7]) || 0,
         smMax: Number(S.rows[offset + 8]) || 0
@@ -740,6 +741,17 @@ function getPickerMetaMapValue(mapName, code) {
 
 function getPickerResponsibility(code) { return getPickerMetaMapValue('picker_responsibilities', code); }
 function getPickerRosterRawTeam(code) { return getPickerMetaMapValue('picker_roster_teams', code).toUpperCase(); }
+function getPickerReportTeam(code) {
+  const team = getPickerRosterRawTeam(code);
+  return team === 'A' || team === 'B' ? team : 'NOT_FOUND';
+}
+function matchesReportTeam(shiftInfo, picker, filter) {
+  if (filter === 'all') return true;
+  const team = shiftInfo && shiftInfo.team ? shiftInfo.team : getPickerReportTeam(picker);
+  return (filter === 'morning' && team === 'A') ||
+    (filter === 'night' && team === 'B') ||
+    (filter === 'not_found' && team === 'NOT_FOUND');
+}
 function getPickerRosterHomeZone(code) { return getPickerMetaMapValue('picker_roster_zones', code); }
 
 function getPickerRosterPlanningSummary() {
@@ -1139,9 +1151,8 @@ function openZoneDetailModal(zoneCode) {
     for (let i = 0; i < count; i++) {
       const sh = S._sh ? S._sh[i] : null;
       if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
-      if (shiftF !== 'all' && sh.sh !== shiftF) continue;
-
       const row = packedRowData(S, i);
+      if (!matchesReportTeam(sh, S.pickers[row.pickerIdx], shiftF)) continue;
       const rawLoc = (S.locations && S.locations[row.zone]) ? S.locations[row.zone] : row.zone;
       const zInfo = getZoneInfo(rawLoc);
       const zCode = zInfo.zone || zInfo.location || String(rawLoc || '-').trim().toUpperCase();
@@ -1486,12 +1497,12 @@ function aggregate(system, from, to, sf) {
   for (let i = 0; i < rowCount; i++) {
     const si = SH[i];
     if (si.sd < from || si.sd > to) continue;
-    if (sf !== 'all' && si.sh !== sf) continue;
     const r = packedRowData(S, i);
     const zoneInfo = getZoneInfo(r.zone);
     const location = zoneInfo.location;
     const zone = zoneInfo.zone;
     const picker = S.pickers[r.pickerIdx];
+    if (!matchesReportTeam(si, picker, sf)) continue;
     const pVal = r.pcs;
     const qVal = r.pickQty;
     const lineVal = r.lines;
@@ -1847,8 +1858,9 @@ function sysTotals(system, from, to, sf) {
   const rowCount = packedRowCount(S);
   for (let i = 0; i < rowCount; i++) {
     const si = SH[i];
-    if (si && si.sd >= from && si.sd <= to && (sf === 'all' || si.sh === sf)) {
+    if (si && si.sd >= from && si.sd <= to) {
       const r = packedRowData(S, i);
+      if (!matchesReportTeam(si, S.pickers[r.pickerIdx], sf)) continue;
       if (isZoneExcluded(getZoneInfo(r.zone).zone)) continue;
       pcs += r.pcs;
       qty += r.pickQty;
@@ -1900,7 +1912,7 @@ function buildControls() {
     + '<span class="lab">หน่วยที่แสดง:</span>'
     + '<div class="systog unittog"><button data-unit="units">📦 หน่วยหยิบ (Units)</button><button data-unit="pcs">🧩 จำนวนชิ้น (Pcs)</button></div>'
     + '<span class="lab">กะ:</span>'
-    + '<div class="systog shiftog"><button data-sh="all">ทุกกะ</button><button data-sh="morning">🅰️ กะ A</button><button data-sh="night">🅱️ กะ B</button></div>'
+    + '<div class="systog shiftog"><button data-sh="all">ทุกกะ</button><button data-sh="morning">🅰️ กะ A</button><button data-sh="night">🅱️ กะ B</button><button data-sh="not_found">⚠️ Not Found</button></div>'
     + '<span class="lab">🎯 เป้า Target:</span>'
     + `<div class="datebar" style="padding:3px 6px; display:inline-flex; align-items:center; gap:4px;">`
     + `<input type="number" id="prodTargetInput" value="${prodTarget}" min="1" max="1000" style="width:55px; font-weight:700; text-align:center;">`
@@ -2070,6 +2082,27 @@ function renderKPIs() {
   });
   countUp();
   renderTargetAlertBanner();
+  renderUnmappedTeamBanner();
+}
+
+function renderUnmappedTeamBanner() {
+  let box = document.getElementById('unmappedTeamBanner');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'unmappedTeamBanner';
+    const anchor = document.getElementById('prodTargetAlertBanner') || document.getElementById('kpis');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor.nextSibling);
+  }
+  const missing = aggregate(sys, dfrom, dto, 'not_found');
+  const k = missing && missing.kpis ? missing.kpis : {};
+  if (!Number(k.qty || 0) && !Number(k.pcs || 0)) {
+    box.style.display = 'none';
+    return;
+  }
+  box.style.cssText = 'display:flex;margin:10px 0 16px;padding:10px 14px;border:1px solid #fdba74;border-left:5px solid #f97316;border-radius:12px;background:#fff7ed;color:#9a3412;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;';
+  box.innerHTML = '<b>⚠️ Not Found:</b> ไม่พบ Team A/B ของพนักงาน ' + fmt(Number(k.pickers || 0)) +
+    ' คน · ' + fmt(Math.ceil(Number(k.qty || 0))) + ' หน่วยหยิบ · ' + fmt(Math.ceil(Number(k.pcs || 0))) +
+    ' ชิ้น · Productivity ' + fmt1(Number(k.avg_prod || 0)) + ' หยิบ/ชม. <span style="opacity:.8">กดตัวกรอง Not Found เพื่อดูรายละเอียด</span>';
 }
 
 function renderTargetAlertBanner() {
@@ -2314,7 +2347,8 @@ function forEachCurrentItemRow(system, from, to, sf, callback) {
     if (width === 9) {
       for (let offset = 0; offset < rows.length; offset += 9) {
         const date = String(rows[offset] || '');
-        const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+        const shiftCode = Number(rows[offset + 1]);
+        const shift = shiftCode === 2 ? 'not_found' : (shiftCode === 1 ? 'night' : 'morning');
         if (date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
         callback({
           date, shift,
@@ -2331,7 +2365,8 @@ function forEachCurrentItemRow(system, from, to, sf, callback) {
     }
     for (let offset = 0; offset < rows.length; offset += 8) {
       const date = String(rows[offset] || '');
-      const shift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
+      const shiftCode = Number(rows[offset + 1]);
+      const shift = shiftCode === 2 ? 'not_found' : (shiftCode === 1 ? 'night' : 'morning');
       if (date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
       callback({
         date, shift,
@@ -2585,11 +2620,11 @@ function forEachCurrentSlotRow(system, from, to, sf, callback) {
       const date = String(rows[offset] || '');
       const timeShift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
       const picker = String(rows[offset + 3] || '(none)');
-      const shift = getPickerRosterShift(picker, timeShift);
-      if (date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
+      const team = getPickerReportTeam(picker);
+      if (date < from || date > to || !matchesReportTeam({ team }, picker, sf)) continue;
       callback({
         date,
-        shift,
+        shift: timeShift, team,
         zone: rows[offset + 2],
         picker,
         hour: Number(rows[offset + 4]) || 0,
@@ -2608,10 +2643,10 @@ function forEachCurrentSlotRow(system, from, to, sf, callback) {
     const date = source.dates[row.dateIdx];
     const timeShift = row.shiftCode === 1 ? 'night' : 'morning';
     const picker = String(source.pickers[row.pickerIdx] || '(none)');
-    const shift = getPickerRosterShift(picker, timeShift);
-    if (date < from || date > to || (sf !== 'all' && shift !== sf)) continue;
+    const team = getPickerReportTeam(picker);
+    if (date < from || date > to || !matchesReportTeam({ team }, picker, sf)) continue;
     callback({
-      date, shift, zone: row.zone, picker,
+      date, shift: timeShift, team, zone: row.zone, picker,
       hour: row.hour, pcs: row.pcs, pickQty: row.pickQty, lines: row.lines
     });
   }
@@ -2737,8 +2772,7 @@ function applyPickerItemsPayload(pickerId, requestKey, payload) {
   for (let offset = 0; offset < rows.length; offset += width) {
     const date = String(rows[offset] || '');
     const timeShift = Number(rows[offset + 1]) === 1 ? 'night' : 'morning';
-    const shift = getPickerRosterShift(pickerId, timeShift);
-    if (shiftF !== 'all' && shift !== shiftF) continue;
+    if (!matchesReportTeam({ team: getPickerReportTeam(pickerId) }, pickerId, shiftF)) continue;
     const dRec = pData.byDate && pData.byDate[date];
     if (!dRec) continue;
     const zone = getZoneInfo(rows[offset + 2]).zone;
@@ -2915,9 +2949,8 @@ function renderTypeBreakdownPage() {
     for (let i = 0; i < count; i++) {
       const sh = S._sh ? S._sh[i] : null;
       if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
-      if (shiftF !== 'all' && sh.sh !== shiftF) continue;
-
       const row = packedRowData(S, i);
+      if (!matchesReportTeam(sh, S.pickers[row.pickerIdx], shiftF)) continue;
       const val = isPcs ? row.pcs : row.pickQty;
       const lineVal = row.lines;
       const pickerId = String(S.pickers[row.pickerIdx] || '-').trim();
@@ -3053,9 +3086,8 @@ function renderTypeBreakdownPage() {
     for (let i = 0; i < count; i++) {
       const sh = S._sh ? S._sh[i] : null;
       if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
-      if (shiftF !== 'all' && sh.sh !== shiftF) continue;
-
       const row = packedRowData(S, i);
+      if (!matchesReportTeam(sh, S.pickers[row.pickerIdx], shiftF)) continue;
       const rawLoc = (S.locations && S.locations[row.zone]) ? S.locations[row.zone] : row.zone;
       const zInfo = getZoneInfo(rawLoc);
       if (isZoneExcluded(zInfo.zone)) continue;
@@ -4142,8 +4174,8 @@ const builders = {
       for (let i = 0; i < count; i++) {
         const sh = S._sh ? S._sh[i] : null;
         if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
-        if (shiftF !== 'all' && sh.sh !== shiftF) continue;
         const row = packedRowData(S, i);
+        if (!matchesReportTeam(sh, S.pickers[row.pickerIdx], shiftF)) continue;
         if (isZoneExcluded(getZoneInfo(row.zone).zone)) continue;
 
         const val = isPcs ? row.pcs : row.pickQty;
@@ -4207,7 +4239,7 @@ const builders = {
     }
 
     // 3. Shift Performance Comparison (Day Shift vs Night Shift)
-    let dayVol = 0, nightVol = 0;
+    let dayVol = 0, nightVol = 0, unmappedVol = 0;
     ['PTT', 'BPS'].forEach(sName => {
       const S = DATA[sName];
       if (!S || !Array.isArray(S.rows)) return;
@@ -4215,13 +4247,14 @@ const builders = {
       for (let i = 0; i < count; i++) {
         const sh = S._sh ? S._sh[i] : null;
         if (!sh || sh.sd < dfrom || sh.sd > dto) continue;
-        if (shiftF !== 'all' && sh.sh !== shiftF) continue;
         const row = packedRowData(S, i);
+        if (!matchesReportTeam(sh, S.pickers[row.pickerIdx], shiftF)) continue;
         if (isZoneExcluded(getZoneInfo(row.zone).zone)) continue;
 
         const val = isPcs ? row.pcs : row.pickQty;
-        if (sh.sh === 'night') nightVol += val;
-        else dayVol += val;
+        if (sh.team === 'B') nightVol += val;
+        else if (sh.team === 'A') dayVol += val;
+        else unmappedVol += val;
       }
     });
 
@@ -4231,11 +4264,11 @@ const builders = {
       new Chart(shiftEl, {
         type: 'bar',
         data: {
-          labels: ['🅰️ กะ A', '🅱️ กะ B'],
+          labels: ['🅰️ กะ A', '🅱️ กะ B', '⚠️ Not Found'],
           datasets: [{
             label: unitTxt,
-            data: [dayVol, nightVol],
-            backgroundColor: ['#f59e0b', '#6366f1'],
+            data: [dayVol, nightVol, unmappedVol],
+            backgroundColor: ['#f59e0b', '#6366f1', '#f97316'],
             borderRadius: 8,
             barThickness: 32
           }]

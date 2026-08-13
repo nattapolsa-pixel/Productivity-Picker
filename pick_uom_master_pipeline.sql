@@ -176,16 +176,12 @@ LEFT JOIN `productivity-pick.pick_analytics.dim_pick_master_current` AS m
  AND UPPER(TRIM(d.sku)) = m.item;
 
 -- All downstream dates/shifts derive from the same normalized timestamp.
--- Warehouse day starts at 07:00: 00:00–06:59 belongs to the previous shift date.
+-- Reporting date is the normalized calendar date. Team A/B comes from the employee roster.
 CREATE OR REPLACE VIEW `productivity-pick.pick_analytics.v_pick_enriched` AS
 SELECT
   c.*,
   DATE(c.pick_ts_local) AS pick_date,
-  IF(
-    EXTRACT(HOUR FROM c.pick_ts_local) < 7,
-    DATE_SUB(DATE(c.pick_ts_local), INTERVAL 1 DAY),
-    DATE(c.pick_ts_local)
-  ) AS shift_date,
+  DATE(c.pick_ts_local) AS shift_date,
   IF(
     EXTRACT(HOUR FROM c.pick_ts_local) >= 7
       AND EXTRACT(HOUR FROM c.pick_ts_local) < 19,
@@ -197,16 +193,8 @@ SELECT
     EXTRACT(HOUR FROM c.pick_ts_local),
     EXTRACT(HOUR FROM c.pick_ts_local)
   ) AS time_slot,
-  DATE_TRUNC(
-    IF(EXTRACT(HOUR FROM c.pick_ts_local) < 7,
-      DATE_SUB(DATE(c.pick_ts_local), INTERVAL 1 DAY), DATE(c.pick_ts_local)),
-    WEEK(MONDAY)
-  ) AS week_start,
-  DATE_TRUNC(
-    IF(EXTRACT(HOUR FROM c.pick_ts_local) < 7,
-      DATE_SUB(DATE(c.pick_ts_local), INTERVAL 1 DAY), DATE(c.pick_ts_local)),
-    MONTH
-  ) AS month_start
+  DATE_TRUNC(DATE(c.pick_ts_local), WEEK(MONDAY)) AS week_start,
+  DATE_TRUNC(DATE(c.pick_ts_local), MONTH) AS month_start
 FROM `productivity-pick.pick_analytics.v_pick_clean` AS c
 WHERE c.pick_ts_local IS NOT NULL;
 

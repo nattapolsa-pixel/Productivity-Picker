@@ -67,7 +67,7 @@ assert(app.includes('const pendingLoad = activeLoadPromise;'), 'Post-upload refr
 assert(app.includes('const result = await loadData(true);'), 'Post-upload refresh must force one post-MERGE request');
 assert(app.includes('retry.onclick = () => loadData(false)'), 'Retry after timeout must reuse a completed server cache');
 assert(app.includes('30 * 24 * 60 * 60 * 1000'), 'Last-known-good dashboard cache must survive normal gaps between visits');
-assert(app.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v13-24h-shift-cutoff'"), 'Frontend must use the 24-hour shift payload');
+assert(app.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v14-roster-team-calendar-date'"), 'Frontend must use the roster-team calendar-date payload');
 assert(app.includes('packedItemRowData') && app.includes('packedSlotRowData'), 'Frontend cube readers are missing');
 assert(app.includes("'mode=picker_items'"), 'Picker SKU detail must load lazily instead of bloating the initial payload');
 assert(app.includes('loadPickerItemsForDrilldown'), 'Picker SKU lazy loader is missing');
@@ -82,11 +82,11 @@ assert(app.includes('function scheduleExclusionBackgroundRefresh()') && app.incl
 assert(app.includes('// Item Cube เก็บข้อมูลเต็มและกรอง Exclude ใน Browser') &&
   !app.includes("dashboardResponseEncodingQuery(),\n        dashboardScopeQuery(),\n        't=' + Date.now()"),
   'Item Cube must be exclusion-independent so item clicks can render instantly');
-assert(app.includes('render();\n  // รวมหลายคลิกติดกันเป็นการ Sync BigQuery เพียงรอบเดียว'),
+assert(/window\.toggleExcludeSku[\s\S]*?invalidateAggregationCache\(\);[\s\S]*?render\(\);[\s\S]*?scheduleExclusionBackgroundRefresh\(\);/.test(app),
   'Item exclusion must render locally before background synchronization');
-assert(app.includes('const masterPromise = loadItemMaster(false);') && app.includes('masterPromise\n      ]'),
+assert(app.includes('const masterPromise = loadItemMaster(false);') && /masterPromise\s*\n\s*\]\);/.test(app),
   'Item Master and Item Cube must load concurrently');
-assert(app.includes('void Promise.all([\n    loadItemMaster(false),\n    // Keep the exclusion-independent Item Cube visible during background sync.\n    loadCurrentItemCube(false, sys)'),
+assert(/void Promise\.all\(\[\s*loadItemMaster\(false\),[\s\S]*?loadCurrentItemCube\(false, sys\)/.test(app),
   'Current-system item preload must reuse the ready exclusion-independent cube');
 assert(app.includes('canonicalCubeScope') && app.includes('writeDashboardCubeCache'), 'Full-range item/time cubes must persist across reloads');
 assert(app.includes("'mode=slot_cube'"), 'Time-slot detail must load lazily instead of bloating the initial payload');
@@ -123,7 +123,7 @@ assert(!backend.includes("SELECT 'W' AS cube_type") && !backend.includes("SELECT
 assert(backend.includes("if (mode === 'picker_items')") && backend.includes('buildPickerItemsData_'), 'Backend picker SKU detail endpoint is missing');
 assert(backend.includes("if (mode === 'item_cube')") && backend.includes('buildItemCubeData_'), 'Backend item cube lazy endpoint is missing');
 assert(backend.includes("if (mode === 'slot_cube')") && backend.includes('buildSlotCubeData_'), 'Backend time-slot cube lazy endpoint is missing');
-assert(backend.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v13-24h-shift-cutoff'"), 'Backend must publish the 24-hour shift schema');
+assert(backend.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v14-roster-team-calendar-date'"), 'Backend must publish the roster-team calendar-date schema');
 assert(backend.includes('const CACHE_CODEC = \'gzip-base64-v1\'') && backend.includes('Utilities.gzip('), 'Dashboard cache must be compressed before chunking');
 assert(backend.includes('getCachedEncoded_') && backend.includes('gzipEnvelope_'), 'Backend must serve cached cubes without inflating them first');
 assert(backend.includes("DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v9-24h-shift-cutoff'"), '24-hour shift payloads must rotate the backend cache format');
