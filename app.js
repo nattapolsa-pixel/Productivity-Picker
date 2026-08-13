@@ -2102,7 +2102,7 @@ function renderUnmappedTeamBanner() {
   box.style.cssText = 'display:flex;margin:10px 0 16px;padding:10px 14px;border:1px solid #fdba74;border-left:5px solid #f97316;border-radius:12px;background:#fff7ed;color:#9a3412;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px;';
   box.innerHTML = '<b>⚠️ Not Found:</b> ไม่พบ Team A/B ของพนักงาน ' + fmt(Number(k.pickers || 0)) +
     ' คน · ' + fmt(Math.ceil(Number(k.qty || 0))) + ' หน่วยหยิบ · ' + fmt(Math.ceil(Number(k.pcs || 0))) +
-    ' ชิ้น · Productivity ' + fmt1(Number(k.avg_prod || 0)) + ' หยิบ/ชม. <span style="opacity:.8">กดตัวกรอง Not Found เพื่อดูรายละเอียด</span>';
+    ' ชิ้น · Productivity ' + fmtDecimal1(Number(k.avg_prod || 0)) + ' หยิบ/ชม. <span style="opacity:.8">กดตัวกรอง Not Found เพื่อดูรายละเอียด</span>';
 }
 
 function renderTargetAlertBanner() {
