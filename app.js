@@ -1,32 +1,28 @@
 /* Pick Productivity Dashboard — ดึงข้อมูลสดจาก BigQuery (ผ่าน Apps Script Web App)
-   Productivity คิดจากช่วงหยิบแรก–สุดท้ายที่ทับกับเวลาทำงานจริง โดยหักพักตามกะ และนับ OT เฉพาะช่วง OT
-   กะ A / กะ B ใช้ Team จาก Sheet บันทึกเวลาทำงาน; ถ้า Team ไม่ใช่ A/B ใช้เวลาจริงเป็น fallback
-   แยก 2 ระบบ PTT / BPS · ทุก KPI/กราฟคำนวณสดตามช่วงวันที่ + กะ ที่เลือก */
+   Work Date: 00:00–06:59 เป็นงานต่อเนื่องของวันก่อนหน้า · 07:00–23:59 ใช้วันปฏิทินเดิม
+   Productivity คิดจากเวลาต่อเนื่อง Pick แรก–Pick สุดท้ายภายในกะ โดยรวม Break และช่วง OT ที่คาบอยู่ระหว่างนั้น
+   Actual Shift อิง normalized timestamp เท่านั้น; Team A/B/Not Found จาก roster ใช้เป็นตัวกรองรายงาน ไม่ override ผลงานจริง
+   แยก 2 ระบบ PTT / BPS · ทุก KPI/กราฟคำนวณสดตามช่วงวันที่ + Team ที่เลือก */
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 // ส่ง compact work cube ก่อน แล้ว lazy-load item/time detail เป็นรายวัน
 // pick_qty ต้องมาจาก BigQuery Master_Item + Master_Pack เท่านั้น
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v15-sunday-ot-calendar';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v16-work-date-full-span';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
 const ZONE_LAYOUT_CONFIG = (typeof window !== 'undefined' && window.ZONE_LAYOUT) ? window.ZONE_LAYOUT : {};
 // ==========================================================================
 
-// ====== ตั้งค่ากะ / เวลาพัก / OT ======
-// กะ A: 07:00–10:30 ทำงาน, 10:30–12:00 พัก, 12:00–16:00 ทำงาน,
-//       16:00–16:30 พักก่อน OT, 16:30–19:00 OT
-// กะ B: 19:00–22:50 ทำงาน, 22:50–00:00 พัก, 00:00–04:00 ทำงาน,
-//       04:00–04:30 พักก่อน OT, 04:30–07:00 OT
+// ====== ตั้งค่ากะ / Productivity / OT ======
+// Actual Shift: A = 07:00–18:59, B = 19:00–06:59
+// Productivity: เวลาต่อเนื่อง Pick แรก → Pick สุดท้าย รวม Break/OT ที่คาบอยู่ในช่วงนั้น
+// SHIFT_A/B_REGULAR_HOURS ยังใช้กับ Workforce Planning เท่านั้น ไม่ใช่ตัวหาร Dashboard Productivity
 const SHIFT_A_REGULAR_HOURS = 7.5;
 const SHIFT_B_REGULAR_HOURS = 470 / 60; // 7 ชม. 50 นาที
 const OT_MAX = 2.5;
 const MIN_PRODUCTIVE_HOURS = 3;
-const SHIFT_WORK_INTERVALS = Object.freeze({
-  morning: Object.freeze([[0, 210], [300, 540], [570, 720]]), // A: ทำงานปกติ + OT (ไม่นับช่วงพัก)
-  night: Object.freeze([[0, 230], [300, 540], [570, 720]])  // B: ทำงานปกติ + OT (ไม่นับช่วงพัก)
-});
 // ====================================
 
 const fmt = n => Number(n).toLocaleString('en-US');
@@ -554,9 +550,9 @@ function rangeForPeriod(mode, baseDate) {
   return { from: base, to: base };
 }
 function shiftOf(ds, t) {
-  if (t >= 420 && t < 1140) return { sh: 'morning', sd: ds, sm: t - 420 };   // fallback กะ A: 07:00–18:59
-  if (t >= 1140) return { sh: 'night', sd: ds, sm: t - 1140 };  // fallback กะ B: 19:00–23:59
-  return { sh: 'night', sd: ds, sm: t + 300 };  // 00:00–06:59 ใช้วันที่จริง; time band ยังต่อเนื่องเพื่อคำนวณพัก/OT
+  if (t >= 420 && t < 1140) return { sh: 'morning', sd: ds, sm: t - 420 };   // A: 07:00–18:59
+  if (t >= 1140) return { sh: 'night', sd: ds, sm: t - 1140 };               // B: 19:00–23:59
+  return { sh: 'night', sd: addDays(ds, -1), sm: t + 300 };                  // B: 00:00–06:59 -> Work Date วันก่อนหน้า
 }
 // OT = จำนวนบล็อก 30 นาทีที่ทำครบ นับจากนาทีที่ 570 (16:30/04:30) ต้นกะ, สูงสุด OT_MAX
 function otHours(maxSm) {
@@ -571,12 +567,9 @@ function shiftWorkHoursBetween(sh, minSm, maxSm) {
   const mn = Math.max(0, Number(minSm));
   const mx = Math.min(720, Number(maxSm));
   if (!Number.isFinite(mn) || !Number.isFinite(mx) || mx <= mn) return 0;
-  const intervals = SHIFT_WORK_INTERVALS[sh === 'night' ? 'night' : 'morning'];
-  let minutes = 0;
-  intervals.forEach(([start, end]) => {
-    minutes += Math.max(0, Math.min(mx, end) - Math.max(mn, start));
-  });
-  return Math.round((minutes / 60) * 100) / 100;
+  // เงื่อนไขใหม่: ใช้ elapsed time ตั้งแต่ Pick แรกถึง Pick สุดท้ายเต็มช่วง
+  // จึงรวม Break และ OT ที่อยู่ระหว่าง Pick แรก–Pick สุดท้ายไว้ในตัวหาร Productivity
+  return Math.round(((mx - mn) / 60) * 100) / 100;
 }
 
 // payload รุ่นเร็วเป็น cube แยกตามงาน: Work / Item / Time slot
@@ -1211,13 +1204,11 @@ function openZoneDetailModal(zoneCode) {
 
     let totalWorkHours = 0;
     const pickerList = [...uniquePickers.values()].map(p => {
-      let spanMin = p.maxSm - p.minSm;
-      let wh = Math.max(spanMin / 60.0, 0.5);
-      if (wh >= 8.5 && wh <= 9.5) wh = 9.0;
-      wh = Math.round(wh * 10) / 10;
+      const spanMin = Math.max(0, Number(p.maxSm) - Number(p.minSm));
+      const wh = Math.round((spanMin / 60) * 100) / 100;
       totalWorkHours += wh;
       const pVal = isPcs ? p.pcs : p.qty;
-      const prod = wh > 0 ? (pVal / wh) : 0;
+      const prod = wh >= MIN_PRODUCTIVE_HOURS ? (pVal / wh) : 0;
       return { ...p, wh, prod };
     });
     pickerList.sort((a, b) => (isPcs ? b.pcs - a.pcs : b.qty - a.qty));
@@ -1421,7 +1412,7 @@ function renderZoneProductivityBreakdown() {
     `<th>#</th><th>${label}</th><th class="num">จำนวนชิ้นรวม</th><th class="num">หน่วยหยิบรวม</th><th class="num">ชั่วโมงที่นับ</th>` +
     `<th class="num">Productivity หยิบ/ชม.</th><th class="num">Productivity ชิ้น/ชม.</th><th class="num">Picker ที่นับ / ทั้งหมด</th>` +
     `</tr></thead><tbody>${body}</tbody></table></div>` +
-    `<div class="zone-breakdown-foot">Productivity หักเวลาพักตามกะ และใช้เฉพาะกลุ่มที่มีเวลาทำงานจริงตั้งแต่ ${MIN_PRODUCTIVE_HOURS} ชั่วโมงขึ้นไป · จำนวนชิ้น/หน่วยหยิบรวมยังแสดงยอดทั้งหมดของช่วงที่เลือก</div>`;
+    `<div class="zone-breakdown-foot">Productivity ใช้เวลาต่อเนื่อง Pick แรก–Pick สุดท้าย โดยรวม Break/OT ที่คาบอยู่ในช่วงนั้น และใช้เฉพาะกลุ่มที่มีเวลาอย่างน้อย ${MIN_PRODUCTIVE_HOURS} ชั่วโมง · จำนวนชิ้น/หน่วยหยิบรวมยังแสดงยอดทั้งหมดของช่วงที่เลือก</div>`;
   if (switchRoot) {
     switchRoot.querySelectorAll('button').forEach(button => {
       const bMode = button.dataset.breakdown;
@@ -1478,7 +1469,7 @@ function renderAffiliationBreakdown() {
     <th>วันที่ (วันกะ)</th><th>สังกัด</th><th class="num">Picker</th><th class="num">จำนวนชิ้น</th><th class="num">หน่วยหยิบ</th>
     <th class="num">ชั่วโมงที่นับ</th><th class="num">หน่วย/ชม.</th><th class="num">ชิ้น/ชม.</th><th class="num">OT รายวัน</th>
   </tr></thead><tbody>${dailyRows || '<tr><td colspan="9" class="empty-cell">ยังไม่มีข้อมูลรายวัน</td></tr>'}</tbody></table></div>
-  <div class="zone-breakdown-foot">สังกัดจับจากรหัสพนักงานใน Sheet “บันทึกเวลาทำงาน” · Productivity หักเวลาพักตามกะ · OT เริ่ม 16:30/04:30 · ไม่นับกลุ่มที่ทำงานจริงต่ำกว่า ${MIN_PRODUCTIVE_HOURS} ชั่วโมง</div>`;
+  <div class="zone-breakdown-foot">สังกัดจับจากรหัสพนักงานใน Sheet “บันทึกเวลาทำงาน” · Productivity รวม Break/OT ที่คาบอยู่ระหว่าง Pick แรก–Pick สุดท้าย · Actual OT เริ่ม 16:30/04:30 · ไม่นับกลุ่มที่มีช่วงเวลาต่ำกว่า ${MIN_PRODUCTIVE_HOURS} ชั่วโมง</div>`;
 }
 
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
@@ -1651,8 +1642,8 @@ function aggregate(system, from, to, sf) {
     if (g.n <= 0 || g.mn < 0 || g.mn > g.mx) {
       g.wh = 0;
     } else {
-      // ชั่วโมงที่ใช้หาร Productivity = ช่วงหยิบแรก–สุดท้ายที่ทับกับเวลาทำงานจริงเท่านั้น
-      // จึงไม่นับพัก A 10:30–12:00 / 16:00–16:30 และ B 22:50–00:00 / 04:00–04:30
+      // ชั่วโมงที่ใช้หาร Productivity = เวลาต่อเนื่อง Pick แรก–Pick สุดท้ายภายใน Actual Shift
+      // รวม Break และช่วง OT ที่คาบอยู่ระหว่างสองจุดนั้น; กลุ่มต่ำกว่า 3 ชม. ยังไม่นำไปเฉลี่ย
       g.wh = shiftWorkHoursBetween(g.sh, g.mn, g.mx);
     }
     g.countable = g.wh >= MIN_PRODUCTIVE_HOURS;
@@ -3570,12 +3561,11 @@ function renderPickerDrilldown() {
     totalQty += dRec.qty;
     totalLines += dRec.lines;
 
-    // work hours per day
+    // Full-span hours per Work Date: Pick แรก → Pick สุดท้าย รวม Break/OT ที่คาบอยู่ในช่วง
     if (dRec.minMinutes < dRec.maxMinutes) {
-      let spanMin = dRec.maxMinutes - dRec.minMinutes;
-      let wh = spanMin / 60.0;
-      if (wh >= 8.5 && wh <= 9.5 && dRec.maxMinutes <= 570) wh = 9.0;
-      totalWorkHours += Math.max(wh, 0.1);
+      const spanMin = dRec.maxMinutes - dRec.minMinutes;
+      const wh = Math.round((spanMin / 60.0) * 100) / 100;
+      totalWorkHours += wh;
     }
 
     // zones
