@@ -1931,12 +1931,10 @@
 
         <div class="card wide">
           <h3>Productivity รายคน — Top 12</h3>
-          <div class="sub">Productivity = ปริมาณตามหน่วยที่เลือก ÷ (ชั่วโมงกะ + OT) · แยกกะ A/B · ไม่นับงานที่ต่ำกว่า 3
+          <div class="sub">Overall Productivity = ถ่วง Weight ของ Zone ตามเกณฑ์หัวหน้า · Productivity รายคน/ราย Zone ยังคำนวณจากปริมาณ ÷ ชั่วโมงจริง · ไม่นับงานที่ต่ำกว่า 3
             ชั่วโมง</div>
           <div class="chartbox tall"><canvas id="picker"></canvas></div>
-          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง แล้วจึงนำมารวม · การจัดกะ: ใช้ Team A/B จาก Sheet
-            ก่อน; ถ้า Team ไม่ใช่ A/B ใช้เวลา 07:00–18:59 = A และ 19:00–06:59 = B · OT ยังอิงเวลาเดิม — ตัวหาร
-            Productivity = 9 ชม. + OT (นับบล็อกละ 30 นาที) และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
+          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง · Overall ใช้ Weight: Full Rack 37% / Half Rack 48% / EA 15% แล้วถ่วง Weight ของ Zone ภายในแต่ละกลุ่ม · Productivity รายคนและราย Zone ใช้เวลาต่อเนื่อง Pick แรก–Pick สุดท้ายรวม Break/OT ที่คาบอยู่ในช่วง และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
         </div>
         <div class="card wide affiliation-breakdown-card">
           <h3>Productivity แยกตามสังกัด</h3>
@@ -2462,7 +2460,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260822-work-date-full-span-v67"></script>
+  <script src="app.js?v=20260822-weighted-zone-productivity-v68"></script>
 </body>
 
 </html>
