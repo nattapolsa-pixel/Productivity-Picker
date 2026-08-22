@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v15-sunday-ot-calendar';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v16-work-date-full-span';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -402,9 +402,8 @@ function parsePickerOtHours_(value) {
   return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
-// Sunday reporting is driven by the Picker OT sheet, not by pick time.
-// false = normal Sunday closure, so its early-hours workload belongs to Saturday.
-// true = Picker OT was opened, so Sunday remains a standalone reporting date.
+// Sunday OT calendar เก็บไว้เป็น roster/planning metadata เท่านั้น
+// ห้ามใช้ตารางนี้เปลี่ยน Work Date ของ Dashboard; Work Date ต้องมาจาก normalized pick time เสมอ
 function loadPickerSundayOtCalendar_(forceRefresh) {
   const cache = CacheService.getScriptCache();
   if (!forceRefresh) {
@@ -456,18 +455,13 @@ function loadPickerSundayOtCalendar_(forceRefresh) {
   return result;
 }
 
-// Reporting date follows the normalized calendar date, except a closed Sunday
-// from the Picker OT calendar is merged into Saturday across every dashboard cube.
+// Work Date อิง normalized timestamp เท่านั้น:
+// 07:00–23:59 ใช้วันปฏิทินเดิม, 00:00–06:59 เป็นงานต่อเนื่องของกะ B วันก่อนหน้า
+// จึงไม่ต้อง merge วันอาทิตย์ทั้งวันกลับเสาร์อีกต่อไป
 function dashboardShiftDateSql_(pickDateExpression, tminExpression) {
   const d = String(pickDateExpression || 'pick_date');
-  const sundayCalendar = loadPickerSundayOtCalendar_();
-  const closedSundays = Object.keys(sundayCalendar.status || {}).filter(function(date) {
-    return sundayCalendar.status[date] === false;
-  }).sort();
-  if (!closedSundays.length) return d;
-  return 'IF(' + d + ' IN (' + closedSundays.map(function(date) {
-    return 'DATE ' + sqlStringLiteral_(date);
-  }).join(',') + '), DATE_SUB(' + d + ', INTERVAL 1 DAY), ' + d + ')';
+  const t = String(tminExpression || 'tmin');
+  return 'IF(' + t + ' < 420, DATE_SUB(' + d + ', INTERVAL 1 DAY), ' + d + ')';
 }
 
 // กะคลัง 24 ชม. ต้องตัดจาก normalized timestamp เท่านั้น
@@ -738,6 +732,8 @@ function buildPickerItemsData_(e, requestScope) {
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
     "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
+    // Work Date ช่วง [from,to] อาจต้องอ่าน calendar date to+1 เพื่อเก็บกะ B 00:00–06:59 ของวันถัดไป
+    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
     '    AND COALESCE(CAST(picker_id AS STRING), \'(none)\') = ' + sqlStringLiteral_(picker),
     '),',
     'filtered AS (',
