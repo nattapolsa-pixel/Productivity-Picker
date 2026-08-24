@@ -49,8 +49,8 @@ const ZONE_TYPE_COLORS = Object.freeze({
 
 // ===== Weight Productivity ตามเกณฑ์หัวหน้า =====
 // Overall = Full Rack 37% + Half Rack 48% + EA 15%
-// ภายในแต่ละกลุ่มคำนวณ Productivity ของ Zone ก่อน แล้วคูณ Weight ของ Zone
-// Mezzanine HB ยังไม่มี Weight ในตารางต้นทาง จึงยังไม่ถูกนำเข้าการถ่วงน้ำหนัก
+// ภายในแต่ละกลุ่มใช้ค่า Productivity ของ Zone ที่คำนวณเสร็จแล้ว แล้วคูณ Weight ตามสูตร KPI Sheet
+// Half Rack = 30/10/10/5/5/15/10/15 · Mezzanine HB ไม่มี Weight จึงไม่ถูกนำมาคิด
 const PRODUCTIVITY_WEIGHT_CONFIG = Object.freeze([
   Object.freeze({
     key: 'FULL_RACK', label: 'Full Rack', weight: 0.37,
@@ -68,8 +68,8 @@ const PRODUCTIVITY_WEIGHT_CONFIG = Object.freeze([
       Object.freeze({ label: 'BN-DA', weight: 0.10, members: Object.freeze(['BN', 'DA']) }),
       Object.freeze({ label: 'BG-BH', weight: 0.05, members: Object.freeze(['BG', 'BH']) }),
       Object.freeze({ label: 'BI-BK', weight: 0.05, members: Object.freeze(['BI', 'BK']) }),
-      Object.freeze({ label: 'CB-DB-DC-CC', weight: 0.20, members: Object.freeze(['CB', 'DB', 'DC', 'CC']) }),
-      Object.freeze({ label: 'DD-DE', weight: 0.05, members: Object.freeze(['DD', 'DE']) }),
+      Object.freeze({ label: 'CB-DB-DC-CC', weight: 0.15, members: Object.freeze(['CB', 'DB', 'DC', 'CC']) }),
+      Object.freeze({ label: 'DD-DE', weight: 0.10, members: Object.freeze(['DD', 'DE']) }),
       Object.freeze({ label: 'CF-DF', weight: 0.15, members: Object.freeze(['CF', 'DF']) })
     ])
   }),
@@ -1516,76 +1516,103 @@ function normalizeProductivityWeightZone(value) {
 }
 
 function calculateWeightedProductivity(zoneRows) {
+  // สูตรเดียวกับ KPI Sheet:
+  // 1) เอา Productivity ของ Zone ที่คำนวณเสร็จแล้ว × Weight ภายในกลุ่ม
+  // 2) เอา Productivity ของกลุ่ม × Weight Overall (37% / 48% / 15%)
+  // ไม่เอา Raw Qty/Hours มาคำนวณ Zone Productivity ซ้ำในขั้นตอน Weight
   const rows = Array.isArray(zoneRows) ? zoneRows : [];
   const normalizedRows = rows.map(row => ({
     row,
-    key: normalizeProductivityWeightZone(row && (row.zone != null ? row.zone : row.name))
+    key: normalizeProductivityWeightZone(row && (row.name != null ? row.name : row.zone))
   }));
-  let totalProd = 0, totalPcsProd = 0, coveredWeight = 0;
+  let totalProd = 0, totalPcsProd = 0, mappedWeight = 0;
   const groups = [];
 
-  function rowEligibleHours(row) {
-    if (!row) return 0;
-    if (Object.prototype.hasOwnProperty.call(row, 'countable')) return row.countable ? Number(row.wh || 0) : 0;
-    return Number(row.hours || 0);
-  }
-  function rowEligibleQty(row) {
-    if (!row) return 0;
-    if (Object.prototype.hasOwnProperty.call(row, 'countable')) return row.countable ? Number(row.q || 0) : 0;
-    return Number(row.eligibleQty || 0);
-  }
-  function rowEligiblePcs(row) {
-    if (!row) return 0;
-    if (Object.prototype.hasOwnProperty.call(row, 'countable')) return row.countable ? Number(row.pcs || 0) : 0;
-    return Number(row.eligiblePcs || 0);
+  function zoneKpiFromCandidates(candidates) {
+    if (!candidates.length) {
+      return { productivity: 0, pcsProductivity: 0, hours: 0, eligibleQty: 0, eligiblePcs: 0, hasMapping: false };
+    }
+
+    // ปกติ Zone_V2 จะมีชื่อกลุ่มตรงกับ KPI เช่น AH-AI / AL-BL-AM-BM / BE
+    // ถ้าตรงเพียงแถวเดียว ใช้ค่า KPI ของ Zone นั้นโดยตรงเหมือนการอ้างเซลล์ใน Google Sheet
+    if (candidates.length === 1) {
+      const row = candidates[0].row || {};
+      return {
+        productivity: Number(row.avg_prod || 0),
+        pcsProductivity: Number(row.avg_pcs_prod || 0),
+        hours: Number(row.hours || 0),
+        eligibleQty: Number(row.eligibleQty || 0),
+        eligiblePcs: Number(row.eligiblePcs || 0),
+        hasMapping: true
+      };
+    }
+
+    // Fallback เผื่อ Master แยกสมาชิกเป็น AH, AI ฯลฯ:
+    // รวมกลับเป็น KPI กลุ่มเดียวจากยอดที่นำไปคิด ÷ ชั่วโมงที่นำไปคิด
+    const hours = candidates.reduce((sum, x) => sum + Number(x.row && x.row.hours || 0), 0);
+    const eligibleQty = candidates.reduce((sum, x) => sum + Number(x.row && x.row.eligibleQty || 0), 0);
+    const eligiblePcs = candidates.reduce((sum, x) => sum + Number(x.row && x.row.eligiblePcs || 0), 0);
+    return {
+      productivity: hours > 0 ? eligibleQty / hours : 0,
+      pcsProductivity: hours > 0 ? eligiblePcs / hours : 0,
+      hours, eligibleQty, eligiblePcs, hasMapping: true
+    };
   }
 
   PRODUCTIVITY_WEIGHT_CONFIG.forEach(groupCfg => {
-    let groupProd = 0, groupPcsProd = 0, groupCoverage = 0;
+    let groupProd = 0, groupPcsProd = 0, groupMappedWeight = 0;
     const zoneDetails = [];
 
     groupCfg.zones.forEach(zoneCfg => {
       const groupKey = normalizeProductivityWeightZone(zoneCfg.label);
       const exact = normalizedRows.filter(x => x.key === groupKey);
       const memberKeys = new Set((zoneCfg.members || []).map(normalizeProductivityWeightZone));
-      // ถ้ามี Zone master แบบรวม เช่น AH-AI ให้ใช้แถวนั้นโดยตรง
-      // ถ้า Master แยก AH / AI ให้รวมผลงานของสมาชิกก่อน เพื่อไม่ให้ Weight 20% ถูกคูณซ้ำหลายครั้ง
       const candidates = exact.length ? exact : normalizedRows.filter(x => memberKeys.has(x.key));
-      const hours = candidates.reduce((sum, x) => sum + rowEligibleHours(x.row), 0);
-      const eligibleQty = candidates.reduce((sum, x) => sum + rowEligibleQty(x.row), 0);
-      const eligiblePcs = candidates.reduce((sum, x) => sum + rowEligiblePcs(x.row), 0);
-      const prod = hours > 0 ? eligibleQty / hours : 0;
-      const pcsProd = hours > 0 ? eligiblePcs / hours : 0;
-      const hasData = hours > 0;
+      const zoneKpi = zoneKpiFromCandidates(candidates);
 
-      if (hasData) groupCoverage += zoneCfg.weight;
-      groupProd += prod * zoneCfg.weight;
-      groupPcsProd += pcsProd * zoneCfg.weight;
+      // สูตร KPI Sheet: Zone KPI × Zone Weight โดยตรง
+      groupProd += zoneKpi.productivity * zoneCfg.weight;
+      groupPcsProd += zoneKpi.pcsProductivity * zoneCfg.weight;
+      if (zoneKpi.hasMapping) groupMappedWeight += zoneCfg.weight;
+
       zoneDetails.push({
-        label: zoneCfg.label, weight: zoneCfg.weight, hasData,
-        hours, eligibleQty, eligiblePcs, prod, pcsProd,
-        matchedZones: [...new Set(candidates.map(x => String(x.row.zone != null ? x.row.zone : x.row.name || '')))]
+        label: zoneCfg.label,
+        weight: zoneCfg.weight,
+        hasData: zoneKpi.hours > 0,
+        hasMapping: zoneKpi.hasMapping,
+        hours: zoneKpi.hours,
+        eligibleQty: zoneKpi.eligibleQty,
+        eligiblePcs: zoneKpi.eligiblePcs,
+        prod: zoneKpi.productivity,
+        pcsProd: zoneKpi.pcsProductivity,
+        matchedZones: [...new Set(candidates.map(x => String(x.row && (x.row.name != null ? x.row.name : x.row.zone) || '')))]
       });
     });
 
+    // สูตร KPI Sheet: Group KPI × Main Weight
     totalProd += groupProd * groupCfg.weight;
     totalPcsProd += groupPcsProd * groupCfg.weight;
-    coveredWeight += groupCoverage * groupCfg.weight;
+    mappedWeight += groupMappedWeight * groupCfg.weight;
     groups.push({
-      key: groupCfg.key, label: groupCfg.label, weight: groupCfg.weight,
-      productivity: groupProd, pcsProductivity: groupPcsProd,
-      coverage: groupCoverage, zones: zoneDetails
+      key: groupCfg.key,
+      label: groupCfg.label,
+      weight: groupCfg.weight,
+      productivity: groupProd,
+      pcsProductivity: groupPcsProd,
+      coverage: groupMappedWeight,
+      zones: zoneDetails
     });
   });
 
   return {
     avg_prod: totalProd,
     avg_pcs_prod: totalPcsProd,
-    coverage: coveredWeight,
+    // Weight ของสูตรรวมครบ 100% เสมอ; mapping_coverage ใช้ตรวจว่าชื่อ Zone จับคู่ได้ครบหรือไม่เท่านั้น
+    coverage: 1,
+    mapping_coverage: mappedWeight,
     groups
   };
 }
-
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // Work cube = [shiftDateIdx, shiftCode, zone, pickerIdx, pcs, pick_qty, lines, minSm, maxSm]
 function aggregate(system, from, to, sf) {
@@ -1867,14 +1894,15 @@ function aggregate(system, from, to, sf) {
   // ส่วน Raw Productivity เดิมยังเก็บไว้เพื่อ Audit/เปรียบเทียบย้อนหลัง
   const rawOverallProd = r1(mean(productiveGroups.map(g => g.prod)));
   const rawOverallPcsProd = r1(mean(productiveGroups.map(g => g.pcsProd)));
-  const weightedOverall = calculateWeightedProductivity(zoneGroups);
+  const weightedOverall = calculateWeightedProductivity(by_zone_prod);
 
   const zoneGroupsByDate = {};
   zoneGroups.forEach(g => (zoneGroupsByDate[g.sd] = zoneGroupsByDate[g.sd] || []).push(g));
   daily.forEach(day => {
     const rawProd = day.avg_prod;
     const rawPcsProd = day.avg_pcs_prod;
-    const weightedDay = calculateWeightedProductivity(zoneGroupsByDate[day.date] || []);
+    const dailyZoneKpis = buildBreakdown(zoneGroupsByDate[day.date] || [], 'zone');
+    const weightedDay = calculateWeightedProductivity(dailyZoneKpis);
     day.raw_avg_prod = rawProd;
     day.raw_avg_pcs_prod = rawPcsProd;
     day.avg_prod = r1(weightedDay.avg_prod);
@@ -1972,7 +2000,8 @@ function aggregate(system, from, to, sf) {
       // เก็บค่าก่อนถ่วง Weight เพื่อให้ตรวจสอบย้อนกลับได้
       raw_avg_prod: rawOverallProd,
       raw_avg_pcs_prod: rawOverallPcsProd,
-      weight_coverage: r1(weightedOverall.coverage * 100)
+      weight_coverage: r1(weightedOverall.coverage * 100),
+      weight_mapping_coverage: r1(Number(weightedOverall.mapping_coverage || 0) * 100)
     },
     productivity_weighting: weightedOverall,
     daily, by_zone, by_location, by_picker, by_zone_prod, zone_prod_map, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all, picker_drilldown: pickerDrilldownMap
@@ -2239,7 +2268,7 @@ function renderWeightedProductivityBanner() {
   box.style.cssText = 'display:flex;margin:10px 0 16px;padding:11px 14px;border:1px solid #c7d2fe;border-left:5px solid #6366f1;border-radius:12px;background:#eef2ff;color:#3730a3;gap:10px;align-items:center;flex-wrap:wrap;font-size:11.5px;';
   box.innerHTML = `<div style="width:100%;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">` +
     `<div><b>⚖️ Weighted Productivity:</b> ${fmtDecimal1(weighted)} ${unit} · Raw ${fmtDecimal1(raw)} ${unit} · ต่าง ${delta >= 0 ? '+' : ''}${fmtDecimal1(delta)}</div>` +
-    `<div style="font-size:10.5px;opacity:.8;">Weight coverage ${fmtDecimal1(Number(k.weight_coverage || 0))}%</div></div>` +
+    `<div style="font-size:10.5px;opacity:.8;">สูตร Weight 100%${Number(k.weight_mapping_coverage || 0) < 99.9 ? ' · จับคู่ Zone ' + fmtDecimal1(Number(k.weight_mapping_coverage || 0)) + '%' : ''}</div></div>` +
     `<div style="display:flex;gap:6px;flex-wrap:wrap;">${groups}</div>`;
 }
 
