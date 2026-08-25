@@ -2,7 +2,7 @@
    Work Date: 00:00–06:59 เป็นงานต่อเนื่องของวันก่อนหน้า · 07:00–23:59 ใช้วันปฏิทินเดิม
    Productivity คิดจากเวลาต่อเนื่อง Pick แรก–Pick สุดท้ายภายในกะ โดยรวม Break และช่วง OT ที่คาบอยู่ระหว่างนั้น
    Actual Shift อิง normalized timestamp เท่านั้น; Team A/B/Not Found จาก roster ใช้เป็นตัวกรองรายงาน ไม่ override ผลงานจริง
-   แยก 2 ระบบ PTT / BPS · ทุก KPI/กราฟคำนวณสดตามช่วงวันที่ + Team ที่เลือก */
+   PTT/BPS แยกยอดและ Productivity ปกติ · KPI Weighted Overall รวม 2 ระบบตาม Weight มาตรฐานวันที่ 22 ส.ค. */
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
@@ -1515,11 +1515,26 @@ function normalizeProductivityWeightZone(value) {
     .trim().toUpperCase().replace(/[–—]/g, '-').replace(/\s+/g, '');
 }
 
+function resolveProductivityWeightBucket(...values) {
+  const keys = values.map(normalizeProductivityWeightZone).filter(Boolean);
+  if (!keys.length) return null;
+  for (const groupCfg of PRODUCTIVITY_WEIGHT_CONFIG) {
+    for (const zoneCfg of groupCfg.zones) {
+      const labelKey = normalizeProductivityWeightZone(zoneCfg.label);
+      const memberKeys = new Set((zoneCfg.members || []).map(normalizeProductivityWeightZone));
+      if (keys.some(key => key === labelKey || memberKeys.has(key))) {
+        return { groupKey: groupCfg.key, groupLabel: groupCfg.label, label: zoneCfg.label, weight: zoneCfg.weight };
+      }
+    }
+  }
+  return null;
+}
+
 function calculateWeightedProductivity(zoneRows) {
-  // สูตรเดียวกับ KPI Sheet:
-  // 1) เอา Productivity ของ Zone ที่คำนวณเสร็จแล้ว × Weight ภายในกลุ่ม
-  // 2) เอา Productivity ของกลุ่ม × Weight Overall (37% / 48% / 15%)
-  // ไม่เอา Raw Qty/Hours มาคำนวณ Zone Productivity ซ้ำในขั้นตอน Weight
+  // สูตรเดียวกับ KPI Sheet วันที่ 22 ส.ค. เป็นต้นไป:
+  // 1) Zone Productivity × Weight ภายในกลุ่ม
+  // 2) Group Productivity × Main Weight (37% / 48% / 15%)
+  // Zone ที่ไม่มีข้อมูล = 0 ตามสูตรใน Sheet และไม่ normalize Weight กลับ
   const rows = Array.isArray(zoneRows) ? zoneRows : [];
   const normalizedRows = rows.map(row => ({
     row,
@@ -1532,9 +1547,6 @@ function calculateWeightedProductivity(zoneRows) {
     if (!candidates.length) {
       return { productivity: 0, pcsProductivity: 0, hours: 0, eligibleQty: 0, eligiblePcs: 0, hasMapping: false };
     }
-
-    // ปกติ Zone_V2 จะมีชื่อกลุ่มตรงกับ KPI เช่น AH-AI / AL-BL-AM-BM / BE
-    // ถ้าตรงเพียงแถวเดียว ใช้ค่า KPI ของ Zone นั้นโดยตรงเหมือนการอ้างเซลล์ใน Google Sheet
     if (candidates.length === 1) {
       const row = candidates[0].row || {};
       return {
@@ -1546,9 +1558,6 @@ function calculateWeightedProductivity(zoneRows) {
         hasMapping: true
       };
     }
-
-    // Fallback เผื่อ Master แยกสมาชิกเป็น AH, AI ฯลฯ:
-    // รวมกลับเป็น KPI กลุ่มเดียวจากยอดที่นำไปคิด ÷ ชั่วโมงที่นำไปคิด
     const hours = candidates.reduce((sum, x) => sum + Number(x.row && x.row.hours || 0), 0);
     const eligibleQty = candidates.reduce((sum, x) => sum + Number(x.row && x.row.eligibleQty || 0), 0);
     const eligiblePcs = candidates.reduce((sum, x) => sum + Number(x.row && x.row.eligiblePcs || 0), 0);
@@ -1570,7 +1579,6 @@ function calculateWeightedProductivity(zoneRows) {
       const candidates = exact.length ? exact : normalizedRows.filter(x => memberKeys.has(x.key));
       const zoneKpi = zoneKpiFromCandidates(candidates);
 
-      // สูตร KPI Sheet: Zone KPI × Zone Weight โดยตรง
       groupProd += zoneKpi.productivity * zoneCfg.weight;
       groupPcsProd += zoneKpi.pcsProductivity * zoneCfg.weight;
       if (zoneKpi.hasMapping) groupMappedWeight += zoneCfg.weight;
@@ -1585,11 +1593,12 @@ function calculateWeightedProductivity(zoneRows) {
         eligiblePcs: zoneKpi.eligiblePcs,
         prod: zoneKpi.productivity,
         pcsProd: zoneKpi.pcsProductivity,
+        contribution: zoneKpi.productivity * zoneCfg.weight,
+        pcsContribution: zoneKpi.pcsProductivity * zoneCfg.weight,
         matchedZones: [...new Set(candidates.map(x => String(x.row && (x.row.name != null ? x.row.name : x.row.zone) || '')))]
       });
     });
 
-    // สูตร KPI Sheet: Group KPI × Main Weight
     totalProd += groupProd * groupCfg.weight;
     totalPcsProd += groupPcsProd * groupCfg.weight;
     mappedWeight += groupMappedWeight * groupCfg.weight;
@@ -1599,6 +1608,8 @@ function calculateWeightedProductivity(zoneRows) {
       weight: groupCfg.weight,
       productivity: groupProd,
       pcsProductivity: groupPcsProd,
+      contribution: groupProd * groupCfg.weight,
+      pcsContribution: groupPcsProd * groupCfg.weight,
       coverage: groupMappedWeight,
       zones: zoneDetails
     });
@@ -1607,11 +1618,192 @@ function calculateWeightedProductivity(zoneRows) {
   return {
     avg_prod: totalProd,
     avg_pcs_prod: totalPcsProd,
-    // Weight ของสูตรรวมครบ 100% เสมอ; mapping_coverage ใช้ตรวจว่าชื่อ Zone จับคู่ได้ครบหรือไม่เท่านั้น
     coverage: 1,
     mapping_coverage: mappedWeight,
     groups
   };
+}
+
+// KPI Weight เป็น Overall ของงาน Pick ทั้งคลัง จึงต้องรวม PTT + BPS ก่อนคำนวณ
+// (เช่น Zone BE สามารถอยู่ฝั่ง BPS ขณะที่ Zone อื่นอยู่ PTT)
+// Eligibility >= 3 ชม. ตรวจเพียงครั้งเดียวต่อ Picker + Work Date + Actual Shift
+// จากนั้นแบ่งชั่วโมงก้อนเดียวของ Picker ไปยัง Zone ตามสัดส่วนช่วงเวลาที่ทำในแต่ละ Zone
+// เพื่อไม่ให้คนเดียวถูกนับชั่วโมงเต็มซ้ำหลาย Zone
+function calculateCrossSystemWeightedProductivity(from, to, sf) {
+  const pickerShiftMap = Object.create(null);
+
+  ['PTT', 'BPS'].forEach(systemName => {
+    const S = DATA[systemName];
+    if (!S || !Array.isArray(S.rows) || !Array.isArray(S._sh)) return;
+    const count = packedRowCount(S);
+    for (let i = 0; i < count; i++) {
+      const si = S._sh[i];
+      if (!si || si.sd < from || si.sd > to) continue;
+      const row = packedRowData(S, i);
+      const picker = String(S.pickers[row.pickerIdx] || '').trim();
+      if (!matchesReportTeam(si, picker, sf)) continue;
+
+      const zoneInfo = getZoneInfo(row.zone);
+      const zoneName = String(zoneInfo.zone || zoneInfo.location || row.zone || '-').trim() || '-';
+      if (isZoneExcluded(zoneName)) continue;
+
+      const bucket = resolveProductivityWeightBucket(zoneName, zoneInfo.location, row.zone);
+      const rawZoneKey = normalizeProductivityWeightZone(zoneName) || normalizeProductivityWeightZone(zoneInfo.location) || '-';
+      // สมาชิกของ KPI Bucket เดียวกัน (เช่น AH + AI) รวมเป็น span เดียวก่อนจัดสรรเวลา
+      const zoneKey = bucket ? ('W:' + normalizeProductivityWeightZone(bucket.label)) : ('O:' + rawZoneKey);
+      const key = picker + '|' + si.sd + '|' + si.sh;
+      const g = pickerShiftMap[key] || (pickerShiftMap[key] = {
+        picker, sd: si.sd, sh: si.sh, mn: 999999, mx: -1, zones: Object.create(null)
+      });
+      if (si.smMin < g.mn) g.mn = si.smMin;
+      if (si.smMax > g.mx) g.mx = si.smMax;
+
+      const z = g.zones[zoneKey] || (g.zones[zoneKey] = {
+        key: zoneKey,
+        bucket: bucket ? bucket.label : '',
+        rawZone: zoneName,
+        mn: 999999, mx: -1,
+        qty: 0, pcs: 0, lines: 0,
+        systems: new Set()
+      });
+      z.qty += Number(row.pickQty || 0);
+      z.pcs += Number(row.pcs || 0);
+      z.lines += Number(row.lines || 0);
+      z.systems.add(systemName);
+      if (si.smMin < z.mn) z.mn = si.smMin;
+      if (si.smMax > z.mx) z.mx = si.smMax;
+    }
+  });
+
+  const overallZoneAgg = Object.create(null);
+  const dailyZoneAgg = Object.create(null);
+  let eligiblePickerShifts = 0;
+  let eligibleHours = 0;
+  let allocatedHoursAllZones = 0;
+  let allocatedHoursWeightedZones = 0;
+
+  function addZoneAgg(target, bucket, z, hours) {
+    const out = target[bucket] || (target[bucket] = {
+      name: bucket, hours: 0, eligibleQty: 0, eligiblePcs: 0, lines: 0,
+      pickerShifts: 0, systems: new Set()
+    });
+    out.hours += hours;
+    out.eligibleQty += z.qty;
+    out.eligiblePcs += z.pcs;
+    out.lines += z.lines;
+    out.pickerShifts += 1;
+    z.systems.forEach(s => out.systems.add(s));
+  }
+
+  Object.values(pickerShiftMap).forEach(g => {
+    const shiftHours = shiftWorkHoursBetween(g.sh, g.mn, g.mx);
+    if (!(shiftHours >= MIN_PRODUCTIVE_HOURS)) return;
+    const zoneSpans = Object.values(g.zones);
+    if (!zoneSpans.length) return;
+
+    // ใช้ span ของทุก Zone รวมถึง Zone ที่ไม่มี Weight เป็นฐานแบ่งเวลา
+    // เพื่อไม่โยกเวลาจาก HB/Zone อื่นเข้า Zone ที่มี Weight โดยผิดธรรมชาติ
+    const spans = zoneSpans.map(z => Math.max(1, Number(z.mx) - Number(z.mn)));
+    const spanTotal = spans.reduce((a, b) => a + b, 0) || zoneSpans.length;
+    eligiblePickerShifts++;
+    eligibleHours += shiftHours;
+
+    zoneSpans.forEach((z, idx) => {
+      const allocatedHours = shiftHours * (spans[idx] / spanTotal);
+      allocatedHoursAllZones += allocatedHours;
+      if (!z.bucket) return;
+      allocatedHoursWeightedZones += allocatedHours;
+      addZoneAgg(overallZoneAgg, z.bucket, z, allocatedHours);
+      const dayTarget = dailyZoneAgg[g.sd] || (dailyZoneAgg[g.sd] = Object.create(null));
+      addZoneAgg(dayTarget, z.bucket, z, allocatedHours);
+    });
+  });
+
+  function rowsFromAgg(map) {
+    return Object.values(map || {}).map(v => ({
+      name: v.name,
+      hours: v.hours,
+      eligibleQty: v.eligibleQty,
+      eligiblePcs: v.eligiblePcs,
+      lines: v.lines,
+      productiveGroups: v.pickerShifts,
+      avg_prod: v.hours > 0 ? v.eligibleQty / v.hours : 0,
+      avg_pcs_prod: v.hours > 0 ? v.eligiblePcs / v.hours : 0,
+      systems: [...v.systems].sort()
+    }));
+  }
+
+  const zoneRows = rowsFromAgg(overallZoneAgg);
+  const aggregateWeighted = calculateWeightedProductivity(zoneRows);
+  const daily = Object.keys(dailyZoneAgg).sort().map(date => {
+    const dayRows = rowsFromAgg(dailyZoneAgg[date]);
+    const weighted = calculateWeightedProductivity(dayRows);
+    return {
+      date,
+      avg_prod: weighted.avg_prod,
+      avg_pcs_prod: weighted.avg_pcs_prod,
+      groups: weighted.groups,
+      zone_rows: dayRows
+    };
+  });
+
+  // KPI Sheet คิด Weight รายวันก่อน แล้ว Month-to-Date ใช้ AVERAGEIF(รายวัน, ">0")
+  // ดังนั้นเมื่อเลือกหลายวัน ห้ามเอา Qty/Hours ทั้งช่วงมารวมแล้วค่อย Weight เพราะจะได้คนละค่า
+  const prodDays = daily.filter(d => Number(d.avg_prod) > 0);
+  const pcsProdDays = daily.filter(d => Number(d.avg_pcs_prod) > 0);
+  const avg = values => values.length ? values.reduce((a, b) => a + Number(b || 0), 0) / values.length : 0;
+  const mtdProd = avg(prodDays.map(d => d.avg_prod));
+  const mtdPcsProd = avg(pcsProdDays.map(d => d.avg_pcs_prod));
+
+  // สรุป Group/Zone บน Banner ด้วยฐานวันเดียวกับ Overall เพื่อให้ถ่วงกลับแล้วได้ Overall เดียวกัน
+  const summaryDays = prodDays;
+  const summaryGroups = PRODUCTIVITY_WEIGHT_CONFIG.map(groupCfg => {
+    const dayGroups = summaryDays.map(d => (d.groups || []).find(g => g.key === groupCfg.key));
+    const groupProd = avg(dayGroups.map(g => g ? Number(g.productivity || 0) : 0));
+    const groupPcsProd = avg(dayGroups.map(g => g ? Number(g.pcsProductivity || 0) : 0));
+    const zones = groupCfg.zones.map(zoneCfg => {
+      const dayZones = dayGroups.map(g => g && (g.zones || []).find(z => normalizeProductivityWeightZone(z.label) === normalizeProductivityWeightZone(zoneCfg.label)));
+      const prod = avg(dayZones.map(z => z ? Number(z.prod || 0) : 0));
+      const pcsProd = avg(dayZones.map(z => z ? Number(z.pcsProd || 0) : 0));
+      return {
+        label: zoneCfg.label,
+        weight: zoneCfg.weight,
+        hasData: dayZones.some(z => z && z.hasData),
+        hasMapping: dayZones.some(z => z && z.hasMapping),
+        hours: dayZones.reduce((sum, z) => sum + Number(z && z.hours || 0), 0),
+        eligibleQty: dayZones.reduce((sum, z) => sum + Number(z && z.eligibleQty || 0), 0),
+        eligiblePcs: dayZones.reduce((sum, z) => sum + Number(z && z.eligiblePcs || 0), 0),
+        prod,
+        pcsProd,
+        contribution: prod * zoneCfg.weight,
+        pcsContribution: pcsProd * zoneCfg.weight,
+        matchedZones: [zoneCfg.label]
+      };
+    });
+    return {
+      key: groupCfg.key, label: groupCfg.label, weight: groupCfg.weight,
+      productivity: groupProd, pcsProductivity: groupPcsProd,
+      contribution: groupProd * groupCfg.weight, pcsContribution: groupPcsProd * groupCfg.weight,
+      coverage: 1, zones
+    };
+  });
+
+  const result = {
+    ...aggregateWeighted,
+    avg_prod: mtdProd || aggregateWeighted.avg_prod,
+    avg_pcs_prod: mtdPcsProd || aggregateWeighted.avg_pcs_prod,
+    groups: summaryDays.length ? summaryGroups : aggregateWeighted.groups,
+    scope: 'PTT+BPS',
+    range_method: 'daily weighted KPI then AVERAGEIF > 0 (same pattern as KPI Sheet MTD)',
+    hour_method: 'picker-shift elapsed hours allocated once across all visited zones',
+    eligible_picker_shifts: eligiblePickerShifts,
+    eligible_hours: eligibleHours,
+    allocated_hours_all_zones: allocatedHoursAllZones,
+    allocated_hours_weighted_zones: allocatedHoursWeightedZones,
+    zone_rows: zoneRows,
+    daily
+  };
+  return result;
 }
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // Work cube = [shiftDateIdx, shiftCode, zone, pickerIdx, pcs, pick_qty, lines, minSm, maxSm]
@@ -1890,24 +2082,21 @@ function aggregate(system, from, to, sf) {
   const zone_prod_map = {};
   by_zone_prod.forEach(z => zone_prod_map[z.name] = z);
 
-  // Overall Productivity ใช้ Weight มาตรฐานของหัวหน้าเป็นขั้นตอนสุดท้าย
-  // ส่วน Raw Productivity เดิมยังเก็บไว้เพื่อ Audit/เปรียบเทียบย้อนหลัง
+  // Productivity ปกติของ PTT/BPS ยังเป็นค่าของระบบที่ผู้ใช้เลือก เพื่อให้ KPI/กราฟปริมาณสอดคล้องกัน
+  // KPI Weighted Overall คำนวณแยกต่างหากโดยรวม PTT+BPS ตามสูตรวันที่ 22 ส.ค.
   const rawOverallProd = r1(mean(productiveGroups.map(g => g.prod)));
   const rawOverallPcsProd = r1(mean(productiveGroups.map(g => g.pcsProd)));
-  const weightedOverall = calculateWeightedProductivity(by_zone_prod);
+  const weightedOverall = calculateCrossSystemWeightedProductivity(from, to, sf);
 
-  const zoneGroupsByDate = {};
-  zoneGroups.forEach(g => (zoneGroupsByDate[g.sd] = zoneGroupsByDate[g.sd] || []).push(g));
+  // กราฟรายวัน/Target ใช้ KPI Weighted รายวันแบบเดียวกับ KPI Sheet
+  // แต่เก็บ Raw ของระบบที่เลือกไว้ใน raw_avg_* เพื่อ Audit ได้ตลอด
+  const weightedDailyMap = new Map((weightedOverall.daily || []).map(d => [d.date, d]));
   daily.forEach(day => {
-    const rawProd = day.avg_prod;
-    const rawPcsProd = day.avg_pcs_prod;
-    const dailyZoneKpis = buildBreakdown(zoneGroupsByDate[day.date] || [], 'zone');
-    const weightedDay = calculateWeightedProductivity(dailyZoneKpis);
-    day.raw_avg_prod = rawProd;
-    day.raw_avg_pcs_prod = rawPcsProd;
-    day.avg_prod = r1(weightedDay.avg_prod);
-    day.avg_pcs_prod = r1(weightedDay.avg_pcs_prod);
-    day.weight_coverage = r1(weightedDay.coverage * 100);
+    const wd = weightedDailyMap.get(day.date);
+    day.raw_avg_prod = day.avg_prod;
+    day.raw_avg_pcs_prod = day.avg_pcs_prod;
+    day.avg_prod = wd ? r1(Number(wd.avg_prod || 0)) : 0;
+    day.avg_pcs_prod = wd ? r1(Number(wd.avg_pcs_prod || 0)) : 0;
   });
 
   const affiliationMap = {};
@@ -1994,13 +2183,15 @@ function aggregate(system, from, to, sf) {
   const result = {
     kpis: {
       lines, pcs, qty: pickQty, pickers: pickers.size, ot: r1(totOt),
-      // ค่าหลักที่แสดงบน Dashboard = Weighted Productivity ตาม Zone Weight
+      // KPI หลักตามเกณฑ์หัวหน้า = Weighted Overall ของ PTT+BPS
       avg_prod: r1(weightedOverall.avg_prod),
       avg_pcs_prod: r1(weightedOverall.avg_pcs_prod),
-      // เก็บค่าก่อนถ่วง Weight เพื่อให้ตรวจสอบย้อนกลับได้
+      // Raw ของระบบที่เลือกเก็บไว้สำหรับเทียบ/Audit
       raw_avg_prod: rawOverallProd,
       raw_avg_pcs_prod: rawOverallPcsProd,
-      weight_coverage: r1(weightedOverall.coverage * 100),
+      kpi_weighted_avg_prod: r1(weightedOverall.avg_prod),
+      kpi_weighted_avg_pcs_prod: r1(weightedOverall.avg_pcs_prod),
+      weight_coverage: 100,
       weight_mapping_coverage: r1(Number(weightedOverall.mapping_coverage || 0) * 100)
     },
     productivity_weighting: weightedOverall,
@@ -2226,7 +2417,7 @@ function renderKPIs() {
     },
     { lbl: 'พนักงานหยิบ', val: k.pickers, unit: 'คน', grad: 'linear-gradient(90deg,#f59e0b,#f97316)' },
     {
-      lbl: isPcs ? 'Weighted Productivity (ชิ้น/ชม.)' : 'Weighted Productivity (หยิบ/ชม.)',
+      lbl: isPcs ? 'KPI Weighted Productivity (ชิ้น/ชม.)' : 'KPI Weighted Productivity (หยิบ/ชม.)',
       val: isPcs ? k.avg_pcs_prod : k.avg_prod,
       unit: isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.',
       grad: 'linear-gradient(90deg,#f43f5e,#ec4899)'
@@ -2257,19 +2448,41 @@ function renderWeightedProductivityBanner() {
   const weighting = A && A.productivity_weighting ? A.productivity_weighting : null;
   if (!weighting) { box.style.display = 'none'; return; }
   const isPcs = unitMode === 'pcs';
-  const weighted = Number(isPcs ? k.avg_pcs_prod : k.avg_prod) || 0;
+  const weighted = Number(isPcs ? k.kpi_weighted_avg_pcs_prod : k.kpi_weighted_avg_prod) || 0;
   const raw = Number(isPcs ? k.raw_avg_pcs_prod : k.raw_avg_prod) || 0;
   const unit = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
   const groups = (weighting.groups || []).map(g => {
     const p = Number(isPcs ? g.pcsProductivity : g.productivity) || 0;
     return `<span style="display:inline-flex;gap:5px;align-items:center;padding:4px 8px;border-radius:8px;background:#fff;border:1px solid #c7d2fe;"><b>${escapeZoneHtml(g.label)}</b> ${Math.round(Number(g.weight || 0) * 100)}% = ${fmtDecimal1(p)}</span>`;
   }).join('');
-  const delta = weighted - raw;
+
+  const detailRows = (weighting.groups || []).map(g => {
+    const zones = (g.zones || []).map(z => {
+      const p = Number(isPcs ? z.pcsProd : z.prod) || 0;
+      const contribution = Number(isPcs ? z.pcsContribution : z.contribution) || 0;
+      const systems = (z.matchedZones || []).length ? z.matchedZones.join(', ') : '-';
+      return `<tr><td style="padding:5px 7px;border-top:1px solid #e0e7ff;">${escapeZoneHtml(z.label)}</td>` +
+        `<td style="padding:5px 7px;border-top:1px solid #e0e7ff;text-align:right;font-weight:700;">${fmtDecimal1(p)}</td>` +
+        `<td style="padding:5px 7px;border-top:1px solid #e0e7ff;text-align:right;">${Math.round(Number(z.weight || 0) * 100)}%</td>` +
+        `<td style="padding:5px 7px;border-top:1px solid #e0e7ff;text-align:right;">${fmtDecimal1(contribution)}</td>` +
+        `<td style="padding:5px 7px;border-top:1px solid #e0e7ff;text-align:right;color:#64748b;">${fmtDecimal1(Number(z.hours || 0))}</td>` +
+        `</tr>`;
+    }).join('');
+    return `<tr style="background:#eef2ff;"><td colspan="5" style="padding:6px 7px;font-weight:800;color:#3730a3;">${escapeZoneHtml(g.label)} = ${fmtDecimal1(Number(isPcs ? g.pcsProductivity : g.productivity) || 0)} ${unit} · Main Weight ${Math.round(Number(g.weight || 0) * 100)}%</td></tr>${zones}`;
+  }).join('');
+
   box.style.cssText = 'display:flex;margin:10px 0 16px;padding:11px 14px;border:1px solid #c7d2fe;border-left:5px solid #6366f1;border-radius:12px;background:#eef2ff;color:#3730a3;gap:10px;align-items:center;flex-wrap:wrap;font-size:11.5px;';
   box.innerHTML = `<div style="width:100%;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">` +
-    `<div><b>⚖️ Weighted Productivity:</b> ${fmtDecimal1(weighted)} ${unit} · Raw ${fmtDecimal1(raw)} ${unit} · ต่าง ${delta >= 0 ? '+' : ''}${fmtDecimal1(delta)}</div>` +
-    `<div style="font-size:10.5px;opacity:.8;">สูตร Weight 100%${Number(k.weight_mapping_coverage || 0) < 99.9 ? ' · จับคู่ Zone ' + fmtDecimal1(Number(k.weight_mapping_coverage || 0)) + '%' : ''}</div></div>` +
-    `<div style="display:flex;gap:6px;flex-wrap:wrap;">${groups}</div>`;
+    `<div><b>⚖️ KPI Weighted Overall (PTT+BPS):</b> <span style="font-size:15px;">${fmtDecimal1(weighted)}</span> ${unit} · Productivity ${escapeZoneHtml(sys)} ปัจจุบัน ${fmtDecimal1(raw)} ${unit}</div>` +
+    `<div style="font-size:10.5px;opacity:.82;">สูตร 22 ส.ค. · หลายวัน = เฉลี่ย Weighted รายวันแบบ MTD · ชั่วโมง Picker ไม่ซ้ำ Zone</div></div>` +
+    `<div style="display:flex;gap:6px;flex-wrap:wrap;">${groups}</div>` +
+    `<details style="width:100%;margin-top:2px;"><summary style="cursor:pointer;font-weight:800;user-select:none;">ดูค่า Productivity ราย Zone ที่นำไป Weight</summary>` +
+    `<div style="overflow:auto;margin-top:7px;border:1px solid #c7d2fe;border-radius:9px;background:#fff;max-height:360px;">` +
+    `<table style="width:100%;border-collapse:collapse;min-width:620px;font-size:11px;color:#334155;"><thead style="position:sticky;top:0;background:#e0e7ff;"><tr>` +
+    `<th style="padding:6px 7px;text-align:left;">Zone KPI</th><th style="padding:6px 7px;text-align:right;">Productivity</th><th style="padding:6px 7px;text-align:right;">Weight</th><th style="padding:6px 7px;text-align:right;">ผลหลัง Weight</th><th style="padding:6px 7px;text-align:right;">ชั่วโมงจัดสรร</th>` +
+    `</tr></thead><tbody>${detailRows}</tbody></table></div>` +
+    `<div style="margin-top:6px;font-size:10.5px;color:#6366f1;">ตรวจ ≥ ${MIN_PRODUCTIVE_HOURS} ชม. ต่อ Picker/Work Date/Actual Shift เพียงครั้งเดียว แล้วจัดสรรชั่วโมงก้อนเดียวไปตาม Zone ที่ทำจริง · Zone ไม่มีข้อมูลคิดเป็น 0 ตาม KPI Sheet</div>` +
+    `</details>`;
 }
 
 function renderUnmappedTeamBanner() {
@@ -2309,7 +2522,7 @@ function renderUnmappedTeamBanner() {
   }).join('');
   box.innerHTML = '<div style="width:100%;"><b>⚠️ Not Found:</b> ไม่พบ Team A/B ของพนักงาน ' + fmt(Number(k.pickers || 0)) +
     ' คน · ' + fmt(Math.ceil(Number(k.qty || 0))) + ' หน่วยหยิบ · ' + fmt(Math.ceil(Number(k.pcs || 0))) +
-    ' ชิ้น · Productivity ' + fmtDecimal1(Number(k.avg_prod || 0)) + ' หยิบ/ชม.' +
+    ' ชิ้น · Productivity ' + fmtDecimal1(Number(k.raw_avg_prod || k.avg_prod || 0)) + ' หยิบ/ชม.' +
     '<details style="margin-top:8px;">' +
       '<summary style="cursor:pointer;font-weight:800;color:#c2410c;user-select:none;">ดูรหัสพนักงานและสาเหตุ (' + fmt(missingPickers.length) + ' รายการ)</summary>' +
       '<div style="overflow:auto;max-height:320px;margin-top:8px;border:1px solid #fed7aa;border-radius:10px;background:#fff;">' +
@@ -2338,7 +2551,7 @@ function renderTargetAlertBanner() {
   }
 
   const isPcs = unitMode === 'pcs';
-  const currentProd = isPcs ? (A.kpis.avg_pcs_prod || 0) : (A.kpis.avg_prod || 0);
+  const currentProd = isPcs ? (A.kpis.kpi_weighted_avg_pcs_prod || 0) : (A.kpis.kpi_weighted_avg_prod || 0);
   const unitTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
   const isBelow = currentProd < prodTarget;
 
@@ -2351,7 +2564,7 @@ function renderTargetAlertBanner() {
         <span style="font-size:26px;">🚨</span>
         <div>
           <div style="font-weight:700; color:#991b1b; font-size:15px; display:flex; align-items:center; gap:8px;">
-            <span>แจ้งเตือน: Productivity เฉลี่ยต่ำกว่าเป้าหมาย!</span>
+            <span>แจ้งเตือน: KPI Weighted Productivity ต่ำกว่าเป้าหมาย!</span>
             <span style="background:#ef4444; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; font-weight:700;">ต่ำกว่าเป้า ${diff} ${unitTxt}</span>
           </div>
           <div style="font-size:12.5px; color:#b91c1c; margin-top:3px;">
@@ -2370,7 +2583,7 @@ function renderTargetAlertBanner() {
         <span style="font-size:24px;">🎯</span>
         <div>
           <div style="font-weight:700; color:#15803d; font-size:14.5px; display:flex; align-items:center; gap:8px;">
-            <span>Productivity เฉลี่ยบรรลุตามเป้าหมาย!</span>
+            <span>KPI Weighted Productivity บรรลุตามเป้าหมาย!</span>
             <span style="background:#16a34a; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; font-weight:700;">ผ่านเกณฑ์</span>
           </div>
           <div style="font-size:12px; color:#166534; margin-top:2px;">
@@ -5060,7 +5273,7 @@ const builders = {
     const volField = isPcs ? 'pcs' : 'qty';
 
     const totalVol = isPcs ? kpis.pcs : kpis.qty;
-    const avgProd = isPcs ? kpis.avg_pcs_prod : kpis.avg_prod;
+    const avgProd = isPcs ? (kpis.kpi_weighted_avg_pcs_prod || 0) : (kpis.kpi_weighted_avg_prod || 0);
 
     // trend: compare first-half vs second-half
     let trendTxt = '', trendIcon = '📊', trendColor = '#64748b';
@@ -5151,8 +5364,8 @@ const builders = {
     <div class="rpt-kcard" style="--c1:#0ea5e9;--c2:#0284c7;">
       <div class="icon">⚡</div>
       <div class="val">${avgProd}</div>
-      <div class="lbl">Weighted Productivity</div>
-      <div class="sub">${unitLabel} · Raw ${fmtDecimal1(isPcs ? kpis.raw_avg_pcs_prod : kpis.raw_avg_prod)}</div>
+      <div class="lbl">KPI Weighted Overall (PTT+BPS)</div>
+      <div class="sub">${unitLabel} · ${escapeZoneHtml(sys)} Raw ${fmtDecimal1(isPcs ? kpis.raw_avg_pcs_prod : kpis.raw_avg_prod)}</div>
     </div>
     <div class="rpt-kcard" style="--c1:#10b981;--c2:#059669;">
       <div class="icon">👷</div>
