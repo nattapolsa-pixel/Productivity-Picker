@@ -1765,7 +1765,7 @@
           <!-- 📈 Chart 1: Trend Chart (Full Width) -->
           <div class="card wide">
             <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
-            <div class="sub">แท่ง = ปริมาณตามหน่วยที่เลือก (ซ้าย) · เส้น = Productivity เฉลี่ยตามหน่วยที่เลือก (ขวา) ·
+            <div class="sub">แท่ง = ปริมาณของระบบที่เลือก (ซ้าย) · เส้น = KPI Weighted Overall รวม PTT+BPS ตามสูตรวันที่ 22 ส.ค. (ขวา) ·
               หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ</div>
             <div class="controls">
               <div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button
@@ -1924,17 +1924,17 @@
               style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">เป้าหมาย:
               <span id="targetBadgeVal">10</span></span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ Productivity จริงในแต่ละวันกับเป้าหมายที่ตั้งไว้
+          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ KPI Weighted Overall รายวัน (PTT+BPS) กับเป้าหมายที่ตั้งไว้
             (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)</div>
           <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
         </div>
 
         <div class="card wide">
           <h3>Productivity รายคน — Top 12</h3>
-          <div class="sub">Overall Productivity = ถ่วง Weight ของ Zone ตามเกณฑ์หัวหน้า · Productivity รายคน/ราย Zone ยังคำนวณจากปริมาณ ÷ ชั่วโมงจริง · ไม่นับงานที่ต่ำกว่า 3
+          <div class="sub">Overall KPI = ถ่วง Weight แบบวันที่ 22 ส.ค. โดยรวม PTT+BPS · หลายวันใช้ค่าเฉลี่ย Weighted รายวันแบบ MTD · Productivity รายคน/ราย Zone ยังเป็นค่าจริงและไม่นับกลุ่มต่ำกว่า 3
             ชั่วโมง</div>
           <div class="chartbox tall"><canvas id="picker"></canvas></div>
-          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง · Overall ใช้ Weight: Full Rack 37% / Half Rack 48% / EA 15% แล้วถ่วง Weight ของ Zone ภายในแต่ละกลุ่ม · Productivity รายคนและราย Zone ใช้เวลาต่อเนื่อง Pick แรก–Pick สุดท้ายรวม Break/OT ที่คาบอยู่ในช่วง และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
+          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง · Overall KPI รวม PTT+BPS แล้วใช้ Weight: Full Rack 37% / Half Rack 48% / EA 15% ตามสูตรวันที่ 22 ส.ค. · ช่วงหลายวันเฉลี่ยค่า Weighted รายวันเฉพาะวันที่มากกว่า 0 แบบ MTD · ชั่วโมงของ Picker หนึ่งกะถูกจัดสรรไป Zone เพียงครั้งเดียว ไม่ถูกนับเต็มซ้ำหลาย Zone</div>
         </div>
         <div class="card wide affiliation-breakdown-card">
           <h3>Productivity แยกตามสังกัด</h3>
@@ -2460,7 +2460,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260824-kpi-weight-formula-v69"></script>
+  <script src="app.js?v=20260825-kpi-weight-cross-system-mtd-v71"></script>
 </body>
 
 </html>
