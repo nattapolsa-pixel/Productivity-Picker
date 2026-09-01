@@ -1684,7 +1684,8 @@
           <path d="M3 8l9 5 9-5" />
           <path d="M12 13v8" />
         </svg> สินค้า (Items)</button>
-      <button class="nav" data-page="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <button class="nav" data-page="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2">
           <path d="M3 3v5h5" />
           <path d="M3.8 8A9 9 0 1 1 6 18.5" />
           <path d="M12 7v5l3 2" />
@@ -1765,7 +1766,8 @@
           <!-- 📈 Chart 1: Trend Chart (Full Width) -->
           <div class="card wide">
             <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
-            <div class="sub">แท่ง = ปริมาณตามหน่วยที่เลือก (ซ้าย) · เส้น = Productivity เฉลี่ยตามหน่วยที่เลือก (ขวา) ·
+            <div class="sub">แท่ง = ปริมาณของระบบที่เลือก (ซ้าย) · เส้น = KPI Weighted Overall รวม PTT+BPS ตามสูตรวันที่
+              22 ส.ค. (ขวา) ·
               หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ</div>
             <div class="controls">
               <div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button
@@ -1924,19 +1926,21 @@
               style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">เป้าหมาย:
               <span id="targetBadgeVal">10</span></span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ Productivity จริงในแต่ละวันกับเป้าหมายที่ตั้งไว้
+          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ KPI Weighted Overall รายวัน (PTT+BPS)
+            กับเป้าหมายที่ตั้งไว้
             (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)</div>
           <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
         </div>
 
         <div class="card wide">
           <h3>Productivity รายคน — Top 12</h3>
-          <div class="sub">Productivity = ปริมาณตามหน่วยที่เลือก ÷ (ชั่วโมงกะ + OT) · แยกกะ A/B · ไม่นับงานที่ต่ำกว่า 3
-            ชั่วโมง</div>
+          <div class="sub">Overall KPI = ถ่วง Weight แบบวันที่ 22 ส.ค. โดยรวม PTT+BPS · Productivity ดิบใช้ 7.5 ชม. +
+            Actual OT ต่อ Picker/วัน/กะ · หลายวันใช้ค่าเฉลี่ย Weighted รายวันแบบ MTD</div>
           <div class="chartbox tall"><canvas id="picker"></canvas></div>
-          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง แล้วจึงนำมารวม · การจัดกะ: ใช้ Team A/B จาก Sheet
-            ก่อน; ถ้า Team ไม่ใช่ A/B ใช้เวลา 07:00–18:59 = A และ 19:00–06:59 = B · OT ยังอิงเวลาเดิม — ตัวหาร
-            Productivity = 9 ชม. + OT (นับบล็อกละ 30 นาที) และงานต่ำกว่า 3 ชั่วโมงจะไม่นับเข้า Productivity</div>
+          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง · PTT ลบเวลา 7 ชั่วโมง ส่วน BPS ใช้เวลาเดิม
+            และนับตาม Calendar Date หลัง Normalize · Productivity = หน่วยหยิบ ÷ (7.5 ชม. + Actual OT) · Overall KPI ใช้
+            Weight: Full Rack 37% / Half Rack 48% / EA 15% ตามสูตรวันที่ 22 ส.ค. · ชั่วโมงถูกกระจายไป Zone ตามสัดส่วน
+            Pick Units เพื่อไม่ให้นับซ้ำ</div>
         </div>
         <div class="card wide affiliation-breakdown-card">
           <h3>Productivity แยกตามสังกัด</h3>
@@ -1974,7 +1978,8 @@
         </div>
         <div class="card wide zone-breakdown-card" style="margin-bottom:18px">
           <h3>Productivity แยกตาม Zone, Owner และ Type Pick</h3>
-          <div class="sub">ชั่วโมงที่นับใช้กติกาเดียวกับ Productivity รายคน และไม่นับกลุ่มงานที่มีเวลาต่ำกว่า 3 ชั่วโมง
+          <div class="sub">Productivity ใช้ฐาน 7.5 ชม. + Actual OT ต่อ Picker/วัน/กะ และกระจายชั่วโมงไป Zone ตามสัดส่วน
+            Pick Units
           </div>
           <div class="zone-breakdown-switch" id="zoneBreakdownSwitch"><button data-breakdown="zone">ตาม
               Zone</button><button data-breakdown="owner" class="active">ตาม Owner</button><button
@@ -2169,7 +2174,9 @@
         <div class="card wide" style="margin-bottom:20px;">
           <h3>สินค้าหยิบเยอะสุด — Top 10</h3>
           <div class="sub">ชื่อสินค้า (Owner) · ปริมาณตามหน่วยที่เลือก (เฉพาะรายการที่ไม่ถูกยกเว้น)</div>
-          <div id="itemLoadStatus" style="display:none;margin:16px 0 4px;padding:12px 14px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;font-size:12.5px;font-weight:600;text-align:center;">⏳ กำลังคำนวณข้อมูลสินค้าใหม่…</div>
+          <div id="itemLoadStatus"
+            style="display:none;margin:16px 0 4px;padding:12px 14px;border-radius:12px;background:#eff6ff;border:1px solid #bfdbfe;color:#1d4ed8;font-size:12.5px;font-weight:600;text-align:center;">
+            ⏳ กำลังคำนวณข้อมูลสินค้าใหม่…</div>
           <div class="chartbox tall"><canvas id="item"></canvas></div>
         </div>
 
@@ -2462,7 +2469,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260813-not-found-detail-v66"></script>
+  <script src="app.js?v=20260901-fixed75-ot-calendar-weight-v72"></script>
 </body>
 
 </html>

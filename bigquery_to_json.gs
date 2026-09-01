@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v15-sunday-ot-calendar';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v21-calendar-fixed75-ot-weighted';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -37,10 +37,10 @@ const MASTER_CACHE_TTL = 21600; // Master/BigQuery payload cache 6 ชม. เ�
 const PICKER_ROSTER_CACHE_TTL = 300; // รายชื่อพนักงานอ่านจาก Google Sheet ใหม่อย่างน้อยทุก 5 นาที
 const CACHE_TTL = MASTER_CACHE_TTL; // Payload cache ใช้หน้าต่างเดียวกับ revision เพื่อลด cache chunk เก่าค้าง
 const CACHE_REVISION_PROPERTY = 'dash_data_revision';
-const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_shift_date_v3';
-const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_shift_date_v3';
+const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_calendar_date_v4';
+const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_calendar_date_v4';
 const SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v9-24h-shift-cutoff';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v10-calendar-date-fixed75';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -63,7 +63,7 @@ const MASTER_STAGE_TABLE = 'dim_pick_master_stage';
 const MASTER_CURRENT_TABLE = 'dim_pick_master_current';
 const MASTER_SNAPSHOT_TABLE = 'dim_pick_master_snapshot';
 const MASTER_SYNC_TRIGGER_HANDLER = 'syncPickMastersDaily';
-const DASHBOARD_TABLE = 't_pick_dashboard'; // Materialized table for fast dashboard queries
+const DASHBOARD_TABLE = 't_pick_dashboard'; // Materialized + stable history; upload ใหม่ MERGE เฉพาะ PickDetailKey
 // =======================================================
 
 function doGet(e) {
@@ -402,9 +402,8 @@ function parsePickerOtHours_(value) {
   return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
-// Sunday reporting is driven by the Picker OT sheet, not by pick time.
-// false = normal Sunday closure, so its early-hours workload belongs to Saturday.
-// true = Picker OT was opened, so Sunday remains a standalone reporting date.
+// Sunday OT calendar เก็บไว้เป็น roster/planning metadata เท่านั้น
+// ปฏิทิน Sunday OT ใช้เป็น metadata เท่านั้น; วันที่ Dashboard ใช้ Calendar Date หลัง Normalize เสมอ
 function loadPickerSundayOtCalendar_(forceRefresh) {
   const cache = CacheService.getScriptCache();
   if (!forceRefresh) {
@@ -456,18 +455,11 @@ function loadPickerSundayOtCalendar_(forceRefresh) {
   return result;
 }
 
-// Reporting date follows the normalized calendar date, except a closed Sunday
-// from the Picker OT calendar is merged into Saturday across every dashboard cube.
+// Calendar Date หลัง Normalize:
+// PTT ถูกลบ 7 ชั่วโมงตั้งแต่ v_pick_clean, BPS ใช้เวลาเดิม
+// 00:00–06:59 ยังคงเป็นวันที่ปฏิทินนั้น ไม่ย้อนกลับไปวันก่อน
 function dashboardShiftDateSql_(pickDateExpression, tminExpression) {
-  const d = String(pickDateExpression || 'pick_date');
-  const sundayCalendar = loadPickerSundayOtCalendar_();
-  const closedSundays = Object.keys(sundayCalendar.status || {}).filter(function(date) {
-    return sundayCalendar.status[date] === false;
-  }).sort();
-  if (!closedSundays.length) return d;
-  return 'IF(' + d + ' IN (' + closedSundays.map(function(date) {
-    return 'DATE ' + sqlStringLiteral_(date);
-  }).join(',') + '), DATE_SUB(' + d + ', INTERVAL 1 DAY), ' + d + ')';
+  return String(pickDateExpression || 'pick_date');
 }
 
 // กะคลัง 24 ชม. ต้องตัดจาก normalized timestamp เท่านั้น
@@ -597,7 +589,7 @@ function buildItemCubeData_(e, dataEpoch) {
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
     "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
-    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
+    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
     '),',
     'filtered_picks AS (',
     '  SELECT * FROM base_picks',
@@ -668,7 +660,7 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
     "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
-    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
+    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
     '),',
     'filtered AS (',
     '  SELECT * FROM base',
@@ -738,6 +730,8 @@ function buildPickerItemsData_(e, requestScope) {
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
     "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
+    // Calendar Date อ่านเฉพาะช่วง [from,to] เท่านั้น ไม่ดึงวันถัดไปมาปน
+    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
     '    AND COALESCE(CAST(picker_id AS STRING), \'(none)\') = ' + sqlStringLiteral_(picker),
     '),',
     'filtered AS (',
@@ -989,8 +983,9 @@ function uploadToBigQuery_(rows, fmt, meta) {
       );
     }
     mergeCounts = mergeStage_(stageTable);
-    // ต้อง Refresh สำเร็จก่อนเปลี่ยน revision เพื่อไม่ให้หน้าเว็บเห็น revision ใหม่แต่ข้อมูลเก่า
-    refreshPickDashboardTable_();
+    // อัปเดตเฉพาะ PickDetailKey ที่มากับไฟล์นี้ เพื่อให้ประวัติวันเก่าไม่ถูกคำนวณใหม่
+    // เมื่อมีไฟล์วันถัดไปเข้าระบบ (ยกเว้น key เดิมถูกแก้ไขจริงในไฟล์ใหม่)
+    refreshPickDashboardRowsFromStage_(stageTable);
     const previousRevision = getDashboardRevisionToken_(getDataRevision_());
     bumpDataRevision_();
     clearCache_(previousRevision);
@@ -1163,9 +1158,9 @@ function commitUploadChunks_(request) {
     }
 
     const mergeCounts = mergeStage_(consolidated.finalTable);
-    // ถ้าสร้างตาราง Dashboard ไม่สำเร็จ ห้ามเปลี่ยน revision และห้ามลบ stage
-    // ผู้ใช้กดซ้ำได้ ระบบจะ Merge แบบ idempotent แล้วพยายาม Refresh ต่อ
-    refreshPickDashboardTable_();
+    // ถ้าอัปเดต Dashboard ไม่สำเร็จ ห้ามเปลี่ยน revision และห้ามลบ stage
+    // อัปเดตเฉพาะ key ของไฟล์นี้ ไม่ rebuild ประวัติทั้งตาราง
+    refreshPickDashboardRowsFromStage_(consolidated.finalTable);
     const previousRevision = getDashboardRevisionToken_(getDataRevision_());
     bumpDataRevision_();
     clearCache_(previousRevision);
@@ -2371,10 +2366,9 @@ function syncPickMasters_(source) {
     }
 
     const promoted = promotePickMasterStage_(snapshotDate);
-    // Refresh ตาราง Dashboard ให้ใช้ Master ใหม่ทันที
-    try { refreshPickDashboardTable_(); } catch (refreshErr) {
-      console.warn('Dashboard table refresh failed (non-fatal): ' + refreshErr);
-    }
+    // ห้าม rebuild t_pick_dashboard อัตโนมัติเมื่อ Master เปลี่ยน:
+    // ค่า Pick Units ของประวัติที่ปิดวันแล้วต้องคงเดิม ส่วนไฟล์ใหม่จะใช้ Master ล่าสุด
+    // หากต้องการ recalculation ย้อนหลังจริง ๆ ให้เรียก refreshDashboardTableNow() ด้วยตนเอง
     const previousRevision = getDataRevision_();
     clearCache_(previousRevision);
     bumpDataRevision_();
@@ -2948,12 +2942,97 @@ function buildDashboardData_(useQueryCache, requestScope) {
 }
 
 // -----------------------------------------------------------------------------
-// Refresh t_pick_dashboard — เรียกหลัง sync master สำเร็จ เพื่อให้ยอด pick_qty อัปเดต
+// Stable-history dashboard refresh
+//
+// t_pick_dashboard เก็บ pick_qty แบบ materialized ตามวันที่ที่ข้อมูลถูกนำเข้าแล้ว
+// Upload ใหม่จึงอัปเดตเฉพาะ PickDetailKey ที่อยู่ใน stage เท่านั้น เพื่อป้องกัน
+// Master/current view รุ่นใหม่ย้อนกลับไปเปลี่ยน Productivity ของวันเก่าที่ปิดไปแล้ว
+// -----------------------------------------------------------------------------
+function dashboardHasPickDetailKey_() {
+  try {
+    const rows = bqQueryAll_([
+      'SELECT COUNTIF(column_name = \'pickdetailkey\')',
+      'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.INFORMATION_SCHEMA.COLUMNS`',
+      'WHERE table_name = ' + sqlStringLiteral_(DASHBOARD_TABLE)
+    ].join('\n'), 60000);
+    return !!(rows.length && Number(rows[0][0] || 0) === 1);
+  } catch (_) {
+    return false;
+  }
+}
+
+function refreshPickDashboardRowsFromStage_(stageTable) {
+  const stage = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + stageTable + '`';
+  const target = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`';
+  const enriched = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.v_pick_enriched`';
+
+  // รุ่นเก่าของ t_pick_dashboard ยังไม่มี pickdetailkey จึงต้อง migrate เต็มตารางเพียงครั้งเดียว
+  // หลังจากนั้นทุก upload จะเข้าทาง MERGE เฉพาะ key และไม่แตะวันอื่นอีก
+  if (!dashboardHasPickDetailKey_()) {
+    console.warn('t_pick_dashboard has no pickdetailkey; running one-time stable-history migration.');
+    refreshPickDashboardTable_();
+  }
+
+  // ถ้า key เดิมถูกส่งซ้ำโดยข้อมูลธุรกิจไม่เปลี่ยน ห้าม UPDATE เพียงเพราะ Master ล่าสุด
+  // ทำให้ Pick Units ของวันเก่าคงค่าเดิมอย่างแท้จริงแม้ไฟล์ใหม่เป็น export แบบ overlap/cumulative
+  const businessDifferent = [
+    'T.category IS DISTINCT FROM S.category',
+    'T.pick_date IS DISTINCT FROM S.pick_date',
+    'T.location IS DISTINCT FROM S.location',
+    'T.zone IS DISTINCT FROM S.zone',
+    'T.picker_id IS DISTINCT FROM S.picker_id',
+    'T.owner IS DISTINCT FROM S.owner',
+    'T.sku IS DISTINCT FROM S.sku',
+    'T.tmin IS DISTINCT FROM S.tmin',
+    'T.pcs IS DISTINCT FROM S.pcs'
+  ].join(' OR ');
+
+  const sql = [
+    'MERGE ' + target + ' T',
+    'USING (',
+    '  SELECT',
+    '    S.pickdetailkey,',
+    '    UPPER(V.category) AS category,',
+    '    DATE(V.pick_ts_local) AS pick_date,',
+    "    COALESCE(V.location, V.zone, '??') AS location,",
+    "    COALESCE(V.zone, '??') AS zone,",
+    '    V.picker_id,',
+    "    UPPER(COALESCE(V.owner, '-')) AS owner,",
+    '    V.sku,',
+    '    CAST(EXTRACT(HOUR FROM V.pick_ts_local)*60 + EXTRACT(MINUTE FROM V.pick_ts_local) AS INT64) AS tmin,',
+    '    V.qty AS pcs,',
+    '    V.pick_qty,',
+    '    V.pickdetailkey IS NOT NULL AND V.pick_ts_local IS NOT NULL',
+    "      AND UPPER(V.category) IN ('PTT','BPS') AS is_visible",
+    '  FROM ' + stage + ' S',
+    '  LEFT JOIN ' + enriched + ' V ON V.pickdetailkey = S.pickdetailkey',
+    ') S',
+    'ON T.pickdetailkey = S.pickdetailkey',
+    'WHEN MATCHED AND S.is_visible AND (' + businessDifferent + ') THEN UPDATE SET',
+    '  category=S.category, pick_date=S.pick_date, location=S.location, zone=S.zone,',
+    '  picker_id=S.picker_id, owner=S.owner, sku=S.sku, tmin=S.tmin, pcs=S.pcs, pick_qty=S.pick_qty',
+    'WHEN MATCHED AND NOT S.is_visible THEN DELETE',
+    'WHEN NOT MATCHED AND S.is_visible THEN INSERT',
+    '  (pickdetailkey, category, pick_date, location, zone, picker_id, owner, sku, tmin, pcs, pick_qty)',
+    'VALUES',
+    '  (S.pickdetailkey, S.category, S.pick_date, S.location, S.zone, S.picker_id, S.owner, S.sku, S.tmin, S.pcs, S.pick_qty);'
+  ].join('\n');
+  bqQueryAll_(sql, JOB_DEADLINE_MS);
+
+  const bounds = bqQueryAll_(dashboardBoundsSql_(), JOB_DEADLINE_MS);
+  if (bounds.length && bounds[0].length >= 2) setDashboardBounds_(bounds[0][0], bounds[0][1]);
+  console.log('t_pick_dashboard incrementally refreshed from ' + stageTable + ' (stable history)');
+}
+
+// -----------------------------------------------------------------------------
+// Full rebuild ใช้เฉพาะการ migrate ครั้งแรก / ซ่อมข้อมูล / สั่ง recalculation ย้อนหลังด้วยตนเอง
+// Upload ปกติและ Daily Master Sync ห้ามเรียกฟังก์ชันนี้
 // -----------------------------------------------------------------------------
 function refreshPickDashboardTable_() {
   const target = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`';
   const selectSql =
     'SELECT ' +
+    '  pickdetailkey, ' +
     '  UPPER(category) AS category, ' +
     '  DATE(pick_ts_local) AS pick_date, ' +
     "  COALESCE(location, zone, '??') AS location, " +
@@ -2981,7 +3060,7 @@ function refreshPickDashboardTable_() {
     // BigQuery ไม่อนุญาต CREATE OR REPLACE เมื่อเปลี่ยน partition/clustering spec
     // เช่นรุ่นเก่า cluster(category,picker_id) -> รุ่นใหม่ cluster(category,owner,picker_id,sku); location/zone เก็บเป็นคอลัมน์ปกติ
     // t_pick_dashboard เป็น derived table จึงสร้างสำเนาใหม่ให้สำเร็จก่อน แล้วค่อยสลับตารางจริง
-    console.warn('Dashboard clustering changed; running one-time safe rebuild for Owner + Item.');
+    console.warn('Dashboard schema/clustering changed; running one-time safe rebuild with stable pickdetailkey.');
     const rebuildId = DASHBOARD_TABLE + '_rebuild_' + String(Date.now());
     const rebuild = '`' + BQ_PROJECT + '.' + BQ_DATASET + '.' + rebuildId + '`';
     let rebuildCreated = false;
@@ -3017,15 +3096,15 @@ function refreshPickDashboardTable_() {
 
   const bounds = bqQueryAll_(dashboardBoundsSql_(), JOB_DEADLINE_MS);
   if (bounds.length && bounds[0].length >= 2) setDashboardBounds_(bounds[0][0], bounds[0][1]);
-  console.log('t_pick_dashboard refreshed successfully with Owner + Item');
+  console.log('t_pick_dashboard full rebuild completed with stable pickdetailkey');
 }
 
-// เรียกจาก Editor เพื่อ Refresh ตาราง Dashboard ด้วยตนเอง
+// เรียกจาก Editor เพื่อทำ one-time migration เป็น Stable History หรือสั่ง full recalculation ด้วยตนเอง
 function refreshDashboardTableNow() {
   refreshPickDashboardTable_();
   clearCache_(getDataRevision_());
   bumpDataRevision_();
-  return { status: 'success', table: DASHBOARD_TABLE };
+  return { status: 'success', table: DASHBOARD_TABLE, stable_history: dashboardHasPickDetailKey_() };
 }
 
 // เรียงวันที่ให้ต่อเนื่อง แล้ว remap index ของ rows ตามลำดับใหม่
@@ -3160,7 +3239,7 @@ function testRun() {
       ') AS failed_cases FROM normalized'
     ].join('\n'), 60000);
     if (!shiftCases.length || Number(shiftCases[0][0] || 0) !== 0) {
-      throw new Error('PTT/BPS normalization หรือขอบเขตวันกะ 07:00 ไม่ถูกต้อง');
+      throw new Error('PTT/BPS normalization หรือขอบเขตเวลา A/B 07:00 ไม่ถูกต้อง');
     }
     pass('Calendar date + time bands', 'PTT -7 ชม., BPS เวลาเดิม, ไม่ย้อนวันหลังเที่ยงคืน; time band 07:00–18:59 / 19:00–06:59 ใช้คำนวณเวลาและ OT');
   } catch (err) { fail('24-hour shift boundaries', err); throw err; }
@@ -3184,6 +3263,7 @@ function testRun() {
   try {
     const schemaCheck = bqQueryAll_([
       'SELECT',
+      '  COUNTIF(column_name = \'pickdetailkey\') AS key_col,',
       '  COUNTIF(column_name = \'owner\') AS owner_col,',
       '  COUNTIF(column_name = \'location\') AS location_col,',
       '  COUNTIF(column_name = \'zone\') AS zone_col',
@@ -3191,11 +3271,25 @@ function testRun() {
       'WHERE table_name = ' + sqlStringLiteral_(DASHBOARD_TABLE)
     ].join('\n'), 60000);
     if (!schemaCheck.length || Number(schemaCheck[0][0] || 0) !== 1 ||
-        Number(schemaCheck[0][1] || 0) !== 1 || Number(schemaCheck[0][2] || 0) !== 1) {
-      throw new Error('t_pick_dashboard ต้องมี owner + location + zone — ให้รัน refreshDashboardTableNow ก่อน');
+        Number(schemaCheck[0][1] || 0) !== 1 || Number(schemaCheck[0][2] || 0) !== 1 ||
+        Number(schemaCheck[0][3] || 0) !== 1) {
+      throw new Error('t_pick_dashboard ต้องมี pickdetailkey + owner + location + zone — ให้รัน refreshDashboardTableNow ก่อน');
     }
-    pass('Dashboard schema', 'พบ owner + location + zone');
+    pass('Dashboard schema', 'พบ stable pickdetailkey + owner + location + zone');
   } catch (err) { fail('Dashboard schema', err); throw err; }
+
+  try {
+    const stableKeyCheck = bqQueryAll_([
+      'SELECT COUNT(*) AS rows_count, COUNT(DISTINCT pickdetailkey) AS unique_keys,',
+      '       COUNTIF(pickdetailkey IS NULL OR pickdetailkey = \'\') AS missing_keys',
+      'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`'
+    ].join('\n'), 60000);
+    if (!stableKeyCheck.length || Number(stableKeyCheck[0][0] || 0) !== Number(stableKeyCheck[0][1] || 0) ||
+        Number(stableKeyCheck[0][2] || 0) !== 0) {
+      throw new Error('pickdetailkey ใน t_pick_dashboard ต้อง unique และห้ามว่าง');
+    }
+    pass('Stable-history key', Number(stableKeyCheck[0][0] || 0).toLocaleString() + ' แถว unique ครบ');
+  } catch (err) { fail('Stable-history key', err); throw err; }
 
   try {
     const epoch = getDashboardDataEpoch_();
@@ -3241,7 +3335,7 @@ function testRun() {
     if (!dashboardTestData || !dashboardTestData.PTT) throw new Error('ยังไม่มี Dashboard payload สำหรับตรวจยอด PTT');
     const ptt = dashboardTestData.PTT;
     const testDate = ptt.dates && ptt.dates.length ? ptt.dates[ptt.dates.length - 1] : '';
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(testDate)) throw new Error('ไม่พบวันกะล่าสุดของ PTT ใน payload');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(testDate)) throw new Error('ไม่พบวันที่ล่าสุดของ PTT ใน payload');
     const dateIdx = ptt.dates.indexOf(testDate);
     let payloadPcs = 0, payloadUnits = 0, payloadLines = 0;
     for (let i = 0; i < ptt.rows.length; i += 9) {
@@ -3251,13 +3345,12 @@ function testRun() {
       payloadLines += Number(ptt.rows[i + 6]) || 0;
     }
 
-    // จำกัด scan แค่ 2 partition: วันกะนั้น + วันถัดไปช่วง 00:00–06:59
+    // Calendar Date ต้องตรงกับ partition วันนั้นโดยตรง ไม่มีการดึงเช้ามืดของวันถัดไปกลับมา
     const direct = bqQueryAll_([
       'SELECT COUNT(*) AS records, SUM(pcs) AS total_pcs, SUM(pick_qty) AS total_pick_units',
       'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
       "WHERE UPPER(category) = 'PTT'",
-      '  AND pick_date BETWEEN DATE ' + sqlStringLiteral_(testDate) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(testDate) + ', INTERVAL 1 DAY)',
-      '  AND ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' = DATE ' + sqlStringLiteral_(testDate)
+      '  AND pick_date = DATE ' + sqlStringLiteral_(testDate)
     ].join('\n'), 60000);
     if (!direct.length) throw new Error('BigQuery ไม่ส่งผลตรวจยอด PTT');
     const bqLines = Number(direct[0][0]) || 0;
@@ -3266,15 +3359,15 @@ function testRun() {
     const near = function(a, b) { return Math.abs(Number(a || 0) - Number(b || 0)) < 0.000001; };
     if (!near(payloadPcs, bqPcs) || !near(payloadUnits, bqUnits) || payloadLines !== bqLines) {
       throw new Error(
-        'ยอด PTT ไม่ตรงกัน วันกะ ' + testDate +
+        'ยอด PTT ไม่ตรงกัน วันที่ ' + testDate +
         ' | Payload pcs=' + payloadPcs + ', units=' + payloadUnits + ', rows=' + payloadLines +
         ' | BigQuery pcs=' + bqPcs + ', units=' + bqUnits + ', rows=' + bqLines
       );
     }
-    pass('PTT Shift-date reconciliation',
+    pass('PTT Calendar-date reconciliation',
       testDate + ' → ' + Number(payloadUnits).toLocaleString() + ' หน่วยหยิบ, ' +
       Number(payloadPcs).toLocaleString() + ' ชิ้น, ' + Number(payloadLines).toLocaleString() + ' records ตรง BigQuery');
-  } catch (err) { fail('PTT Shift-date reconciliation', err); throw err; }
+  } catch (err) { fail('PTT Calendar-date reconciliation', err); throw err; }
 
   try {
     const bounds = getOrLoadDashboardBounds_();
@@ -3290,7 +3383,7 @@ function testRun() {
     pass('Owner + Item + Location/Zone mapping', (itemCube.rows.length / 9).toLocaleString() + ' กลุ่มในวันที่ ' + testDate);
   } catch (err) { fail('Owner + Item mapping', err); throw err; }
 
-  const summary = '🎉 TEST RUN PASSED — Shift Date + PTT totals ถูกต้อง พร้อม Deploy\n' + results.join('\n');
+  const summary = '🎉 TEST RUN PASSED — Calendar Date + PTT totals ถูกต้อง พร้อม Deploy\n' + results.join('\n');
   Logger.log(summary);
   return { status: 'success', message: 'TEST RUN PASSED', checks: results };
 }
