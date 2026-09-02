@@ -1888,7 +1888,7 @@ function aggregate(system, from, to, sf) {
       mx: -1, mn: 999999, hourMask: 0
     });
     b.pcs += pVal; b.q += qVal; b.n += lineVal;
-    b.hourMask = mergeHourMask(b.hourMask, row.hourMask);
+    b.hourMask = mergeHourMask(b.hourMask, r.hourMask);
     if (si.smMax > b.mx) b.mx = si.smMax; if (si.smMin < b.mn) b.mn = si.smMin;
 
     // Zone/Owner/Type breakdown ใช้ Productivity ของ Parent Picker/วัน แล้วเฉลี่ยแบบ V2
@@ -1928,7 +1928,7 @@ function aggregate(system, from, to, sf) {
       zones: {}, slots: {}, skus: {}
     });
     dRec.pcs += pVal; dRec.qty += qVal; dRec.lines += lineVal;
-    dRec.hourMask = mergeHourMask(dRec.hourMask, row.hourMask);
+    dRec.hourMask = mergeHourMask(dRec.hourMask, r.hourMask);
     if (si.smMin < dRec.minMinutes) dRec.minMinutes = si.smMin;
     if (si.smMax > dRec.maxMinutes) dRec.maxMinutes = si.smMax;
 
