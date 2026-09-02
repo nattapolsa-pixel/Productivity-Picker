@@ -3,7 +3,7 @@
    Productivity แบบ New_Z856 V2 = ROUND(Total Pick Units ÷ Active Hours, 0)
    Active Hours = จำนวนชั่วโมง 00–23 ที่มี Pick > 0 ต่อ Picker + Calendar Date; ไม่หัก Break และชั่วโมง OT ถูกนับเมื่อมี Pick จริง
    Count เฉพาะ Active Hours > 3 และ Productivity 1–999
-   KPI Weighted Overall ใช้ PTT เป็นฐานแบบ V2 แล้วเฉลี่ยตาม Position ประจำก่อนถ่วง Zone สูตรวันที่ 22 ส.ค. */
+   KPI Weighted Overall ใช้ PTT เป็นฐานแบบ V2 แล้วจัด Position จาก Zone จริงที่มี Pick Units สูงสุดต่อคน/วันก่อนถ่วง Weight สูตรวันที่ 22 ส.ค. */
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
@@ -1715,14 +1715,28 @@ function calculateCrossSystemWeightedProductivity(from, to, sf) {
       const key = picker + '|' + si.sd;
       const g = pickerDayMap[key] || (pickerDayMap[key] = {
         picker, sd: si.sd, qty: 0, pcs: 0, lines: 0,
-        hourMask: 0, mn: 999999, mx: -1
+        hourMask: 0, mn: 999999, mx: -1,
+        // Results Master V2 มี Position เดียวต่อ Picker/วัน แต่ roster G เป็น Zone กว้าง
+        // (เช่น AI-AK / CB-CE) จึงใช้ KPI bucket จาก Zone ที่หยิบจริงเป็นตัวตัดสิน
+        // โดยเลือก bucket ที่มี Pick Units มากที่สุดในวันนั้น เพื่อไม่ให้ 1 คนถูกเฉลี่ยซ้ำหลาย Zone
+        bucketQty: Object.create(null),
+        bucketLines: Object.create(null)
       });
-      g.qty += Number(row.pickQty || 0);
+      const rowQty = Number(row.pickQty || 0);
+      const rowLines = Number(row.lines || 0);
+      g.qty += rowQty;
       g.pcs += Number(row.pcs || 0);
-      g.lines += Number(row.lines || 0);
+      g.lines += rowLines;
       g.hourMask = mergeHourMask(g.hourMask, row.hourMask);
       if (si.smMin < g.mn) g.mn = si.smMin;
       if (si.smMax > g.mx) g.mx = si.smMax;
+
+      const actualBucketInfo = resolveProductivityWeightBucket(actualZone, row.zone);
+      if (actualBucketInfo) {
+        const actualBucket = actualBucketInfo.label;
+        g.bucketQty[actualBucket] = Number(g.bucketQty[actualBucket] || 0) + rowQty;
+        g.bucketLines[actualBucket] = Number(g.bucketLines[actualBucket] || 0) + rowLines;
+      }
     }
   }
 
@@ -1782,14 +1796,27 @@ function calculateCrossSystemWeightedProductivity(from, to, sf) {
     rawProdSum += prod;
     rawPcsProdSum += pcsProd;
 
-    // V2 Position เป็นข้อมูลประจำพนักงานจาก XLOOKUP ไม่ใช่ Zone ที่หยิบจริงในวันนั้น
-    const assignedPosition = String(getPickerRosterHomeZone(g.picker) || '').trim();
-    const bucketInfo = resolveProductivityWeightBucket(assignedPosition);
-    if (!bucketInfo) {
+    // Update name/roster เก็บ Zone แบบกว้าง (เช่น AI-AK, CB-CE) ซึ่งไม่ใช่ Position ละเอียด
+    // ที่ KPI วันที่ 22 ใช้ (AH-AI, AJ-AK, CB-DB-DC-CC ฯลฯ) ถ้าเอา roster มา match ตรง ๆ
+    // Full/Half จะหายเกือบหมดและเหลือเพียง EA contribution ทำให้กราฟลงเหลือ ~10-35
+    // ดังนั้นให้เลือก KPI bucket ที่ Picker ทำ Pick Units มากที่สุดในวันนั้นจาก Zone จริง
+    const rankedBuckets = Object.keys(g.bucketQty || {}).map(bucket => ({
+      bucket,
+      qty: Number(g.bucketQty[bucket] || 0),
+      lines: Number(g.bucketLines && g.bucketLines[bucket] || 0)
+    })).sort((a, b) => (b.qty - a.qty) || (b.lines - a.lines) || a.bucket.localeCompare(b.bucket));
+
+    let bucket = rankedBuckets.length ? rankedBuckets[0].bucket : '';
+    // fallback เฉพาะ roster ที่เป็นชื่อ KPI bucket ละเอียดจริง ๆ เท่านั้น
+    if (!bucket) {
+      const assignedPosition = String(getPickerRosterHomeZone(g.picker) || '').trim();
+      const bucketInfo = resolveProductivityWeightBucket(assignedPosition);
+      if (bucketInfo) bucket = bucketInfo.label;
+    }
+    if (!bucket) {
       unmappedPositionCount++;
       return;
     }
-    const bucket = bucketInfo.label;
     addAgg(overallZoneAgg, bucket, g, prod, pcsProd, activeHours);
     const dayTarget = dailyZoneAgg[g.sd] || (dailyZoneAgg[g.sd] = Object.create(null));
     addAgg(dayTarget, bucket, g, prod, pcsProd, activeHours);
@@ -1816,7 +1843,7 @@ function calculateCrossSystemWeightedProductivity(from, to, sf) {
     range_method: 'arithmetic mean of eligible Picker/Calendar-Date productivity inside assigned Position, then fixed Zone Weight',
     hour_method: 'Active Hours = count distinct normalized clock-hour buckets with Pick > 0; ROUND(Total Pick Units / Active Hours, 0)',
     eligibility_rule: 'Active Hours > 3, Productivity > 0 and < 1000, support-other-work excluded when roster identifies it',
-    position_method: 'picker_roster_zones (static Position like Results Master V2 XLOOKUP); unmapped Position is not forced into a Zone',
+    position_method: 'dominant actual KPI Zone bucket by Pick Units per Picker/Calendar-Date; detailed roster Position used only as fallback',
     eligible_picker_days: eligiblePickerDays,
     eligible_active_hours: eligibleActiveHours,
     eligible_pick_units: eligiblePickUnits,
