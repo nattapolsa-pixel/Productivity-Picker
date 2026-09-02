@@ -9,7 +9,7 @@
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 // ส่ง compact work cube ก่อน แล้ว lazy-load item/time detail เป็นรายวัน
 // pick_qty ต้องมาจาก BigQuery Master_Item + Master_Pack เท่านั้น
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v22-v2-active-hour-weighted';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v24-sheet-master-all-items';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -27,10 +27,8 @@ const PRODUCTIVITY_MAX_EXCLUSIVE = 1000;
 const SHIFT_A_REGULAR_HOURS = 7.5;
 const SHIFT_B_REGULAR_HOURS = 470 / 60; // Workforce Planning เดิมเท่านั้น
 const OT_MAX = 2.5;
-// หน้า Items แสดง/โหลดเฉพาะ 4 Owner นี้เท่านั้น
-const ITEM_PAGE_ALLOWED_OWNERS = Object.freeze(['DM02', 'DP02', 'DG02', 'DCWN']);
-const ITEM_PAGE_ALLOWED_OWNER_SET = new Set(ITEM_PAGE_ALLOWED_OWNERS);
-function isItemPageAllowedOwner(value) { return ITEM_PAGE_ALLOWED_OWNER_SET.has(normalizeOwnerKey(value)); }
+// หน้า Items ใช้ Master_Item ทุก Owner เป็นฐาน เพื่อให้เห็นทั้งสินค้าที่เคลื่อนไหวและยอด 0
+function isItemPageAllowedOwner(value) { return !!normalizeOwnerKey(value); }
 // ====================================
 
 const fmt = n => Number(n).toLocaleString('en-US');
@@ -1967,9 +1965,22 @@ function aggregate(system, from, to, sf) {
     dRec.zones[zone].pcs += pVal; dRec.zones[zone].qty += qVal; dRec.zones[zone].lines += lineVal;
   }
 
-  // หน้า Items แสดงเฉพาะ SKU ที่มีกิจกรรมในช่วงวันที่เลือก
-  // ไม่ seed Master ทั้งก้อนเป็นยอด 0 เพื่อลดจำนวนรายการ/เวลา Render อย่างมาก
-  // Master_Item ใช้เพื่อเติมชื่อ/Pack/สถานะให้ SKU ที่มี Activity เท่านั้น
+  // Google Sheet Master_Item เป็นรายการตั้งต้นทั้งหมด แล้วค่อย LEFT JOIN กิจกรรม
+  // จาก BigQuery ด้านล่าง จึงเห็นสินค้าที่ไม่มีการหยิบเป็นยอด 0 ด้วย
+  Object.keys(ITEM_MASTER).forEach(key => {
+    const info = ITEM_MASTER[key];
+    if (!info || !isItemPageAllowedOwner(info.owner)) return;
+    const base = {
+      ...info, key, owner: normalizeOwnerKey(info.owner), sku: normalizeSkuKey(info.sku),
+      pcs: 0, qty: 0, lines: 0, hasActivity: false,
+      locations: new Set(), zones: new Set()
+    };
+    itemMapAll[key] = base;
+    if (!isSkuExcluded(info.sku, info.owner)) {
+      itemMap[key] = { ...base, locations: new Set(), zones: new Set() };
+    }
+  });
+
   // Pick Detail เป็นกิจกรรม นำมาแมปด้วย Owner + Item; รายการที่ไม่มีใน Master ยังแสดงเพื่อตรวจสอบได้
   forEachCurrentItemRow(system, from, to, sf, r => {
     if (!isItemPageAllowedOwner(r.owner)) return;
@@ -3034,8 +3045,7 @@ async function loadCurrentItemCube(force, system = sys) {
   const timeout = setTimeout(() => controller.abort(), 60000);
   const task = (async () => {
     try {
-      // ให้ Item Cube มาก่อนแบบจริง ๆ: ไม่ยิง Master_Item แข่งกับ Query สินค้า
-      // พอ Item Cube แสดงได้แล้วค่อยโหลดชื่อสินค้าเบื้องหลัง
+      // Master_Item และ Item Cube โหลดพร้อมกัน: Sheet เป็นรายการตั้งต้น ส่วน BigQuery เป็นยอดเคลื่อนไหว
       if (!force) {
         const cached = await readDashboardCubeCache('item', requestKey);
         if (isValidItemCubePayload(cached, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)) {
@@ -3046,7 +3056,7 @@ async function loadCurrentItemCube(force, system = sys) {
             delete built['items'];
             if (!dashboardBundleLoading && currentPage === 'items') render();
           }
-          setTimeout(() => void loadItemMaster(false), 150);
+          void loadItemMaster(false);
           return cached;
         }
       }
@@ -3077,7 +3087,7 @@ async function loadCurrentItemCube(force, system = sys) {
         const modal = document.getElementById('zoneDetailModal');
         if (activeZoneDetailCode && modal && modal.style.display !== 'none') openZoneDetailModal(activeZoneDetailCode);
       }
-      setTimeout(() => void loadItemMaster(false), 150);
+      void loadItemMaster(false);
       return payload;
     } catch (err) {
       const message = err && err.name === 'AbortError'
@@ -5067,14 +5077,16 @@ const builders = {
   },
   items() {
     const itemCubeReady = hasCurrentItemCube();
+    const itemMasterReady = Object.keys(ITEM_MASTER).length > 0;
     const itemLoadStatus = document.getElementById('itemLoadStatus');
     const itemChartBox = document.getElementById('item') && document.getElementById('item').closest('.chartbox');
-    if (!itemCubeReady) {
+    if (!itemCubeReady || !itemMasterReady) {
+      if (!itemMasterReady) setTimeout(() => void loadItemMaster(false), 0);
       setTimeout(() => void loadCurrentItemCube(false), 0);
       if (itemLoadStatus) itemLoadStatus.style.display = 'block';
       if (itemChartBox) itemChartBox.style.display = 'none';
       const itemTable = document.getElementById('itable');
-      if (itemTable) itemTable.innerHTML = '<tbody><tr><td style="text-align:center;color:#1d4ed8;padding:30px;font-weight:600;">⏳ กำลังโหลดสินค้า Owner DM02 / DP02 / DG02 / DCWN จาก BigQuery…</td></tr></tbody>';
+      if (itemTable) itemTable.innerHTML = '<tbody><tr><td style="text-align:center;color:#1d4ed8;padding:30px;font-weight:600;">⏳ กำลังโหลดรายการสินค้าจาก Google Sheet และเชื่อมยอดเคลื่อนไหวจาก BigQuery…</td></tr></tbody>';
       const pagination = document.getElementById('itablePagination');
       if (pagination) pagination.innerHTML = '';
       return;
@@ -6441,7 +6453,8 @@ function show(page) {
 }
 function preloadAllCubes() {
   if (!hasLiveData || !dfrom || !dto) return;
-  // ให้ Item Cube ได้ทรัพยากรก่อนแบบ exclusive; Time slot ค่อยตามหลังเมื่อ Item จบ
+  // Master_Item (Google Sheet) และ Item Cube (BigQuery) โหลดพร้อมกัน แล้ว Time slot ค่อยตาม
+  void loadItemMaster(false);
   if (!hasCurrentItemCube()) {
     setTimeout(() => {
       void loadCurrentItemCube(false).then(() => {
@@ -6451,7 +6464,6 @@ function preloadAllCubes() {
   } else if (!hasCurrentSlotCube()) {
     setTimeout(() => void loadCurrentSlotCube(false), 100);
   }
-  // Master_Item จะถูกโหลดหลัง Item Cube สำเร็จจาก loadCurrentItemCube() เท่านั้น
 }
 
 function render() {
@@ -6818,10 +6830,9 @@ async function restoreCurrentCubePairFromCache() {
 }
 async function ensureDashboardBundleReady(force, totalRows, source) {
   dashboardBundleLoading = false;
-  // แสดง Main Dashboard ทันที แล้วให้ Item Cube ได้คิวแรกแบบไม่แข่งกับ Master/Slot
-  // พอ Item จบจึงค่อยโหลด Time slot; Master_Item ถูกเรียกจาก loadCurrentItemCube() หลัง Item แสดงแล้ว
+  // แสดง Main Dashboard ทันที แล้วโหลด Sheet Master + BigQuery activity พร้อมกัน
   finalizeDashboardBundle(totalRows, source);
-  void loadCurrentItemCube(false, sys).then(() => {
+  void Promise.all([loadItemMaster(false), loadCurrentItemCube(false, sys)]).then(() => {
     setTimeout(() => void loadCurrentSlotCube(force, sys), 100);
   });
   return true;

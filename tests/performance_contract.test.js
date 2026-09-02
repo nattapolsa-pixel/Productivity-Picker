@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260813-not-found-detail-v66'), 'HTML must cache-bust the Not Found detail release');
+assert(html.includes('app.js?v=20260902-sheet-master-all-items-v79'), 'HTML must cache-bust the all-items Sheet-master release');
 assert(app.includes('ดูรหัสพนักงานและสาเหตุ') && app.includes('ค่า Team ที่พบ') && app.includes('สาเหตุที่เป็น Not Found'),
   'Not Found banner must expose picker codes, raw teams and reasons');
 assert(app.includes("action: 'set_dashboard_exclusions'") && app.includes("mode=dashboard_exclusions") &&
@@ -69,7 +69,7 @@ assert(app.includes('const pendingLoad = activeLoadPromise;'), 'Post-upload refr
 assert(app.includes('const result = await loadData(true);'), 'Post-upload refresh must force one post-MERGE request');
 assert(app.includes('retry.onclick = () => loadData(false)'), 'Retry after timeout must reuse a completed server cache');
 assert(app.includes('30 * 24 * 60 * 60 * 1000'), 'Last-known-good dashboard cache must survive normal gaps between visits');
-assert(app.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v15-sunday-ot-calendar'"), 'Frontend must use the Sunday OT calendar payload');
+assert(app.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v24-sheet-master-all-items'"), 'Frontend must use the all-items Sheet-master payload');
 assert(app.includes('packedItemRowData') && app.includes('packedSlotRowData'), 'Frontend cube readers are missing');
 assert(app.includes("'mode=picker_items'"), 'Picker SKU detail must load lazily instead of bloating the initial payload');
 assert(app.includes('loadPickerItemsForDrilldown'), 'Picker SKU lazy loader is missing');
@@ -77,19 +77,19 @@ assert(app.includes("'mode=item_cube'"), 'Item detail must load lazily instead o
 assert(app.includes('loadCurrentItemCube'), 'Item cube lazy loader is missing');
 assert(html.includes('id="itemLoadStatus"') && app.includes('const itemCubeReady = hasCurrentItemCube();'),
   'Items page must guard rendering while a new scoped item cube is loading');
-assert(app.includes('กำลังอัปเดตข้อมูลหลังเปลี่ยนรายการยกเว้น') && app.includes('if (itemChartBox) itemChartBox.style.display = \'none\''),
-  'Items page must not show zero charts or zero master rows during exclusion refresh');
+assert(app.includes('กำลังโหลดรายการสินค้าจาก Google Sheet และเชื่อมยอดเคลื่อนไหวจาก BigQuery') && app.includes('if (itemChartBox) itemChartBox.style.display = \'none\''),
+  'Items page must wait for both Sheet master and BigQuery activity before rendering');
 assert(app.includes('function scheduleExclusionBackgroundRefresh()') && app.includes('}, 700);'),
   'Exclusion changes must debounce the background BigQuery refresh');
-assert(app.includes('// Item Cube เก็บข้อมูลเต็มและกรอง Exclude ใน Browser') &&
+assert(app.includes('Pick Detail เป็นกิจกรรม นำมาแมปด้วย Owner + Item') &&
   !app.includes("dashboardResponseEncodingQuery(),\n        dashboardScopeQuery(),\n        't=' + Date.now()"),
   'Item Cube must be exclusion-independent so item clicks can render instantly');
 assert(/window\.toggleExcludeSku[\s\S]*?invalidateAggregationCache\(\);[\s\S]*?render\(\);[\s\S]*?scheduleExclusionBackgroundRefresh\(\);/.test(app),
   'Item exclusion must render locally before background synchronization');
-assert(app.includes('const masterPromise = loadItemMaster(false);') && /masterPromise\s*\n\s*\]\);/.test(app),
-  'Item Master and Item Cube must load concurrently');
 assert(/void Promise\.all\(\[\s*loadItemMaster\(false\),[\s\S]*?loadCurrentItemCube\(false, sys\)/.test(app),
   'Current-system item preload must reuse the ready exclusion-independent cube');
+assert(app.includes('Object.keys(ITEM_MASTER).forEach(key =>') && app.includes("status: !v.inMaster ? 'NOT_IN_MASTER' : (v.hasActivity ? 'ACTIVE' : 'NO_ACTIVITY')"),
+  'Items must start from Google Sheet master and retain zero-activity SKUs');
 assert(app.includes('canonicalCubeScope') && app.includes('writeDashboardCubeCache'), 'Full-range item/time cubes must persist across reloads');
 assert(app.includes("'mode=slot_cube'"), 'Time-slot detail must load lazily instead of bloating the initial payload');
 assert(app.includes('loadCurrentSlotCube') && app.includes('fetchDailySlotCube'), 'Time-slot daily lazy loader is missing');
@@ -125,14 +125,16 @@ assert(!backend.includes("SELECT 'W' AS cube_type") && !backend.includes("SELECT
 assert(backend.includes("if (mode === 'picker_items')") && backend.includes('buildPickerItemsData_'), 'Backend picker SKU detail endpoint is missing');
 assert(backend.includes("if (mode === 'item_cube')") && backend.includes('buildItemCubeData_'), 'Backend item cube lazy endpoint is missing');
 assert(backend.includes("if (mode === 'slot_cube')") && backend.includes('buildSlotCubeData_'), 'Backend time-slot cube lazy endpoint is missing');
-assert(backend.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v15-sunday-ot-calendar'"), 'Backend must publish the Sunday OT calendar schema');
+assert(backend.includes("DASHBOARD_SCHEMA_VERSION = 'pick-units-v24-sheet-master-all-items'"), 'Backend must publish the all-items Sheet-master schema');
+assert(backend.includes('SpreadsheetApp.openById(MASTER_ITEM_SHEET_ID)') && backend.includes("'SHEET_MASTER'"),
+  'Backend item master endpoint must read the Google Sheet directly');
 assert(backend.includes('function loadPickerSundayOtCalendar_') && backend.includes("/^OT_([A-Za-z]{3})(\\d{4})$/i"),
   'Backend must load monthly Picker OT sheets for Sunday reporting');
 assert(backend.includes("GROUP BY shift_date, report_team, hour_of_day") && backend.includes("row_width: 6"),
   'Time-slot endpoint must aggregate by date/team/hour before returning data');
 assert(backend.includes('const CACHE_CODEC = \'gzip-base64-v1\'') && backend.includes('Utilities.gzip('), 'Dashboard cache must be compressed before chunking');
 assert(backend.includes('getCachedEncoded_') && backend.includes('gzipEnvelope_'), 'Backend must serve cached cubes without inflating them first');
-assert(backend.includes("DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v9-24h-shift-cutoff'"), '24-hour shift payloads must rotate the backend cache format');
+assert(backend.includes("DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v18-sheet-master-all-items'"), 'All-items Sheet-master payloads must rotate the backend cache format');
 assert(backend.includes('buildItemCubeData_(e, itemEpoch)') && backend.includes('buildSlotCubeData_(e, requestScope, slotEpoch)'),
   'Cube epoch must be captured before the BigQuery query starts');
 assert(backend.includes('function assertDashboardDataEpochStable_') &&
@@ -140,7 +142,8 @@ assert(backend.includes('function assertDashboardDataEpochStable_') &&
   'Dashboard queries must reject data that changes while a bundle is loading');
 assert((backend.match(/assertDashboardDataEpochStable_\(expectedEpoch\);/g) || []).length >= 2,
   'Lazy cube queries must verify the data epoch after querying');
-assert(backend.includes("AND pick_date BETWEEN DATE '") && backend.includes('DATE_ADD(DATE '), 'Daily cube queries must prune BigQuery partitions');
+assert((backend.match(/pick_date BETWEEN DATE /g) || []).length >= 3 && backend.includes('sqlStringLiteral_(from)') && backend.includes('sqlStringLiteral_(to)'),
+  'Scoped cube queries must prune BigQuery partitions by the selected calendar dates');
 assert(backend.includes('SET (source_rows, inserted_rows, updated_rows)'), 'MERGE stats must use one pre-merge scan');
 assert(backend.includes("postData.action === 'upload_chunk'") && backend.includes("postData.action === 'upload_commit'"), 'Backend chunk upload actions are missing');
 assert(backend.includes("writeDisposition: writeDisposition || 'WRITE_EMPTY'"), 'Chunk retry must safely overwrite only its own stage table');

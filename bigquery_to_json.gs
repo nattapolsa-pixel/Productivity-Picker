@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v22-v2-active-hour-weighted';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v24-sheet-master-all-items';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -40,7 +40,7 @@ const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_calendar_date_v4';
 const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_calendar_date_v4';
 const SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v16-item4-ultrafast';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v18-sheet-master-all-items';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -48,9 +48,6 @@ const PICKER_NAME_TAB = 'บันทึกเวลาทำงาน';
 const PICKER_NAME_START_ROW = 26;
 const ZONE_MASTER_SHEET_ID = '1PMnlyYHswnV0nE73Alxh-ocIFtTipB9LMzACdNM9GFs';
 const ZONE_MASTER_TAB = 'Zone_V2';
-
-// หน้า Items ใช้เฉพาะ 4 Owner นี้เท่านั้น เพื่อให้ Query/Cache/Render เบาลง
-const ITEM_PAGE_ALLOWED_OWNERS = Object.freeze(['DM02', 'DP02', 'DG02', 'DCWN']);
 
 // ====== Master สำหรับคำนวณหน่วยหยิบใน BigQuery ======
 // Master_Item / Data: B=Owner, C=Item, D=Description, E=Pack, JL=Pick Type
@@ -524,38 +521,43 @@ function getSlotCubeCacheRevision_(e, requestScope, dataEpoch) {
     sha256Hex_(JSON.stringify(scope)).slice(0, 24);
 }
 
-function itemPageAllowedOwnerSql_(expression) {
-  const expr = String(expression || 'owner');
-  return expr + ' IN (' + ITEM_PAGE_ALLOWED_OWNERS.map(sqlStringLiteral_).join(',') + ')';
-}
-
 function buildItemMasterData_(dataEpoch) {
   const expectedEpoch = String(dataEpoch || getDashboardDataEpoch_());
   if (getDashboardDataEpoch_() !== expectedEpoch) {
     throw uploadError_('DATA_EPOCH_CHANGED', 'ข้อมูล Master เปลี่ยนก่อนเริ่มโหลด กรุณาลองใหม่อีกครั้ง');
   }
-  const sql = [
-    'SELECT owner, item, COALESCE(description, item), COALESCE(pick_type, \'\'),',
-    '       COALESCE(item_pack, \'\'), pick_pack_size, case_pack_size, uom_divisor, match_status',
-    'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + MASTER_CURRENT_TABLE + '`',
-    'WHERE ' + itemPageAllowedOwnerSql_('UPPER(owner)'),
-    'ORDER BY owner, item'
-  ].join('\n');
+  // หน้า Items ใช้ Google Sheet เป็นรายการตั้งต้นโดยตรง เพื่อให้สินค้าที่ไม่เคยมี
+  // Pick Detail ยังแสดงเป็นยอด 0 ได้ ส่วนยอด pcs/pick_qty จะ LEFT JOIN ใน browser
+  // จาก Item Cube ของ BigQuery ภายหลัง การคำนวณ UOM ใน BigQuery ไม่ถูกแก้ไขตรงนี้
+  const itemSs = SpreadsheetApp.openById(MASTER_ITEM_SHEET_ID);
+  const itemSheet = itemSs.getSheetByName(MASTER_ITEM_TAB);
+  if (!itemSheet) throw uploadError_('MASTER_ITEM_TAB_NOT_FOUND', 'ไม่พบ Sheet ' + MASTER_ITEM_TAB + ' ใน Master_Item');
+  const lastRow = itemSheet.getLastRow();
   const rows = [];
-  bqQueryEach_(sql, function(r) {
-    rows.push(
-      String(r[0] || '-'), String(r[1] || '(none)'), String(r[2] || r[1] || '(none)'),
-      String(r[3] || ''), String(r[4] || ''),
-      r[5] == null ? null : Number(r[5]), r[6] == null ? null : Number(r[6]),
-      r[7] == null ? null : Number(r[7]), String(r[8] || '')
-    );
-  }, JOB_DEADLINE_MS, true);
+  if (lastRow >= MASTER_ITEM_FIRST_DATA_ROW) {
+    const count = lastRow - MASTER_ITEM_FIRST_DATA_ROW + 1;
+    const base = itemSheet.getRange(MASTER_ITEM_FIRST_DATA_ROW, 2, count, 4).getDisplayValues();
+    const pickTypes = itemSheet.getRange(MASTER_ITEM_FIRST_DATA_ROW, 272, count, 1).getDisplayValues();
+    const seen = Object.create(null);
+    base.forEach(function(r, index) {
+      const owner = String(r[0] || '').trim().toUpperCase();
+      const item = String(r[1] || '').trim().replace(/\.0+$/, '');
+      if (!owner || !item) return;
+      const key = owner + '|' + item;
+      if (seen[key]) return;
+      seen[key] = true;
+      rows.push(
+        owner, item, String(r[2] || item).trim(),
+        String(pickTypes[index] && pickTypes[index][0] || '').trim(),
+        String(r[3] || '').trim(), null, null, null, 'SHEET_MASTER'
+      );
+    });
+  }
   assertDashboardDataEpochStable_(expectedEpoch);
   return {
     schema_version: DASHBOARD_SCHEMA_VERSION,
     data_epoch: expectedEpoch,
     row_width: 9,
-    allowed_owners: ITEM_PAGE_ALLOWED_OWNERS.slice(),
     rows: rows,
     generated: new Date().toISOString()
   };
@@ -590,11 +592,10 @@ function buildItemCubeData_(e, dataEpoch) {
     shiftSql = '    AND ' + pickerRosterTeamCodeSql_('picker_id') + ' = ' + sqlStringLiteral_(teamCode);
   }
 
-  // Ultra-fast Item Cube:
+  // Item Cube:
   // 1) partition prune ด้วย pick_date
   // 2) cluster prune ด้วย category + owner
-  // 3) เหลือเฉพาะ 4 Owner ที่หน้า Items ใช้งาน
-  // 4) aggregate ที่ BigQuery ก่อนส่ง Browser
+  // 3) aggregate ที่ BigQuery ก่อนส่ง Browser (ทุก Owner ใน Master_Item)
   const sql = [
     'SELECT',
     "  COALESCE(location, zone, '??') AS location_key,",
@@ -607,7 +608,6 @@ function buildItemCubeData_(e, dataEpoch) {
     'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     'WHERE UPPER(category) = ' + sqlStringLiteral_(system),
     '  AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
-    '  AND ' + itemPageAllowedOwnerSql_(ownerExpr),
     '  AND (COALESCE(pcs, 0) != 0 OR COALESCE(pick_qty, 0) != 0)',
     shiftSql,
     '  ' + excludedSql,
@@ -632,7 +632,6 @@ function buildItemCubeData_(e, dataEpoch) {
     to: to,
     shift: shift,
     row_width: 7,
-    allowed_owners: ITEM_PAGE_ALLOWED_OWNERS.slice(),
     rows: rows,
     generated: new Date().toISOString()
   };
@@ -3311,12 +3310,7 @@ function testRun() {
     if (master.row_width !== 9 || master.rows.length % 9 !== 0 || master.rows.length === 0) {
       throw new Error('Master_Item payload ว่างหรือรูปแบบไม่ถูกต้อง');
     }
-    for (let i = 0; i < master.rows.length; i += 9) {
-      if (ITEM_PAGE_ALLOWED_OWNERS.indexOf(String(master.rows[i] || '').toUpperCase()) < 0) {
-        throw new Error('Master_Item หน้า Items มี Owner นอก whitelist: ' + String(master.rows[i] || ''));
-      }
-    }
-    pass('Master_Item', (master.rows.length / 9).toLocaleString() + ' รายการ · Owner เฉพาะ ' + ITEM_PAGE_ALLOWED_OWNERS.join('/'));
+    pass('Master_Item', (master.rows.length / 9).toLocaleString() + ' รายการ · ครบทุก Owner จาก Google Sheet');
   } catch (err) { fail('Master_Item', err); throw err; }
 
   try {
@@ -3403,12 +3397,7 @@ function testRun() {
     if (itemCube.row_width !== 7 || itemCube.rows.length % 7 !== 0) {
       throw new Error('Fast Item cube ต้องมี 7 ช่อง: Location, Zone, Owner, Item, Pcs, Units, Lines');
     }
-    for (let i = 0; i < itemCube.rows.length; i += 7) {
-      if (ITEM_PAGE_ALLOWED_OWNERS.indexOf(String(itemCube.rows[i + 2] || '').toUpperCase()) < 0) {
-        throw new Error('Item cube มี Owner นอก whitelist: ' + String(itemCube.rows[i + 2] || ''));
-      }
-    }
-    pass('Owner + Item + Location/Zone mapping', (itemCube.rows.length / 7).toLocaleString() + ' กลุ่มในวันที่ ' + testDate + ' · Owner ' + ITEM_PAGE_ALLOWED_OWNERS.join('/') + ' เท่านั้น');
+    pass('Owner + Item + Location/Zone mapping', (itemCube.rows.length / 7).toLocaleString() + ' กลุ่มในวันที่ ' + testDate + ' · ครบทุก Owner');
   } catch (err) { fail('Owner + Item mapping', err); throw err; }
 
   const summary = '🎉 TEST RUN PASSED — Calendar Date + PTT totals ถูกต้อง พร้อม Deploy\n' + results.join('\n');

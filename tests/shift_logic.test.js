@@ -35,8 +35,8 @@ for (const [date, minute, shift, shiftDate, shiftMinute] of cases) {
 vm.runInContext(`
   DATA = {
     meta:{picker_shift_teams:{P1:'B'},picker_roster_teams:{P1:'B'}},
-    PTT:{row_width:9,dates:['2026-08-08'],pickers:['P1'],rows:[0,0,'AA',0,1,1,1,0,180]},
-    BPS:{row_width:9,dates:[],pickers:[],rows:[]}
+    PTT:{row_width:10,dates:['2026-08-08'],pickers:['P1'],rows:[0,0,'AA',0,1,1,1,0,180,128]},
+    BPS:{row_width:10,dates:[],pickers:[],rows:[]}
   };
   prepShifts();
   globalThis.__prepared = DATA.PTT._sh[0];
@@ -57,9 +57,7 @@ assert(backend.includes('function dashboardShiftDateSql_'));
 assert(backend.includes('function dashboardShiftCodeSql_'));
 assert(backend.includes('function pickerRosterTeamCodeSql_'));
 const dateHelper = backend.slice(backend.indexOf('function dashboardShiftDateSql_'), backend.indexOf('function dashboardShiftCodeSql_'));
-assert(dateHelper.includes('loadPickerSundayOtCalendar_()'));
-assert(dateHelper.includes('DATE_SUB('));
-assert(dateHelper.includes('closedSundays'));
+assert(dateHelper.includes("String(pickDateExpression || 'pick_date')"));
 assert(backend.includes("if (!text || text === '-' || /^sun(day)?$/i.test(text)) return 0;"));
 assert(backend.includes('if (dateCount > bestDateCount)'));
 assert(backend.includes('rosterPayload.picker_sunday_ot = loadPickerSundayOtCalendar_(forceRoster)'));

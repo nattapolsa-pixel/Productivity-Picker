@@ -36,13 +36,13 @@ vm.runInContext(`
   DATA = {
     meta:{schema_version:DASHBOARD_SCHEMA_VERSION, excluded_skus:['SKU2']},
     PTT:{
-      row_width:9, item_row_width:8, slot_row_width:8,
+      row_width:10, item_row_width:8, slot_row_width:8,
       dates:['2026-08-01'], pickers:['P1'], skus:['SKU1','SKU2'],
-      rows:[0,0,'AA',0,100,25,4,0,240],
+      rows:[0,0,'AA',0,100,25,4,0,240,1920],
       item_rows:[0,0,'AA','-',0,100,25,4, 0,0,'AA','-',1,50,10,2],
       slot_rows:[0,0,'AA',0,7,40,10,2, 0,0,'AA',0,8,60,15,2]
     },
-    BPS:{row_width:9,item_row_width:8,slot_row_width:8,dates:[],pickers:[],skus:[],rows:[],item_rows:[],slot_rows:[]}
+    BPS:{row_width:10,item_row_width:8,slot_row_width:8,dates:[],pickers:[],skus:[],rows:[],item_rows:[],slot_rows:[]}
   };
   prepShifts();
   globalThis.__cubeResult = aggregate('PTT','2026-08-01','2026-08-01','all');
@@ -53,7 +53,7 @@ assert.deepEqual(
   {pcs:result.kpis.pcs, qty:result.kpis.qty, lines:result.kpis.lines, pickers:result.kpis.pickers},
   {pcs:100, qty:25, lines:4, pickers:1}
 );
-assert.equal(result.kpis.avg_prod, 7.1);
+assert.equal(result.kpis.avg_prod, 6);
 assert.equal(result.by_item.length, 1);
 assert.equal(result.by_item[0].sku, 'SKU1');
 assert.equal(result.by_item_all.length, 2);
@@ -80,5 +80,14 @@ assert.equal(lazyResult.by_item.length, 1);
 assert.equal(lazyResult.by_item[0].sku, 'SKU1');
 assert.equal(lazyResult.by_item_all.length, 2);
 assert.equal(lazyResult.by_item_all.find(x => x.sku === 'SKU2').excluded, true);
+
+vm.runInContext(`
+  ITEM_MASTER = {
+    'DM02\u0001ZERO1': {key:'DM02\u0001ZERO1',owner:'DM02',sku:'ZERO1',item:'ZERO1',name:'No movement',inMaster:true}
+  };
+  aggregateCache.clear();
+  globalThis.__masterSeeded = aggregate('PTT','2026-08-01','2026-08-01','all');
+`, context);
+assert.equal(context.__masterSeeded.by_item_all.some(x => x.sku === 'ZERO1' && x.qty === 0 && x.status === 'NO_ACTIVITY'), true);
 
 console.log('Compact cube aggregation tests passed');
