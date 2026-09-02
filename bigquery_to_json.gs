@@ -40,7 +40,7 @@ const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_calendar_date_v4';
 const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_calendar_date_v4';
 const SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v13-v2-active-hour-sort10';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v14-raw-v2-fast-item7';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -576,6 +576,9 @@ function buildItemCubeData_(e, dataEpoch) {
   const shiftSql = shift === 'morning'
     ? "AND report_team = 'A'"
     : (shift === 'night' ? "AND report_team = 'B'" : (shift === 'not_found' ? "AND report_team = 'X'" : ''));
+
+  // Fast Item Cube: request ถูกล็อกช่วงวันที่+กะแล้ว จึง aggregate ตัดมิติ Date/Shift ออกจาก payload
+  // ลดจำนวนกลุ่มและขนาด JSON อย่างมาก โดยยังคง Location/Zone/Owner/SKU และยอดครบถ้วน
   const sql = [
     'WITH base_picks AS (',
     '  SELECT',
@@ -597,19 +600,18 @@ function buildItemCubeData_(e, dataEpoch) {
     '    ' + shiftSql,
     '    ' + excludedSql,
     ')',
-    "SELECT FORMAT_DATE('%Y-%m-%d', shift_date), report_team, location_key, zone_key, owner_key, sku_key,",
+    'SELECT location_key, zone_key, owner_key, sku_key,',
     '       SUM(pcs), SUM(pick_qty), COUNT(*)',
     'FROM filtered_picks',
-    'GROUP BY shift_date, report_team, location_key, zone_key, owner_key, sku_key',
-    'ORDER BY shift_date, location_key, zone_key, owner_key, sku_key'
+    'GROUP BY location_key, zone_key, owner_key, sku_key',
+    'ORDER BY owner_key, sku_key, location_key, zone_key'
   ].join('\n');
 
   const rows = [];
   bqQueryEach_(sql, function(r) {
     rows.push(
-      String(r[0] || ''), r[1] === 'X' ? 2 : (r[1] === 'B' ? 1 : 0),
-      String(r[2] || '??'), String(r[3] || '??'), String(r[4] || '-'), String(r[5] || '(none)'),
-      Number(r[6]) || 0, Number(r[7]) || 0, Number(r[8]) || 0
+      String(r[0] || '??'), String(r[1] || '??'), String(r[2] || '-'), String(r[3] || '(none)'),
+      Number(r[4]) || 0, Number(r[5]) || 0, Number(r[6]) || 0
     );
   }, JOB_DEADLINE_MS, true);
   assertDashboardDataEpochStable_(expectedEpoch);
@@ -621,7 +623,7 @@ function buildItemCubeData_(e, dataEpoch) {
     from: from,
     to: to,
     shift: shift,
-    row_width: 9,
+    row_width: 7,
     rows: rows,
     generated: new Date().toISOString()
   };
@@ -3384,10 +3386,10 @@ function testRun() {
       system: 'PTT', from: testDate, to: testDate, shift: 'all', excluded_items: '[]'
     }};
     const itemCube = buildItemCubeData_(fakeEvent, getDashboardDataEpoch_());
-    if (itemCube.row_width !== 9 || itemCube.rows.length % 9 !== 0) {
-      throw new Error('Item cube v9 ต้องมี 9 ช่อง: Date, Shift, Location, Zone, Owner, Item, Pcs, Units, Lines');
+    if (itemCube.row_width !== 7 || itemCube.rows.length % 7 !== 0) {
+      throw new Error('Fast Item cube ต้องมี 7 ช่อง: Location, Zone, Owner, Item, Pcs, Units, Lines');
     }
-    pass('Owner + Item + Location/Zone mapping', (itemCube.rows.length / 9).toLocaleString() + ' กลุ่มในวันที่ ' + testDate);
+    pass('Owner + Item + Location/Zone mapping', (itemCube.rows.length / 7).toLocaleString() + ' กลุ่มในวันที่ ' + testDate + ' · fast item cube');
   } catch (err) { fail('Owner + Item mapping', err); throw err; }
 
   const summary = '🎉 TEST RUN PASSED — Calendar Date + PTT totals ถูกต้อง พร้อม Deploy\n' + results.join('\n');

@@ -1766,8 +1766,8 @@
           <!-- 📈 Chart 1: Trend Chart (Full Width) -->
           <div class="card wide">
             <h3>แนวโน้มการหยิบ &amp; Productivity</h3>
-            <div class="sub">แท่ง = ปริมาณของระบบที่เลือก (ซ้าย) · เส้น = KPI Weighted Overall รวม PTT+BPS ตามสูตรวันที่
-              22 ส.ค. (ขวา) ·
+            <div class="sub">แท่ง = ปริมาณของระบบที่เลือก (ซ้าย) · เส้น = Productivity V2 เฉลี่ยราย
+              Picker/วันของระบบที่เลือก (ขวา) ·
               หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ</div>
             <div class="controls">
               <div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button
@@ -1926,21 +1926,21 @@
               style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">เป้าหมาย:
               <span id="targetBadgeVal">10</span></span>
           </div>
-          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ KPI Weighted Overall รายวัน (PTT+BPS)
-            กับเป้าหมายที่ตั้งไว้
+          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ Productivity V2
+            รายวันของระบบที่เลือกกับเป้าหมายที่ตั้งไว้
             (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)</div>
           <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
         </div>
 
         <div class="card wide">
           <h3>Productivity รายคน — Top 12</h3>
-          <div class="sub">Overall KPI = Productivity แบบ V2 จาก PTT · Active Hours = จำนวนชั่วโมงที่มี Pick > 0 ·
-            เฉลี่ยราย Picker/วันตาม Position แล้วถ่วง Weight วันที่ 22 ส.ค.</div>
+          <div class="sub">Overall KPI = Productivity แบบ V2 ของระบบที่เลือก · Active Hours = จำนวนชั่วโมงที่มี Pick > 0
+            · เฉลี่ยตรงราย Picker/วัน ไม่ถ่วง Weight Zone</div>
           <div class="chartbox tall"><canvas id="picker"></canvas></div>
           <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery · PTT ลบเวลา 7 ชั่วโมง ส่วน BPS ใช้เวลาเดิม และนับตาม
-            Calendar Date หลัง Normalize · Productivity แบบ V2 = ROUND(Total Pick Units ÷ Active Hours,0) · Count เมื่อ
-            Active Hours > 3 และ Productivity 1–999 · OT ถูกนับอัตโนมัติเมื่อมี Pick ในชั่วโมง OT · Overall ใช้ Weight
-            Full Rack 37% / Half Rack 48% / EA 15%</div>
+            Calendar Date หลัง Normalize · Productivity แบบ V2 = ROUND(Total Pick Units ÷ Active Hours,0) ต่อ Picker/วัน
+            · Count เมื่อ Active Hours > 3 และ Productivity 1–999 · OT ถูกนับอัตโนมัติเมื่อมี Pick ในชั่วโมง OT ·
+            Overall เป็นค่าเฉลี่ยตรง ไม่ถ่วง Weight Zone</div>
         </div>
         <div class="card wide affiliation-breakdown-card">
           <h3>Productivity แยกตามสังกัด</h3>
@@ -1978,8 +1978,8 @@
         </div>
         <div class="card wide zone-breakdown-card" style="margin-bottom:18px">
           <h3>Productivity แยกตาม Zone, Owner และ Type Pick</h3>
-          <div class="sub">Productivity ใช้ Active Hour แบบ V2 และค่าเฉลี่ยราย Picker/Calendar Date; KPI Weight ใช้
-            Position ประจำจาก roster
+          <div class="sub">Productivity ใช้ Active Hour แบบ V2 และค่าเฉลี่ยราย Picker/Calendar Date ของระบบที่เลือก
+            โดยไม่ถ่วง Weight Zone
           </div>
           <div class="zone-breakdown-switch" id="zoneBreakdownSwitch"><button data-breakdown="zone">ตาม
               Zone</button><button data-breakdown="owner" class="active">ตาม Owner</button><button
@@ -2469,7 +2469,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260902-v2-active-hour-weight-v75-zonefix"></script>
+  <script src="app.js?v=20260902-v2-raw-fastitems-v76"></script>
 </body>
 
 </html>

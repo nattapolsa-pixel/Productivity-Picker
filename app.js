@@ -3,7 +3,7 @@
    Productivity แบบ New_Z856 V2 = ROUND(Total Pick Units ÷ Active Hours, 0)
    Active Hours = จำนวนชั่วโมง 00–23 ที่มี Pick > 0 ต่อ Picker + Calendar Date; ไม่หัก Break และชั่วโมง OT ถูกนับเมื่อมี Pick จริง
    Count เฉพาะ Active Hours > 3 และ Productivity 1–999
-   KPI Weighted Overall ใช้ PTT เป็นฐานแบบ V2 แล้วจัด Position จาก Zone จริงที่มี Pick Units สูงสุดต่อคน/วันก่อนถ่วง Weight สูตรวันที่ 22 ส.ค. */
+   Productivity หลักใช้ Raw V2 ของระบบที่เลือก: ค่าเฉลี่ยราย Picker/Calendar Date โดยไม่ถ่วง Weight Zone */
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
@@ -2185,21 +2185,13 @@ function aggregate(system, from, to, sf) {
   const zone_prod_map = {};
   by_zone_prod.forEach(z => zone_prod_map[z.name] = z);
 
-  // Productivity ปกติของ PTT/BPS ยังเป็นค่าของระบบที่ผู้ใช้เลือก เพื่อให้ KPI/กราฟปริมาณสอดคล้องกัน
-  // KPI Weighted Overall คำนวณแบบ V2 จาก PTT: Active Hour + ค่าเฉลี่ยราย Picker/วัน + Position ประจำ แล้วใช้สูตร Weight วันที่ 22 ส.ค.
+  // KPI หลักใช้ Raw V2 ของระบบที่เลือกตรง ๆ: ค่าเฉลี่ย Productivity ราย Picker/Calendar Date
+  // ไม่ถ่วง Weight Zone เพื่อให้เทียบกับ New_Z856 V2 ได้ตรงกว่าและตรวจสอบง่าย
   const rawOverallProd = r1(mean(productiveGroups.map(g => g.prod)));
   const rawOverallPcsProd = r1(mean(productiveGroups.map(g => g.pcsProd)));
-  const weightedOverall = calculateCrossSystemWeightedProductivity(from, to, sf);
-
-  // กราฟรายวัน/Target คำนวณ V2-style แยกตามวัน ส่วนช่วงหลายวันใช้ค่าเฉลี่ยราย Picker/วันภายใน Position ก่อน Weight
-  // แต่เก็บ Raw ของระบบที่เลือกไว้ใน raw_avg_* เพื่อ Audit ได้ตลอด
-  const weightedDailyMap = new Map((weightedOverall.daily || []).map(d => [d.date, d]));
   daily.forEach(day => {
-    const wd = weightedDailyMap.get(day.date);
     day.raw_avg_prod = day.avg_prod;
     day.raw_avg_pcs_prod = day.avg_pcs_prod;
-    day.avg_prod = wd ? r1(Number(wd.avg_prod || 0)) : 0;
-    day.avg_pcs_prod = wd ? r1(Number(wd.avg_pcs_prod || 0)) : 0;
   });
 
   const affiliationMap = {};
@@ -2290,18 +2282,18 @@ function aggregate(system, from, to, sf) {
   const result = {
     kpis: {
       lines, pcs, qty: pickQty, pickers: pickers.size, ot: r1(totOt),
-      // KPI หลัก = V2-style Productivity จาก PTT แล้ว Weight ตาม Position/Zone วันที่ 22
-      avg_prod: r1(weightedOverall.avg_prod),
-      avg_pcs_prod: r1(weightedOverall.avg_pcs_prod),
-      // Raw ของระบบที่เลือกเก็บไว้สำหรับเทียบ/Audit
+      // KPI หลัก = Raw V2 ของระบบที่เลือก ไม่ถ่วง Weight Zone
+      avg_prod: rawOverallProd,
+      avg_pcs_prod: rawOverallPcsProd,
       raw_avg_prod: rawOverallProd,
       raw_avg_pcs_prod: rawOverallPcsProd,
-      kpi_weighted_avg_prod: r1(weightedOverall.avg_prod),
-      kpi_weighted_avg_pcs_prod: r1(weightedOverall.avg_pcs_prod),
-      weight_coverage: 100,
-      weight_mapping_coverage: r1(Number(weightedOverall.mapping_coverage || 0) * 100)
+      // คง field เดิมไว้เพื่อ backward compatibility แต่ค่าเท่ากับ Raw V2
+      kpi_weighted_avg_prod: rawOverallProd,
+      kpi_weighted_avg_pcs_prod: rawOverallPcsProd,
+      weight_coverage: 0,
+      weight_mapping_coverage: 0
     },
-    productivity_weighting: weightedOverall,
+    productivity_weighting: null,
     daily, by_zone, by_location, by_picker, by_zone_prod, zone_prod_map, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all, picker_drilldown: pickerDrilldownMap
   };
   aggregateCache.set(cacheKey, result);
@@ -2524,7 +2516,7 @@ function renderKPIs() {
     },
     { lbl: 'พนักงานหยิบ', val: k.pickers, unit: 'คน', grad: 'linear-gradient(90deg,#f59e0b,#f97316)' },
     {
-      lbl: isPcs ? 'KPI Weighted Productivity (ชิ้น/ชม.)' : 'KPI Weighted Productivity (หยิบ/ชม.)',
+      lbl: isPcs ? 'Productivity V2 (ชิ้น/ชม.)' : 'Productivity V2 (หยิบ/ชม.)',
       val: isPcs ? k.avg_pcs_prod : k.avg_prod,
       unit: isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.',
       grad: 'linear-gradient(90deg,#f43f5e,#ec4899)'
@@ -2544,52 +2536,8 @@ function renderKPIs() {
 }
 
 function renderWeightedProductivityBanner() {
-  let box = document.getElementById('weightedProductivityBanner');
-  if (!box) {
-    box = document.createElement('div');
-    box.id = 'weightedProductivityBanner';
-    const anchor = document.getElementById('kpis');
-    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor.nextSibling);
-  }
-  const k = A && A.kpis ? A.kpis : {};
-  const weighting = A && A.productivity_weighting ? A.productivity_weighting : null;
-  if (!weighting) { box.style.display = 'none'; return; }
-  const isPcs = unitMode === 'pcs';
-  const weighted = Number(isPcs ? k.kpi_weighted_avg_pcs_prod : k.kpi_weighted_avg_prod) || 0;
-  const raw = Number(isPcs ? k.raw_avg_pcs_prod : k.raw_avg_prod) || 0;
-  const unit = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
-  const groups = (weighting.groups || []).map(g => {
-    const p = Number(isPcs ? g.pcsProductivity : g.productivity) || 0;
-    return `<span style="display:inline-flex;gap:5px;align-items:center;padding:4px 8px;border-radius:8px;background:#fff;border:1px solid #c7d2fe;"><b>${escapeZoneHtml(g.label)}</b> ${Math.round(Number(g.weight || 0) * 100)}% = ${fmtDecimal1(p)}</span>`;
-  }).join('');
-
-  const detailRows = (weighting.groups || []).map(g => {
-    const zones = (g.zones || []).map(z => {
-      const p = Number(isPcs ? z.pcsProd : z.prod) || 0;
-      const contribution = Number(isPcs ? z.pcsContribution : z.contribution) || 0;
-      const systems = (z.matchedZones || []).length ? z.matchedZones.join(', ') : '-';
-      return `<tr><td style="padding:5px 7px;border-top:1px solid #e0e7ff;">${escapeZoneHtml(z.label)}</td>` +
-        `<td style="padding:5px 7px;border-top:1px solid #e0e7ff;text-align:right;font-weight:700;">${fmtDecimal1(p)}</td>` +
-        `<td style="padding:5px 7px;border-top:1px solid #e0e7ff;text-align:right;">${Math.round(Number(z.weight || 0) * 100)}%</td>` +
-        `<td style="padding:5px 7px;border-top:1px solid #e0e7ff;text-align:right;">${fmtDecimal1(contribution)}</td>` +
-        `<td style="padding:5px 7px;border-top:1px solid #e0e7ff;text-align:right;color:#64748b;">${fmtDecimal1(Number(z.hours || 0))}</td>` +
-        `</tr>`;
-    }).join('');
-    return `<tr style="background:#eef2ff;"><td colspan="5" style="padding:6px 7px;font-weight:800;color:#3730a3;">${escapeZoneHtml(g.label)} = ${fmtDecimal1(Number(isPcs ? g.pcsProductivity : g.productivity) || 0)} ${unit} · Main Weight ${Math.round(Number(g.weight || 0) * 100)}%</td></tr>${zones}`;
-  }).join('');
-
-  box.style.cssText = 'display:flex;margin:10px 0 16px;padding:11px 14px;border:1px solid #c7d2fe;border-left:5px solid #6366f1;border-radius:12px;background:#eef2ff;color:#3730a3;gap:10px;align-items:center;flex-wrap:wrap;font-size:11.5px;';
-  box.innerHTML = `<div style="width:100%;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">` +
-    `<div><b>⚖️ KPI Weighted Overall (V2-style PTT):</b> <span style="font-size:15px;">${fmtDecimal1(weighted)}</span> ${unit} · Productivity ${escapeZoneHtml(sys)} ปัจจุบัน ${fmtDecimal1(raw)} ${unit}</div>` +
-    `<div style="font-size:10.5px;opacity:.82;">สูตร 22 ส.ค. · Active Hour แบบ V2 · Zone = ค่าเฉลี่ย Productivity ราย Picker/วันตาม Position ประจำ</div></div>` +
-    `<div style="display:flex;gap:6px;flex-wrap:wrap;">${groups}</div>` +
-    `<details style="width:100%;margin-top:2px;"><summary style="cursor:pointer;font-weight:800;user-select:none;">ดูค่า Productivity ราย Zone ที่นำไป Weight</summary>` +
-    `<div style="overflow:auto;margin-top:7px;border:1px solid #c7d2fe;border-radius:9px;background:#fff;max-height:360px;">` +
-    `<table style="width:100%;border-collapse:collapse;min-width:620px;font-size:11px;color:#334155;"><thead style="position:sticky;top:0;background:#e0e7ff;"><tr>` +
-    `<th style="padding:6px 7px;text-align:left;">Zone KPI</th><th style="padding:6px 7px;text-align:right;">Productivity</th><th style="padding:6px 7px;text-align:right;">Weight</th><th style="padding:6px 7px;text-align:right;">ผลหลัง Weight</th><th style="padding:6px 7px;text-align:right;">Active Hours รวม</th>` +
-    `</tr></thead><tbody>${detailRows}</tbody></table></div>` +
-    `<div style="margin-top:6px;font-size:10.5px;color:#6366f1;">ฐาน Productivity = ROUND(Total Pick ÷ Active Hours,0) ต่อ Picker/Calendar Date · Position ใช้ Zone ประจำจาก roster แบบ XLOOKUP ของ V2 · Zone ไม่มีข้อมูลคิดเป็น 0 ตาม KPI Sheet</div>` +
-    `</details>`;
+  const box = document.getElementById('weightedProductivityBanner');
+  if (box) box.style.display = 'none';
 }
 
 function renderUnmappedTeamBanner() {
@@ -2658,7 +2606,7 @@ function renderTargetAlertBanner() {
   }
 
   const isPcs = unitMode === 'pcs';
-  const currentProd = isPcs ? (A.kpis.kpi_weighted_avg_pcs_prod || 0) : (A.kpis.kpi_weighted_avg_prod || 0);
+  const currentProd = isPcs ? (A.kpis.avg_pcs_prod || 0) : (A.kpis.avg_prod || 0);
   const unitTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
   const isBelow = currentProd < prodTarget;
 
@@ -2671,7 +2619,7 @@ function renderTargetAlertBanner() {
         <span style="font-size:26px;">🚨</span>
         <div>
           <div style="font-weight:700; color:#991b1b; font-size:15px; display:flex; align-items:center; gap:8px;">
-            <span>แจ้งเตือน: KPI Weighted Productivity ต่ำกว่าเป้าหมาย!</span>
+            <span>แจ้งเตือน: Productivity V2 ต่ำกว่าเป้าหมาย!</span>
             <span style="background:#ef4444; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; font-weight:700;">ต่ำกว่าเป้า ${diff} ${unitTxt}</span>
           </div>
           <div style="font-size:12.5px; color:#b91c1c; margin-top:3px;">
@@ -2690,7 +2638,7 @@ function renderTargetAlertBanner() {
         <span style="font-size:24px;">🎯</span>
         <div>
           <div style="font-weight:700; color:#15803d; font-size:14.5px; display:flex; align-items:center; gap:8px;">
-            <span>KPI Weighted Productivity บรรลุตามเป้าหมาย!</span>
+            <span>Productivity V2 บรรลุตามเป้าหมาย!</span>
             <span style="background:#16a34a; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; font-weight:700;">ผ่านเกณฑ์</span>
           </div>
           <div style="font-size:12px; color:#166534; margin-top:2px;">
@@ -2755,17 +2703,16 @@ function canonicalCubeScope(system = sys, from = dfrom, to = dto) {
     shift: 'all'
   };
 }
-function itemCubeRequestKey(system = sys, from = dfrom, to = dto) {
-  const scope = canonicalCubeScope(system, from, to);
-  // Item Cube เก็บข้อมูลเต็มและกรอง Exclude ใน Browser เพื่อให้กดแล้วตอบสนองทันที
-  return [dashboardDataEpoch(), scope.system, scope.from, scope.to, scope.shift].join('|');
+function itemCubeRequestKey(system = sys, from = dfrom, to = dto, sf = shiftF) {
+  // โหลดสินค้าเฉพาะช่วง/กะที่ผู้ใช้เลือก ลดจำนวนแถวจาก BigQuery และทำให้หน้า Items เปิดเร็วขึ้น
+  return [dashboardDataEpoch(), system, from, to, sf].join('|');
 }
 function isValidItemCubePayload(payload, system, from, to, shift, expectedEpoch = dashboardDataEpoch()) {
   return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
     String(payload.data_epoch || '') === String(expectedEpoch || '') &&
     payload.system === system && payload.from === from && payload.to === to &&
-    payload.shift === shift && Number(payload.row_width) === 9 &&
-    Array.isArray(payload.rows) && payload.rows.length % 9 === 0;
+    payload.shift === shift && (Number(payload.row_width) === 7 || Number(payload.row_width) === 9) &&
+    Array.isArray(payload.rows) && payload.rows.length % Number(payload.row_width) === 0;
 }
 function dailyCubeRequestKey(kind, system, date, sf) {
   return [kind, dashboardDataEpoch(), system, date, sf,
@@ -2885,6 +2832,22 @@ function forEachCurrentItemRow(system, from, to, sf, callback) {
   if (payload) {
     const rows = payload.rows;
     const width = Number(payload.row_width) || 9;
+    if (width === 7) {
+      // Fast Item Cube ถูก aggregate ตามช่วงวันที่/กะที่ request มาแล้ว จึงไม่ต้องส่ง Date/Shift ซ้ำทุกแถว
+      for (let offset = 0; offset < rows.length; offset += 7) {
+        callback({
+          date: from, shift: sf,
+          location: rows[offset],
+          zone: rows[offset + 1],
+          owner: normalizeOwnerKey(rows[offset + 2]),
+          sku: normalizeSkuKey(rows[offset + 3]) || '(none)',
+          pcs: Number(rows[offset + 4]) || 0,
+          pickQty: readBigQueryPickQty(rows[offset + 5]),
+          lines: Number(rows[offset + 6]) || 0
+        });
+      }
+      return true;
+    }
     if (width === 9) {
       for (let offset = 0; offset < rows.length; offset += 9) {
         const date = String(rows[offset] || '');
@@ -3057,10 +3020,9 @@ async function fetchDailyItemCube(system, date, shift, signal, force) {
 async function loadCurrentItemCube(force, system = sys) {
   if (!DATA_URL || !dfrom || !dto) return;
   const requestSystem = system;
-  const scope = canonicalCubeScope(requestSystem, dfrom, dto);
-  const requestFrom = scope.from;
-  const requestTo = scope.to;
-  const requestShift = scope.shift;
+  const requestFrom = dfrom;
+  const requestTo = dto;
+  const requestShift = shiftF;
   const requestEpoch = dashboardDataEpoch();
   const requestKey = itemCubeRequestKey(requestSystem, requestFrom, requestTo, requestShift);
   const currentState = itemCubeLoadState.get(requestKey);
@@ -3071,14 +3033,18 @@ async function loadCurrentItemCube(force, system = sys) {
   const timeout = setTimeout(() => controller.abort(), 60000);
   const task = (async () => {
     try {
-      // Master และ Item Cube ไม่จำเป็นต้องรอต่อคิวกัน เริ่มพร้อมกันเพื่อลดเวลาเปิดหน้าสินค้า
-      const masterPromise = loadItemMaster(false);
+      // ให้ Item Cube มาก่อนเพื่อแสดงยอดกิจกรรมทันที ส่วน Master_Item โหลดพื้นหลังแล้วค่อยเติมชื่อ/สถานะ
+      void loadItemMaster(false);
       if (!force) {
         const cached = await readDashboardCubeCache('item', requestKey);
         if (isValidItemCubePayload(cached, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)) {
-          await masterPromise;
           itemCubePayloadCache.set(requestKey, cached);
           itemCubeLoadState.set(requestKey, { status: 'done' });
+          if (itemCubeRequestKey() === requestKey) {
+            aggregateCache.clear();
+            delete built['items'];
+            if (!dashboardBundleLoading && currentPage === 'items') render();
+          }
           return cached;
         }
       }
@@ -3091,13 +3057,10 @@ async function loadCurrentItemCube(force, system = sys) {
         dashboardResponseEncodingQuery(),
         't=' + Date.now()
       ].join('&');
-      const [payload] = await Promise.all([
-        fetchDashboardCubeJson(
-          DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
-          { cache: 'no-store', signal: controller.signal }
-        ),
-        masterPromise
-      ]);
+      const payload = await fetchDashboardCubeJson(
+        DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + query,
+        { cache: 'no-store', signal: controller.signal }
+      );
       if (!isValidItemCubePayload(payload, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)) {
         throw dashboardTransientError('ข้อมูลสินค้าเปลี่ยนระหว่างโหลด กรุณาลองใหม่อีกครั้ง');
       }
@@ -3239,10 +3202,9 @@ async function fetchDailySlotCube(system, date, shift, signal, force) {
 async function loadCurrentSlotCube(force, system = sys) {
   if (!DATA_URL || !dfrom || !dto) return null;
   const requestSystem = system;
-  const scope = canonicalCubeScope(requestSystem, dfrom, dto);
-  const requestFrom = scope.from;
-  const requestTo = scope.to;
-  const requestShift = scope.shift;
+  const requestFrom = dfrom;
+  const requestTo = dto;
+  const requestShift = shiftF;
   const requestEpoch = dashboardDataEpoch();
   const requestKey = slotCubeRequestKey(requestSystem, requestFrom, requestTo, requestShift);
   const currentState = slotCubeLoadState.get(requestKey);
@@ -5378,7 +5340,7 @@ const builders = {
     const volField = isPcs ? 'pcs' : 'qty';
 
     const totalVol = isPcs ? kpis.pcs : kpis.qty;
-    const avgProd = isPcs ? (kpis.kpi_weighted_avg_pcs_prod || 0) : (kpis.kpi_weighted_avg_prod || 0);
+    const avgProd = isPcs ? (kpis.avg_pcs_prod || 0) : (kpis.avg_prod || 0);
 
     // trend: compare first-half vs second-half
     let trendTxt = '', trendIcon = '📊', trendColor = '#64748b';
@@ -5469,7 +5431,7 @@ const builders = {
     <div class="rpt-kcard" style="--c1:#0ea5e9;--c2:#0284c7;">
       <div class="icon">⚡</div>
       <div class="val">${avgProd}</div>
-      <div class="lbl">KPI Weighted Overall (V2-style PTT)</div>
+      <div class="lbl">Productivity V2 (ระบบที่เลือก)</div>
       <div class="sub">${unitLabel} · ${escapeZoneHtml(sys)} Raw ${fmtDecimal1(isPcs ? kpis.raw_avg_pcs_prod : kpis.raw_avg_prod)}</div>
     </div>
     <div class="rpt-kcard" style="--c1:#10b981;--c2:#059669;">
