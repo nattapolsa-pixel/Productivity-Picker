@@ -40,7 +40,7 @@ const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_calendar_date_v4';
 const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_calendar_date_v4';
 const SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v12-v2-active-hour-fresh-bq';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v13-v2-active-hour-sort10';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -3114,7 +3114,7 @@ function refreshDashboardTableNow() {
 function sortDates_(S) {
   const order = S.dates.map((d, i) => [d, i]).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
   const remap = {}; order.forEach((o, ni) => remap[o[1]] = ni);
-  [[S.rows, 9], [S.item_rows, 8], [S.slot_rows, 8]].forEach(function(entry) {
+  [[S.rows, 10], [S.item_rows, 8], [S.slot_rows, 8]].forEach(function(entry) {
     const rows = entry[0], width = entry[1];
     for (let i = 0; i < rows.length; i += width) rows[i] = remap[rows[i]];
   });
