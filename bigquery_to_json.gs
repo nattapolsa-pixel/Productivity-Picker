@@ -40,7 +40,7 @@ const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_calendar_date_v4';
 const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_calendar_date_v4';
 const SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v11-v2-active-hour';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v12-v2-active-hour-fresh-bq';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -219,7 +219,7 @@ function doGet(e) {
         }
       }
 
-      const dataObj = buildDashboardData_(true, requestScope);
+      const dataObj = buildDashboardData_(false, requestScope);
       dataObj.meta.data_revision = revision;
       const json = JSON.stringify(dataObj);
       let encodedJson = null;
@@ -303,7 +303,7 @@ function getDashboardRevisionToken_(dataRevision, requestScopeKey) {
 }
 
 function getDashboardDataEpoch_(dataRevision) {
-  return String(dataRevision == null ? getDataRevision_() : dataRevision) + ':' + getDashboardRefreshBucket_();
+  return DASHBOARD_CACHE_FORMAT_VERSION + ':' + String(dataRevision == null ? getDataRevision_() : dataRevision) + ':' + getDashboardRefreshBucket_();
 }
 
 function assertDashboardDataEpochStable_(expectedEpoch) {
@@ -3330,7 +3330,7 @@ function testRun() {
   } catch (err) { fail('Roster refresh endpoint', err); throw err; }
 
   try {
-    dashboardTestData = buildDashboardData_(true, { excludedItems: [], key: 'test' });
+    dashboardTestData = buildDashboardData_(false, { excludedItems: [], key: 'test' });
     if (dashboardTestData.PTT.row_width !== 10 || dashboardTestData.PTT.rows.length % 10 !== 0 ||
         dashboardTestData.BPS.row_width !== 10 || dashboardTestData.BPS.rows.length % 10 !== 0) {
       throw new Error('Work cube v22 ต้องมี 10 ช่องและ Active Hour Mask');
