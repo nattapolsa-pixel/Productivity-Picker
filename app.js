@@ -27,6 +27,10 @@ const PRODUCTIVITY_MAX_EXCLUSIVE = 1000;
 const SHIFT_A_REGULAR_HOURS = 7.5;
 const SHIFT_B_REGULAR_HOURS = 470 / 60; // Workforce Planning เดิมเท่านั้น
 const OT_MAX = 2.5;
+// หน้า Items แสดง/โหลดเฉพาะ 4 Owner นี้เท่านั้น
+const ITEM_PAGE_ALLOWED_OWNERS = Object.freeze(['DM02', 'DP02', 'DG02', 'DCWN']);
+const ITEM_PAGE_ALLOWED_OWNER_SET = new Set(ITEM_PAGE_ALLOWED_OWNERS);
+function isItemPageAllowedOwner(value) { return ITEM_PAGE_ALLOWED_OWNER_SET.has(normalizeOwnerKey(value)); }
 // ====================================
 
 const fmt = n => Number(n).toLocaleString('en-US');
@@ -1963,15 +1967,12 @@ function aggregate(system, from, to, sf) {
     dRec.zones[zone].pcs += pVal; dRec.zones[zone].qty += qVal; dRec.zones[zone].lines += lineVal;
   }
 
-  // Master_Item เป็นฐานสินค้า: เริ่มทุก Owner+Item ที่มีใน Master ด้วยยอด 0
-  Object.values(ITEM_MASTER).forEach(info => {
-    itemMapAll[info.key] = {
-      ...info, pcs: 0, qty: 0, lines: 0, hasActivity: false,
-      locations: new Set(), zones: new Set()
-    };
-  });
+  // หน้า Items แสดงเฉพาะ SKU ที่มีกิจกรรมในช่วงวันที่เลือก
+  // ไม่ seed Master ทั้งก้อนเป็นยอด 0 เพื่อลดจำนวนรายการ/เวลา Render อย่างมาก
+  // Master_Item ใช้เพื่อเติมชื่อ/Pack/สถานะให้ SKU ที่มี Activity เท่านั้น
   // Pick Detail เป็นกิจกรรม นำมาแมปด้วย Owner + Item; รายการที่ไม่มีใน Master ยังแสดงเพื่อตรวจสอบได้
   forEachCurrentItemRow(system, from, to, sf, r => {
+    if (!isItemPageAllowedOwner(r.owner)) return;
     // Location ต้องเก็บค่าจริงจาก Pick Detail/BigQuery ห้ามส่งผ่าน normalizeLocationCode()
     // เพราะฟังก์ชันนั้นตั้งใจใช้หา Zone master และจะตัดเหลือ 2 ตัวแรก
     const locName = String(r.location || '').trim().toUpperCase();
@@ -2757,7 +2758,7 @@ function applyItemMasterPayload(payload) {
   for (let o = 0; o < payload.rows.length; o += 9) {
     const owner = normalizeOwnerKey(payload.rows[o]);
     const item = normalizeSkuKey(payload.rows[o + 1]);
-    if (!item) continue;
+    if (!item || !isItemPageAllowedOwner(owner)) continue;
     const record = {
       key: itemCompositeKey(owner, item), owner, sku: item, item,
       name: String(payload.rows[o + 2] || item), pickType: String(payload.rows[o + 3] || ''),
@@ -3033,8 +3034,8 @@ async function loadCurrentItemCube(force, system = sys) {
   const timeout = setTimeout(() => controller.abort(), 60000);
   const task = (async () => {
     try {
-      // ให้ Item Cube มาก่อนเพื่อแสดงยอดกิจกรรมทันที ส่วน Master_Item โหลดพื้นหลังแล้วค่อยเติมชื่อ/สถานะ
-      void loadItemMaster(false);
+      // ให้ Item Cube มาก่อนแบบจริง ๆ: ไม่ยิง Master_Item แข่งกับ Query สินค้า
+      // พอ Item Cube แสดงได้แล้วค่อยโหลดชื่อสินค้าเบื้องหลัง
       if (!force) {
         const cached = await readDashboardCubeCache('item', requestKey);
         if (isValidItemCubePayload(cached, requestSystem, requestFrom, requestTo, requestShift, requestEpoch)) {
@@ -3045,6 +3046,7 @@ async function loadCurrentItemCube(force, system = sys) {
             delete built['items'];
             if (!dashboardBundleLoading && currentPage === 'items') render();
           }
+          setTimeout(() => void loadItemMaster(false), 150);
           return cached;
         }
       }
@@ -3075,6 +3077,7 @@ async function loadCurrentItemCube(force, system = sys) {
         const modal = document.getElementById('zoneDetailModal');
         if (activeZoneDetailCode && modal && modal.style.display !== 'none') openZoneDetailModal(activeZoneDetailCode);
       }
+      setTimeout(() => void loadItemMaster(false), 150);
       return payload;
     } catch (err) {
       const message = err && err.name === 'AbortError'
@@ -5071,7 +5074,7 @@ const builders = {
       if (itemLoadStatus) itemLoadStatus.style.display = 'block';
       if (itemChartBox) itemChartBox.style.display = 'none';
       const itemTable = document.getElementById('itable');
-      if (itemTable) itemTable.innerHTML = '<tbody><tr><td style="text-align:center;color:#1d4ed8;padding:30px;font-weight:600;">⏳ กำลังอัปเดตข้อมูลหลังเปลี่ยนรายการยกเว้น กรุณารอสักครู่…</td></tr></tbody>';
+      if (itemTable) itemTable.innerHTML = '<tbody><tr><td style="text-align:center;color:#1d4ed8;padding:30px;font-weight:600;">⏳ กำลังโหลดสินค้า Owner DM02 / DP02 / DG02 / DCWN จาก BigQuery…</td></tr></tbody>';
       const pagination = document.getElementById('itablePagination');
       if (pagination) pagination.innerHTML = '';
       return;
@@ -5203,7 +5206,7 @@ const builders = {
         if (!hasCurrentItemCube() && itemState && itemState.status === 'error') {
           h += `<tr><td colspan="9" style="text-align:center;color:#b91c1c;padding:24px">โหลดรายการสินค้าไม่สำเร็จ: ${escapeZoneHtml(itemState.message || '')} <button onclick="retryCurrentItemCube()" class="refreshbtn">ลองอีกครั้ง</button></td></tr>`;
         } else if (!hasCurrentItemCube()) {
-          h += '<tr><td colspan="9" style="text-align:center;color:#64748b;padding:24px">⏳ กำลังโหลดรายการสินค้าเฉพาะช่วงวันที่เลือก… หน้าอื่นยังใช้งานได้ตามปกติ</td></tr>';
+          h += '<tr><td colspan="9" style="text-align:center;color:#64748b;padding:24px">⏳ กำลังโหลดสินค้า 4 Owner เฉพาะช่วงวันที่เลือก… หน้าอื่นยังใช้งานได้ตามปกติ</td></tr>';
         } else {
           h += '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
         }
@@ -6438,9 +6441,17 @@ function show(page) {
 }
 function preloadAllCubes() {
   if (!hasLiveData || !dfrom || !dto) return;
-  setTimeout(() => void loadItemMaster(false), 20);
-  if (!hasCurrentSlotCube()) setTimeout(() => void loadCurrentSlotCube(false), 60);
-  if (!hasCurrentItemCube()) setTimeout(() => void loadCurrentItemCube(false), 100);
+  // ให้ Item Cube ได้ทรัพยากรก่อนแบบ exclusive; Time slot ค่อยตามหลังเมื่อ Item จบ
+  if (!hasCurrentItemCube()) {
+    setTimeout(() => {
+      void loadCurrentItemCube(false).then(() => {
+        if (!hasCurrentSlotCube()) setTimeout(() => void loadCurrentSlotCube(false), 100);
+      });
+    }, 20);
+  } else if (!hasCurrentSlotCube()) {
+    setTimeout(() => void loadCurrentSlotCube(false), 100);
+  }
+  // Master_Item จะถูกโหลดหลัง Item Cube สำเร็จจาก loadCurrentItemCube() เท่านั้น
 }
 
 function render() {
@@ -6807,18 +6818,12 @@ async function restoreCurrentCubePairFromCache() {
 }
 async function ensureDashboardBundleReady(force, totalRows, source) {
   dashboardBundleLoading = false;
-  // แสดง Main Dashboard ทันที ไม่รอ Item/Time cube เพื่อไม่ย้อนกลับไปใช้ข้อมูลรอบเก่า
+  // แสดง Main Dashboard ทันที แล้วให้ Item Cube ได้คิวแรกแบบไม่แข่งกับ Master/Slot
+  // พอ Item จบจึงค่อยโหลด Time slot; Master_Item ถูกเรียกจาก loadCurrentItemCube() หลัง Item แสดงแล้ว
   finalizeDashboardBundle(totalRows, source);
-  void Promise.all([
-    loadItemMaster(false),
-    // Keep the exclusion-independent Item Cube visible during background sync.
-    loadCurrentItemCube(false, sys),
-    loadCurrentSlotCube(force, sys)
-  ]);
-  const otherSystem = sys === 'PTT' ? 'BPS' : 'PTT';
-  setTimeout(() => {
-    void Promise.all([loadCurrentItemCube(false, otherSystem), loadCurrentSlotCube(false, otherSystem)]);
-  }, 1000);
+  void loadCurrentItemCube(false, sys).then(() => {
+    setTimeout(() => void loadCurrentSlotCube(force, sys), 100);
+  });
   return true;
 }
 
