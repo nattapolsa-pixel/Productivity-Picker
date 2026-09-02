@@ -19,7 +19,7 @@ const BQ_DATASET  = 'pick_analytics';
 const BQ_LOCATION = 'asia-southeast1';   // ต้องตรงกับ region ของ dataset (ไม่งั้นเจอ "Not found: Job")
 const RECENT_DAYS = 90;   // ดึงข้อมูลย้อนหลังกี่วัน (คุมขนาด/ความเร็ว) — ปรับได้
 const UPLOAD_SCHEMA_VERSION = 'pick-detail-wms-v1';
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v21-calendar-fixed75-ot-weighted';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v22-v2-active-hour-weighted';
 const MAX_UPLOAD_ROWS = 100000;
 const MAX_POST_BYTES = 12 * 1024 * 1024;
 const MAX_UPLOAD_CHUNKS = 100;
@@ -40,7 +40,7 @@ const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_calendar_date_v4';
 const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_calendar_date_v4';
 const SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1';
-const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v10-calendar-date-fixed75';
+const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v11-v2-active-hour';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
@@ -2847,7 +2847,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
   const zoneMaster = loadZoneMasterMap_();
   const excludedSql = dashboardExclusionSql_(scope, 'owner_key', 'sku_key');
 
-  // Payload หลักส่งเฉพาะ W = วัน/กะ/Zone/Picker สำหรับ KPI, Productivity, OT และหน้าพนักงาน
+  // Payload หลักส่ง W = วัน/กะ/Zone/Picker + Active Hour Mask สำหรับ Productivity แบบ Results Master V2
   // มิติ Item และ Time-slot แยกเป็น mode=item_cube / mode=slot_cube และโหลดเป็นรายวันเมื่อเปิดหน้า
   // ทำให้ cache miss ยังตอบ payload หลักได้ทันและข้อมูลพนักงานไม่หายเมื่อข้อมูลโตขึ้น
   const sql = [
@@ -2861,6 +2861,7 @@ function buildDashboardData_(useQueryCache, requestScope) {
     "    UPPER(COALESCE(owner, '-')) AS owner_key,",
     "    REGEXP_REPLACE(COALESCE(CAST(sku AS STRING), '(none)'), r'\\.0+$', '') AS sku_key,",
     '    CASE WHEN tmin >= 1140 THEN tmin - 1140 WHEN tmin < 420 THEN tmin + 300 ELSE tmin - 420 END AS shift_minute,',
+    '    CAST(DIV(tmin, 60) AS INT64) AS hour_of_day,',
     '    pcs, pick_qty',
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     "  WHERE pick_date >= DATE_SUB(DATE '" + currentDate + "', INTERVAL " + RECENT_DAYS + ' DAY)',
@@ -2870,7 +2871,8 @@ function buildDashboardData_(useQueryCache, requestScope) {
     '  SELECT * FROM base WHERE TRUE ' + excludedSql,
     ')',
     "SELECT category, FORMAT_DATE('%Y-%m-%d', shift_date), shift_code, zone, picker,",
-    '       SUM(pcs), SUM(pick_qty), COUNT(*), MIN(shift_minute), MAX(shift_minute)',
+    '       SUM(pcs), SUM(pick_qty), COUNT(*), MIN(shift_minute), MAX(shift_minute),',
+    '       SUM(DISTINCT CAST(POW(2, hour_of_day) AS INT64)) AS active_hour_mask',
     'FROM included',
     'GROUP BY category, shift_date, shift_code, zone, picker',
     'ORDER BY category, shift_date, zone, picker'
@@ -2897,16 +2899,17 @@ function buildDashboardData_(useQueryCache, requestScope) {
     const lines = Number(r[7]) || 0;
     const minSm = Number(r[8]) || 0;
     const maxSm = Number(r[9]) || 0;
+    const hourMask = Number(r[10]) || 0;
     const di = idx(S._d, S.dates, d);
     const pi = idx(S._p, S.pickers, picker);
-    S.rows.push(di, shiftCode, zone, pi, pcs, pickQty, lines, minSm, maxSm);
+    S.rows.push(di, shiftCode, zone, pi, pcs, pickQty, lines, minSm, maxSm, hourMask);
     S.input_lines += lines;
     total++;
   }, JOB_DEADLINE_MS, useQueryCache !== false);
   ['PTT','BPS'].forEach(c => sortDates_(sysd[c]));
   const compact = function(S) {
     return {
-      row_width: 9, item_row_width: 8, slot_row_width: 8,
+      row_width: 10, item_row_width: 8, slot_row_width: 8,
       dates: S.dates, pickers: S.pickers, skus: S.skus,
       rows: S.rows, item_rows: S.item_rows, slot_rows: S.slot_rows
     };
@@ -3328,7 +3331,11 @@ function testRun() {
 
   try {
     dashboardTestData = buildDashboardData_(true, { excludedItems: [], key: 'test' });
-    pass('Dashboard query', 'PTT=' + dashboardTestData.PTT.dates.length + ' วัน, BPS=' + dashboardTestData.BPS.dates.length + ' วัน');
+    if (dashboardTestData.PTT.row_width !== 10 || dashboardTestData.PTT.rows.length % 10 !== 0 ||
+        dashboardTestData.BPS.row_width !== 10 || dashboardTestData.BPS.rows.length % 10 !== 0) {
+      throw new Error('Work cube v22 ต้องมี 10 ช่องและ Active Hour Mask');
+    }
+    pass('Dashboard query', 'PTT=' + dashboardTestData.PTT.dates.length + ' วัน, BPS=' + dashboardTestData.BPS.dates.length + ' วัน · Work cube มี Active Hour Mask');
   } catch (err) { fail('Dashboard query', err); throw err; }
 
   try {
@@ -3338,7 +3345,7 @@ function testRun() {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(testDate)) throw new Error('ไม่พบวันที่ล่าสุดของ PTT ใน payload');
     const dateIdx = ptt.dates.indexOf(testDate);
     let payloadPcs = 0, payloadUnits = 0, payloadLines = 0;
-    for (let i = 0; i < ptt.rows.length; i += 9) {
+    for (let i = 0; i < ptt.rows.length; i += 10) {
       if (Number(ptt.rows[i]) !== dateIdx) continue;
       payloadPcs += Number(ptt.rows[i + 4]) || 0;
       payloadUnits += Number(ptt.rows[i + 5]) || 0;

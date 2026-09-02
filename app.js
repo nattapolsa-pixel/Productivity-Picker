@@ -1,14 +1,15 @@
 /* Pick Productivity Dashboard — ดึงข้อมูลสดจาก BigQuery (ผ่าน Apps Script Web App)
    Calendar Date: PTT ลบ 7 ชั่วโมง, BPS ใช้เวลาเดิม แล้วนับตามวันที่หลัง Normalize โดยไม่ย้อนไปวันก่อน
-   Productivity ดิบ = Pick Units ÷ (7.5 ชั่วโมง + Actual OT) ไม่ใช้ Pick แรก–Pick สุดท้ายและไม่คำนวณเวลาพัก
-   Actual Shift อิง normalized timestamp เท่านั้น; Team A/B/Not Found จาก roster ใช้เป็นตัวกรองรายงาน ไม่ override ผลงานจริง
-   KPI Weighted Overall รวม PTT+BPS แล้วถ่วง Zone ตามสูตรมาตรฐานวันที่ 22 ส.ค. */
+   Productivity แบบ New_Z856 V2 = ROUND(Total Pick Units ÷ Active Hours, 0)
+   Active Hours = จำนวนชั่วโมง 00–23 ที่มี Pick > 0 ต่อ Picker + Calendar Date; ไม่หัก Break และชั่วโมง OT ถูกนับเมื่อมี Pick จริง
+   Count เฉพาะ Active Hours > 3 และ Productivity 1–999
+   KPI Weighted Overall ใช้ PTT เป็นฐานแบบ V2 แล้วเฉลี่ยตาม Position ประจำก่อนถ่วง Zone สูตรวันที่ 22 ส.ค. */
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 // ส่ง compact work cube ก่อน แล้ว lazy-load item/time detail เป็นรายวัน
 // pick_qty ต้องมาจาก BigQuery Master_Item + Master_Pack เท่านั้น
-const DASHBOARD_SCHEMA_VERSION = 'pick-units-v21-calendar-fixed75-ot-weighted';
+const DASHBOARD_SCHEMA_VERSION = 'pick-units-v22-v2-active-hour-weighted';
 const PICKER_NAME_FALLBACK = (typeof window !== 'undefined' && window.PICKER_NAME_FALLBACK) ? window.PICKER_NAME_FALLBACK : {};
 const PICKER_AFFILIATION_FALLBACK = (typeof window !== 'undefined' && window.PICKER_AFFILIATION_FALLBACK) ? window.PICKER_AFFILIATION_FALLBACK : {};
 const ZONE_MASTER_FALLBACK = (typeof window !== 'undefined' && window.ZONE_MASTER_FALLBACK) ? window.ZONE_MASTER_FALLBACK : {};
@@ -16,10 +17,13 @@ const ZONE_LAYOUT_CONFIG = (typeof window !== 'undefined' && window.ZONE_LAYOUT)
 // ==========================================================================
 
 // ====== ตั้งค่ากะ / Productivity / OT ======
-// Actual Shift: A = 07:00–18:59, B = 19:00–06:59
-// Productivity Dashboard ใช้ฐานคงที่ 7.5 ชม. ต่อ Picker/วัน/กะ แล้วบวก Actual OT เท่านั้น
-// ไม่ใช้ Pick แรก–Pick สุดท้ายและไม่หัก/บวกเวลาพัก
-const PRODUCTIVITY_REGULAR_HOURS = 7.5;
+// Productivity Dashboard ใช้แนวเดียวกับ New_Z856 ... V2
+// Active Hours = จำนวนชั่วโมงที่มี Pick > 0 ต่อ Picker + Calendar Date
+// Productivity = ROUND(Total Pick Units / Active Hours, 0)
+// นับเฉพาะ Active Hours > 3 และ Productivity อยู่ระหว่าง 1–999
+// SHIFT_A/B_REGULAR_HOURS ใช้เฉพาะ Workforce Planning
+const ACTIVE_HOURS_MIN_EXCLUSIVE = 3;
+const PRODUCTIVITY_MAX_EXCLUSIVE = 1000;
 const SHIFT_A_REGULAR_HOURS = 7.5;
 const SHIFT_B_REGULAR_HOURS = 470 / 60; // Workforce Planning เดิมเท่านั้น
 const OT_MAX = 2.5;
@@ -116,8 +120,8 @@ Chart.defaults.color = '#64748b';
 // ===== state =====
 const emptyData = () => ({
   meta: { schema_version: DASHBOARD_SCHEMA_VERSION },
-  PTT: { row_width: 9, item_row_width: 8, slot_row_width: 8, dates: [], pickers: [], skus: [], rows: [], item_rows: [], slot_rows: [] },
-  BPS: { row_width: 9, item_row_width: 8, slot_row_width: 8, dates: [], pickers: [], skus: [], rows: [], item_rows: [], slot_rows: [] }
+  PTT: { row_width: 10, item_row_width: 8, slot_row_width: 8, dates: [], pickers: [], skus: [], rows: [], item_rows: [], slot_rows: [] },
+  BPS: { row_width: 10, item_row_width: 8, slot_row_width: 8, dates: [], pickers: [], skus: [], rows: [], item_rows: [], slot_rows: [] }
 });
 let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
@@ -591,7 +595,8 @@ function shiftOf(ds, t) {
   if (t >= 1140) return { sh: 'night', sd: ds, sm: t - 1140 };               // B: 19:00–23:59
   return { sh: 'night', sd: ds, sm: t + 300 };                               // B: 00:00–06:59 แต่ยังเป็น Calendar Date เดิม
 }
-// OT = จำนวนบล็อก 30 นาทีที่ทำครบ นับจากนาทีที่ 570 (16:30/04:30) ต้นกะ, สูงสุด OT_MAX
+// OT card ยังแสดงจากช่วงเวลาที่มี Pick จริง แต่ OT ไม่ถูกบวกเป็นตัวหารแยก:
+// Active Hour Bucket ที่เกิดในช่วง OT จะถูกนับอยู่ใน Active Hours โดยอัตโนมัติ
 function otHours(maxSm) {
   const mx = Math.min(720, Number(maxSm));
   if (!Number.isFinite(mx) || mx <= 570) return 0;
@@ -600,16 +605,55 @@ function otHours(maxSm) {
 function shiftRegularHours(sh) {
   return sh === 'night' ? SHIFT_B_REGULAR_HOURS : SHIFT_A_REGULAR_HOURS;
 }
-function productivityHours(maxSm) {
-  return Math.round((PRODUCTIVITY_REGULAR_HOURS + otHours(maxSm)) * 100) / 100;
+function normalizeHourMask(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? (n >>> 0) : 0;
 }
-function shiftWorkHoursBetween(sh, minSm, maxSm) {
-  // Compatibility helper: Dashboard Productivity รุ่นนี้ไม่ใช้ span เวลาอีกแล้ว
-  // ทุกกลุ่มที่มีงานใช้ 7.5 ชั่วโมง + Actual OT จากเวลาหยิบสุดท้าย
-  const mx = Number(maxSm);
-  if (!Number.isFinite(mx) || mx < 0) return 0;
-  return productivityHours(mx);
+function mergeHourMask(left, right) {
+  return (normalizeHourMask(left) | normalizeHourMask(right)) >>> 0;
 }
+function activeHourCount(mask) {
+  let n = normalizeHourMask(mask), count = 0;
+  while (n) {
+    n &= (n - 1) >>> 0;
+    count++;
+  }
+  return count;
+}
+function v2RoundedProductivity(totalPick, activeHours) {
+  const hours = Number(activeHours) || 0;
+  if (!(hours > 0)) return 0;
+  return Math.round((Number(totalPick) || 0) / hours);
+}
+function isV2SupportWorkPicker(picker) {
+  const role = String(getPickerResponsibility(picker) || '').trim().toLowerCase();
+  return role.includes('ช่วยงานส่วนอื่น') || role.includes('support other') || role === 'support';
+}
+function isV2CountableProductivity(picker, activeHours, productivity) {
+  return Number(activeHours) > ACTIVE_HOURS_MIN_EXCLUSIVE &&
+    Number(productivity) > 0 &&
+    Number(productivity) < PRODUCTIVITY_MAX_EXCLUSIVE &&
+    !isV2SupportWorkPicker(picker);
+}
+function activeOtHoursFromMask(mask, picker) {
+  const m = normalizeHourMask(mask);
+  const team = getPickerReportTeam(picker);
+  const has = hour => Boolean(m & (1 << hour));
+  let ot = 0;
+  if (team === 'A') {
+    if (has(16)) ot += 0.5;
+    if (has(17)) ot += 1;
+    if (has(18)) ot += 1;
+  } else if (team === 'B') {
+    if (has(4)) ot += 0.5;
+    if (has(5)) ot += 1;
+    if (has(6)) ot += 1;
+  }
+  return Math.min(OT_MAX, ot);
+}
+// Compatibility helper สำหรับส่วนเก่าของ UI เท่านั้น
+function productivityHours(maxSm) { return 0; }
+function shiftWorkHoursBetween(sh, minSm, maxSm) { return 0; }
 
 // payload รุ่นเร็วเป็น cube แยกตามงาน: Work / Item / Time slot
 function packedRowCount(S) {
@@ -624,10 +668,10 @@ function readBigQueryPickQty(value) {
 }
 
 function packedRowData(S, i) {
-  if (Number(S && S.row_width) !== 9) {
+  if (Number(S && S.row_width) !== 10) {
     throw new Error('Dashboard payload schema ไม่ตรงกับหน้าเว็บ');
   }
-  const offset = i * 9;
+  const offset = i * 10;
   return {
     dateIdx: S.rows[offset],
     shiftCode: Number(S.rows[offset + 1]) || 0,
@@ -637,7 +681,8 @@ function packedRowData(S, i) {
     pickQty: readBigQueryPickQty(S.rows[offset + 5]),
     lines: Number(S.rows[offset + 6]) || 0,
     minSm: Number(S.rows[offset + 7]) || 0,
-    maxSm: Number(S.rows[offset + 8]) || 0
+    maxSm: Number(S.rows[offset + 8]) || 0,
+    hourMask: normalizeHourMask(S.rows[offset + 9])
   };
 }
 
@@ -678,7 +723,7 @@ function prepShifts() {
     const count = packedRowCount(S);
     S._sh = new Array(count);
     for (let i = 0; i < count; i++) {
-      const offset = i * 9;
+      const offset = i * 10;
       const dateIdx = S.rows[offset];
       const timeShift = Number(S.rows[offset + 1]) === 1 ? 'night' : 'morning';
       // กะของรายการหยิบต้องอิง normalized timestamp เท่านั้น
@@ -689,7 +734,8 @@ function prepShifts() {
         sd: S.dates[dateIdx], sh, team: getPickerReportTeam(picker),
         sm: Number(S.rows[offset + 7]) || 0,
         smMin: Number(S.rows[offset + 7]) || 0,
-        smMax: Number(S.rows[offset + 8]) || 0
+        smMax: Number(S.rows[offset + 8]) || 0,
+        hourMask: normalizeHourMask(S.rows[offset + 9])
       };
     }
   });
@@ -1199,8 +1245,8 @@ function openZoneDetailModal(zoneCode) {
       totalPcs += pcs;
       totalLines += row.lines;
 
-      // Picker aggregation ต่อ Calendar Date + Actual Shift เพื่อให้ฐาน 7.5 ชม. ถูกนับครั้งเดียวต่อวัน/กะ
-      const pickerGroupKey = pickerId + '|' + sh.sd + '|' + sh.sh;
+      // Zone detail รวม Picker ต่อ Calendar Date และนับ Active Hour Bucket แบบ V2
+      const pickerGroupKey = pickerId + '|' + sh.sd;
       if (!uniquePickers.has(pickerGroupKey)) {
         uniquePickers.set(pickerGroupKey, {
           pickerId,
@@ -1211,13 +1257,15 @@ function openZoneDetailModal(zoneCode) {
           qty: 0,
           pcs: 0,
           lines: 0,
-          maxSm: sh.smMax
+          maxSm: sh.smMax,
+          hourMask: 0
         });
       }
       const pRec = uniquePickers.get(pickerGroupKey);
       pRec.qty += qty;
       pRec.pcs += pcs;
       pRec.lines += row.lines;
+      pRec.hourMask = mergeHourMask(pRec.hourMask, row.hourMask);
       if (sh.smMax > pRec.maxSm) pRec.maxSm = sh.smMax;
     }
 
@@ -1245,30 +1293,32 @@ function openZoneDetailModal(zoneCode) {
     let totalWorkHours = 0;
     const pickerSummary = new Map();
     [...uniquePickers.values()].forEach(p => {
-      const wh = productivityHours(p.maxSm);
+      const wh = activeHourCount(p.hourMask);
       totalWorkHours += wh;
       const out = pickerSummary.get(p.pickerId) || {
         pickerId: p.pickerId,
         pickerName: p.pickerName,
         affiliation: p.affiliation,
-        qty: 0, pcs: 0, lines: 0, wh: 0
+        qty: 0, pcs: 0, lines: 0, wh: 0, prodValues: []
       };
       out.qty += p.qty;
       out.pcs += p.pcs;
       out.lines += p.lines;
       out.wh += wh;
+      const rawProd = v2RoundedProductivity(isPcs ? p.pcs : p.qty, wh);
+      if (isV2CountableProductivity(p.pickerId, wh, rawProd)) out.prodValues.push(rawProd);
       pickerSummary.set(p.pickerId, out);
     });
     const pickerList = [...pickerSummary.values()].map(p => {
-      const pVal = isPcs ? p.pcs : p.qty;
-      return { ...p, prod: p.wh > 0 ? pVal / p.wh : 0 };
+      return { ...p, prod: p.prodValues.length ? mean(p.prodValues) : 0 };
     });
     pickerList.sort((a, b) => (isPcs ? b.pcs - a.pcs : b.qty - a.qty));
 
     const skuList = [...uniqueSkus.values()].sort((a, b) => (isPcs ? b.pcs - a.pcs : b.qty - a.qty));
 
     const overallVal = isPcs ? totalPcs : totalQty;
-    const overallProd = totalWorkHours > 0 ? (overallVal / totalWorkHours) : 0;
+    const validZoneProd = pickerList.map(p => Number(p.prod || 0)).filter(v => v > 0);
+    const overallProd = validZoneProd.length ? mean(validZoneProd) : 0;
 
     const isEx = isZoneExcluded(zoneCode);
     const exBtnStyle = isEx
@@ -1464,7 +1514,7 @@ function renderZoneProductivityBreakdown() {
     `<th>#</th><th>${label}</th><th class="num">จำนวนชิ้นรวม</th><th class="num">หน่วยหยิบรวม</th><th class="num">ชั่วโมงที่นับ</th>` +
     `<th class="num">Productivity หยิบ/ชม.</th><th class="num">Productivity ชิ้น/ชม.</th><th class="num">Picker ที่นับ / ทั้งหมด</th>` +
     `</tr></thead><tbody>${body}</tbody></table></div>` +
-    `<div class="zone-breakdown-foot">Productivity ใช้ฐาน 7.5 ชม. + Actual OT ต่อ Picker/วัน/กะ · ไม่ใช้ Pick แรก–Pick สุดท้ายและไม่คำนวณเวลาพัก · ชั่วโมงถูกกระจายตามสัดส่วนงานเพื่อไม่ให้นับซ้ำหลาย Zone</div>`;
+    `<div class="zone-breakdown-foot">Productivity แบบ V2 = ROUND(Total Pick ÷ Active Hours, 0) · Active Hours คือจำนวนชั่วโมงที่มี Pick > 0 · Count เมื่อ Active Hours > 3 และ Productivity < 1000 · ไม่หัก Break</div>`;
   if (switchRoot) {
     switchRoot.querySelectorAll('button').forEach(button => {
       const bMode = button.dataset.breakdown;
@@ -1521,7 +1571,7 @@ function renderAffiliationBreakdown() {
     <th>วันที่</th><th>สังกัด</th><th class="num">Picker</th><th class="num">จำนวนชิ้น</th><th class="num">หน่วยหยิบ</th>
     <th class="num">ชั่วโมงที่นับ</th><th class="num">หน่วย/ชม.</th><th class="num">ชิ้น/ชม.</th><th class="num">OT รายวัน</th>
   </tr></thead><tbody>${dailyRows || '<tr><td colspan="9" class="empty-cell">ยังไม่มีข้อมูลรายวัน</td></tr>'}</tbody></table></div>
-  <div class="zone-breakdown-foot">สังกัดจับจากรหัสพนักงานใน Sheet “บันทึกเวลาทำงาน” · Productivity = หน่วยหยิบ ÷ (7.5 ชม. + Actual OT) · Actual OT เริ่ม 16:30/04:30 และสูงสุด 2.5 ชม.</div>`;
+  <div class="zone-breakdown-foot">สังกัดจับจากรหัสพนักงานใน Sheet “บันทึกเวลาทำงาน” · Productivity แบบ V2 ใช้ค่าเฉลี่ยราย Picker/Calendar Date · OT อยู่ใน Active Hour อัตโนมัติเมื่อมี Pick ในช่วงนั้น</div>`;
 }
 
 // ===== Weighted Productivity helpers =====
@@ -1639,110 +1689,61 @@ function calculateWeightedProductivity(zoneRows) {
   };
 }
 
-// KPI Weight เป็น Overall ของงาน Pick ทั้งคลัง จึงต้องรวม PTT + BPS ก่อนคำนวณ
-// (เช่น Zone BE สามารถอยู่ฝั่ง BPS ขณะที่ Zone อื่นอยู่ PTT)
-// Productivity ใช้ 7.5 ชั่วโมง + Actual OT ต่อ Picker + Calendar Date + Actual Shift
-// จากนั้นกระจายชั่วโมงก้อนเดียวไป Zone ตามสัดส่วน Pick Units เพื่อไม่ให้นับชั่วโมงซ้ำหลาย Zone
+// KPI Weighted ใช้แนว Results Master V2:
+// PTT เป็นฐาน Total Pick, Productivity ต่อ Picker+Calendar Date ใช้ Active Hour,
+// Position ใช้ Zone ประจำจาก roster แล้วค่อยถ่วง Weight วันที่ 22 ส.ค.
 function calculateCrossSystemWeightedProductivity(from, to, sf) {
-  const pickerShiftMap = Object.create(null);
+  // Results Master V2 เดิมใช้ Productivity 1 ค่า/Picker/Calendar Date แล้วค่อยเฉลี่ยตาม Position
+  // จากการเทียบยอดวันที่ 24 แหล่งที่ใกล้ V2 คือ PTT จึงใช้ PTT เป็นฐาน KPI Weighted
+  // BPS ยังแสดงเป็นระบบแยกในหน้า Dashboard แต่ไม่เอามาปนกับ KPI V2-style นี้
+  const sourceSystem = 'PTT';
+  const S = DATA[sourceSystem];
+  const pickerDayMap = Object.create(null);
 
-  ['PTT', 'BPS'].forEach(systemName => {
-    const S = DATA[systemName];
-    if (!S || !Array.isArray(S.rows) || !Array.isArray(S._sh)) return;
+  if (S && Array.isArray(S.rows) && Array.isArray(S._sh)) {
     const count = packedRowCount(S);
     for (let i = 0; i < count; i++) {
       const si = S._sh[i];
       if (!si || si.sd < from || si.sd > to) continue;
       const row = packedRowData(S, i);
       const picker = String(S.pickers[row.pickerIdx] || '').trim();
-      if (!matchesReportTeam(si, picker, sf)) continue;
+      if (!picker || !matchesReportTeam(si, picker, sf)) continue;
 
-      const zoneInfo = getZoneInfo(row.zone);
-      const zoneName = String(zoneInfo.zone || zoneInfo.location || row.zone || '-').trim() || '-';
-      if (isZoneExcluded(zoneName)) continue;
+      const actualZone = getZoneInfo(row.zone).zone || String(row.zone || '-').trim() || '-';
+      if (isZoneExcluded(actualZone)) continue;
 
-      const bucket = resolveProductivityWeightBucket(zoneName, zoneInfo.location, row.zone);
-      const rawZoneKey = normalizeProductivityWeightZone(zoneName) ||
-        normalizeProductivityWeightZone(zoneInfo.location) || '-';
-      const zoneKey = bucket ? ('W:' + normalizeProductivityWeightZone(bucket.label)) : ('O:' + rawZoneKey);
-      const key = picker + '|' + si.sd + '|' + si.sh;
-      const g = pickerShiftMap[key] || (pickerShiftMap[key] = {
-        picker, sd: si.sd, sh: si.sh, mn: 999999, mx: -1,
-        qty: 0, pcs: 0, lines: 0, zones: Object.create(null)
+      const key = picker + '|' + si.sd;
+      const g = pickerDayMap[key] || (pickerDayMap[key] = {
+        picker, sd: si.sd, qty: 0, pcs: 0, lines: 0,
+        hourMask: 0, mn: 999999, mx: -1
       });
       g.qty += Number(row.pickQty || 0);
       g.pcs += Number(row.pcs || 0);
       g.lines += Number(row.lines || 0);
+      g.hourMask = mergeHourMask(g.hourMask, row.hourMask);
       if (si.smMin < g.mn) g.mn = si.smMin;
       if (si.smMax > g.mx) g.mx = si.smMax;
-
-      const z = g.zones[zoneKey] || (g.zones[zoneKey] = {
-        key: zoneKey,
-        bucket: bucket ? bucket.label : '',
-        rawZone: zoneName,
-        qty: 0, pcs: 0, lines: 0,
-        systems: new Set()
-      });
-      z.qty += Number(row.pickQty || 0);
-      z.pcs += Number(row.pcs || 0);
-      z.lines += Number(row.lines || 0);
-      z.systems.add(systemName);
     }
-  });
-
-  const overallZoneAgg = Object.create(null);
-  const dailyZoneAgg = Object.create(null);
-  let pickerShiftCount = 0;
-  let totalFixedHours = 0;
-  let allocatedHoursAllZones = 0;
-  let allocatedHoursWeightedZones = 0;
-
-  function addZoneAgg(target, bucket, z, hours) {
-    const out = target[bucket] || (target[bucket] = {
-      name: bucket, hours: 0, eligibleQty: 0, eligiblePcs: 0, lines: 0,
-      productiveGroups: 0, systems: new Set()
-    });
-    out.hours += hours;
-    out.eligibleQty += z.qty;
-    out.eligiblePcs += z.pcs;
-    out.lines += z.lines;
-    out.productiveGroups += 1;
-    z.systems.forEach(systemName => out.systems.add(systemName));
   }
 
-  Object.values(pickerShiftMap).forEach(g => {
-    if (!(g.lines > 0)) return;
-    const hours = productivityHours(g.mx);
-    if (!(hours > 0)) return;
-    const zones = Object.values(g.zones);
-    if (!zones.length) return;
-
-    // เวลา 7.5 + OT ของ Picker/วัน/กะ ถูกใช้เพียงครั้งเดียว
-    // แล้วกระจายไป Zone ตามสัดส่วน Pick Units; ถ้า Pick Units เป็น 0 ใช้ pcs/lines เป็นฐานกระจายเวลาเท่านั้น
-    const qtyTotal = zones.reduce((sum, z) => sum + Math.max(0, Number(z.qty) || 0), 0);
-    const pcsTotal = zones.reduce((sum, z) => sum + Math.max(0, Number(z.pcs) || 0), 0);
-    const lineTotal = zones.reduce((sum, z) => sum + Math.max(0, Number(z.lines) || 0), 0);
-
-    pickerShiftCount++;
-    totalFixedHours += hours;
-
-    zones.forEach(z => {
-      let share = 0;
-      if (qtyTotal > 0) share = Math.max(0, Number(z.qty) || 0) / qtyTotal;
-      else if (pcsTotal > 0) share = Math.max(0, Number(z.pcs) || 0) / pcsTotal;
-      else if (lineTotal > 0) share = Math.max(0, Number(z.lines) || 0) / lineTotal;
-      else share = 1 / zones.length;
-
-      const allocatedHours = hours * share;
-      allocatedHoursAllZones += allocatedHours;
-      if (!z.bucket || !(allocatedHours > 0)) return;
-      allocatedHoursWeightedZones += allocatedHours;
-      addZoneAgg(overallZoneAgg, z.bucket, z, allocatedHours);
-      const dayTarget = dailyZoneAgg[g.sd] || (dailyZoneAgg[g.sd] = Object.create(null));
-      addZoneAgg(dayTarget, z.bucket, z, allocatedHours);
-    });
-  });
-
+  function createAgg(name) {
+    return {
+      name, sumProd: 0, sumPcsProd: 0, count: 0,
+      hours: 0, eligibleQty: 0, eligiblePcs: 0, lines: 0,
+      pickers: new Set(), systems: new Set([sourceSystem])
+    };
+  }
+  function addAgg(target, bucket, g, prod, pcsProd, activeHours) {
+    const out = target[bucket] || (target[bucket] = createAgg(bucket));
+    out.sumProd += prod;
+    out.sumPcsProd += pcsProd;
+    out.count += 1;
+    out.hours += activeHours;
+    out.eligibleQty += g.qty;
+    out.eligiblePcs += g.pcs;
+    out.lines += g.lines;
+    out.pickers.add(g.picker);
+  }
   function rowsFromAgg(map) {
     return Object.values(map || {}).map(v => ({
       name: v.name,
@@ -1750,87 +1751,84 @@ function calculateCrossSystemWeightedProductivity(from, to, sf) {
       eligibleQty: v.eligibleQty,
       eligiblePcs: v.eligiblePcs,
       lines: v.lines,
-      productiveGroups: v.productiveGroups,
-      avg_prod: v.hours > 0 ? v.eligibleQty / v.hours : 0,
-      avg_pcs_prod: v.hours > 0 ? v.eligiblePcs / v.hours : 0,
-      systems: [...v.systems].sort()
+      productiveGroups: v.count,
+      productivePickers: v.pickers.size,
+      avg_prod: v.count > 0 ? v.sumProd / v.count : 0,
+      avg_pcs_prod: v.count > 0 ? v.sumPcsProd / v.count : 0,
+      systems: [...v.systems]
     }));
   }
 
+  const overallZoneAgg = Object.create(null);
+  const dailyZoneAgg = Object.create(null);
+  let eligiblePickerDays = 0;
+  let eligibleActiveHours = 0;
+  let eligiblePickUnits = 0;
+  let eligiblePcs = 0;
+  let rawProdSum = 0;
+  let rawPcsProdSum = 0;
+  let unmappedPositionCount = 0;
+
+  Object.values(pickerDayMap).forEach(g => {
+    const activeHours = activeHourCount(g.hourMask);
+    const prod = v2RoundedProductivity(g.qty, activeHours);
+    const pcsProd = v2RoundedProductivity(g.pcs, activeHours);
+    if (!isV2CountableProductivity(g.picker, activeHours, prod)) return;
+
+    eligiblePickerDays++;
+    eligibleActiveHours += activeHours;
+    eligiblePickUnits += g.qty;
+    eligiblePcs += g.pcs;
+    rawProdSum += prod;
+    rawPcsProdSum += pcsProd;
+
+    // V2 Position เป็นข้อมูลประจำพนักงานจาก XLOOKUP ไม่ใช่ Zone ที่หยิบจริงในวันนั้น
+    const assignedPosition = String(getPickerRosterHomeZone(g.picker) || '').trim();
+    const bucketInfo = resolveProductivityWeightBucket(assignedPosition);
+    if (!bucketInfo) {
+      unmappedPositionCount++;
+      return;
+    }
+    const bucket = bucketInfo.label;
+    addAgg(overallZoneAgg, bucket, g, prod, pcsProd, activeHours);
+    const dayTarget = dailyZoneAgg[g.sd] || (dailyZoneAgg[g.sd] = Object.create(null));
+    addAgg(dayTarget, bucket, g, prod, pcsProd, activeHours);
+  });
+
   const zoneRows = rowsFromAgg(overallZoneAgg);
-  const aggregateWeighted = calculateWeightedProductivity(zoneRows);
+  const weighted = calculateWeightedProductivity(zoneRows);
   const daily = Object.keys(dailyZoneAgg).sort().map(date => {
     const dayRows = rowsFromAgg(dailyZoneAgg[date]);
-    const weighted = calculateWeightedProductivity(dayRows);
+    const dayWeighted = calculateWeightedProductivity(dayRows);
     return {
       date,
-      avg_prod: weighted.avg_prod,
-      avg_pcs_prod: weighted.avg_pcs_prod,
-      groups: weighted.groups,
+      avg_prod: dayWeighted.avg_prod,
+      avg_pcs_prod: dayWeighted.avg_pcs_prod,
+      groups: dayWeighted.groups,
       zone_rows: dayRows
     };
   });
 
-  // หลายวันคงรูปแบบ KPI Sheet: คิด Weight รายวันก่อน แล้วเฉลี่ยเฉพาะวันที่มี KPI > 0
-  const prodDays = daily.filter(d => Number(d.avg_prod) > 0);
-  const pcsProdDays = daily.filter(d => Number(d.avg_pcs_prod) > 0);
-  const avg = values => values.length
-    ? values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length
-    : 0;
-  const mtdProd = avg(prodDays.map(d => d.avg_prod));
-  const mtdPcsProd = avg(pcsProdDays.map(d => d.avg_pcs_prod));
-
-  const summaryDays = prodDays;
-  const summaryGroups = PRODUCTIVITY_WEIGHT_CONFIG.map(groupCfg => {
-    const dayGroups = summaryDays.map(d => (d.groups || []).find(g => g.key === groupCfg.key));
-    const groupProd = avg(dayGroups.map(g => g ? Number(g.productivity || 0) : 0));
-    const groupPcsProd = avg(dayGroups.map(g => g ? Number(g.pcsProductivity || 0) : 0));
-    const zones = groupCfg.zones.map(zoneCfg => {
-      const dayZones = dayGroups.map(g => g && (g.zones || []).find(
-        z => normalizeProductivityWeightZone(z.label) === normalizeProductivityWeightZone(zoneCfg.label)
-      ));
-      const prod = avg(dayZones.map(z => z ? Number(z.prod || 0) : 0));
-      const pcsProd = avg(dayZones.map(z => z ? Number(z.pcsProd || 0) : 0));
-      return {
-        label: zoneCfg.label,
-        weight: zoneCfg.weight,
-        hasData: dayZones.some(z => z && z.hasData),
-        hasMapping: dayZones.some(z => z && z.hasMapping),
-        hours: dayZones.reduce((sum, z) => sum + Number(z && z.hours || 0), 0),
-        eligibleQty: dayZones.reduce((sum, z) => sum + Number(z && z.eligibleQty || 0), 0),
-        eligiblePcs: dayZones.reduce((sum, z) => sum + Number(z && z.eligiblePcs || 0), 0),
-        prod,
-        pcsProd,
-        contribution: prod * zoneCfg.weight,
-        pcsContribution: pcsProd * zoneCfg.weight,
-        matchedZones: [zoneCfg.label]
-      };
-    });
-    return {
-      key: groupCfg.key, label: groupCfg.label, weight: groupCfg.weight,
-      productivity: groupProd, pcsProductivity: groupPcsProd,
-      contribution: groupProd * groupCfg.weight,
-      pcsContribution: groupPcsProd * groupCfg.weight,
-      coverage: 1, zones
-    };
-  });
-
   return {
-    ...aggregateWeighted,
-    avg_prod: mtdProd || aggregateWeighted.avg_prod,
-    avg_pcs_prod: mtdPcsProd || aggregateWeighted.avg_pcs_prod,
-    groups: summaryDays.length ? summaryGroups : aggregateWeighted.groups,
-    scope: 'PTT+BPS',
-    range_method: 'daily weighted KPI then AVERAGEIF > 0',
-    hour_method: '7.5 fixed hours + actual OT per picker/calendar-date/shift; zone hours allocated by pick-unit share',
-    eligible_picker_shifts: pickerShiftCount,
-    eligible_hours: totalFixedHours,
-    allocated_hours_all_zones: allocatedHoursAllZones,
-    allocated_hours_weighted_zones: allocatedHoursWeightedZones,
+    ...weighted,
+    groups: weighted.groups,
+    scope: 'PTT (V2-style KPI source)',
+    range_method: 'arithmetic mean of eligible Picker/Calendar-Date productivity inside assigned Position, then fixed Zone Weight',
+    hour_method: 'Active Hours = count distinct normalized clock-hour buckets with Pick > 0; ROUND(Total Pick Units / Active Hours, 0)',
+    eligibility_rule: 'Active Hours > 3, Productivity > 0 and < 1000, support-other-work excluded when roster identifies it',
+    position_method: 'picker_roster_zones (static Position like Results Master V2 XLOOKUP); unmapped Position is not forced into a Zone',
+    eligible_picker_days: eligiblePickerDays,
+    eligible_active_hours: eligibleActiveHours,
+    eligible_pick_units: eligiblePickUnits,
+    eligible_pcs: eligiblePcs,
+    raw_v2_avg_prod: eligiblePickerDays ? rawProdSum / eligiblePickerDays : 0,
+    raw_v2_avg_pcs_prod: eligiblePickerDays ? rawPcsProdSum / eligiblePickerDays : 0,
+    unmapped_position_count: unmappedPositionCount,
     zone_rows: zoneRows,
     daily
   };
 }
+
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // Work cube = [shiftDateIdx, shiftCode, zone, pickerIdx, pcs, pick_qty, lines, minSm, maxSm]
 function aggregate(system, from, to, sf) {
@@ -1881,32 +1879,37 @@ function aggregate(system, from, to, sf) {
     (dayVol[si.sd] = dayVol[si.sd] || { lines: 0, pcs: 0, qty: 0, pk: new Set() });
     dayVol[si.sd].lines += lineVal; dayVol[si.sd].pcs += pVal; dayVol[si.sd].qty += qVal; dayVol[si.sd].pk.add(picker);
 
-    // group ต่อ (คน, วันของกะ, กะ) เพื่อคิด work-hours + OT
-    const k = picker + '|' + si.sd + '|' + si.sh;
-    const b = grp[k] || (grp[k] = { picker, sd: si.sd, sh: si.sh, pcs: 0, q: 0, n: 0, mx: -1, mn: 999999 });
-    b.pcs += pVal; b.q += qVal; b.n += lineVal; if (si.smMax > b.mx) b.mx = si.smMax; if (si.smMin < b.mn) b.mn = si.smMin;
+    // V2 มี 1 แถวต่อ Picker + Calendar Date และนับ Active Hour จากทั้ง 24 ชั่วโมงของวันนั้น
+    const reportTeam = getPickerReportTeam(picker);
+    const reportShift = reportTeam === 'B' ? 'night' : (reportTeam === 'A' ? 'morning' : si.sh);
+    const k = picker + '|' + si.sd;
+    const b = grp[k] || (grp[k] = {
+      picker, sd: si.sd, sh: reportShift, pcs: 0, q: 0, n: 0,
+      mx: -1, mn: 999999, hourMask: 0
+    });
+    b.pcs += pVal; b.q += qVal; b.n += lineVal;
+    b.hourMask = mergeHourMask(b.hourMask, row.hourMask);
+    if (si.smMax > b.mx) b.mx = si.smMax; if (si.smMin < b.mn) b.mn = si.smMin;
 
-    // แยกกลุ่มตาม Zone เพื่อคำนวณ Zone Productivity
-    const zoneGrpKey = picker + '|' + si.sd + '|' + si.sh + '|' + zone;
+    // Zone/Owner/Type breakdown ใช้ Productivity ของ Parent Picker/วัน แล้วเฉลี่ยแบบ V2
+    const zoneGrpKey = picker + '|' + si.sd + '|' + zone;
     const zoneGroup = zoneGrp[zoneGrpKey] || (zoneGrp[zoneGrpKey] = {
-      picker, sd: si.sd, sh: si.sh, zone, owner: zoneInfo.owner || '-', typePick: zoneInfo.typePick || '-',
+      picker, sd: si.sd, sh: reportShift, zone, owner: zoneInfo.owner || '-', typePick: zoneInfo.typePick || '-',
       pcs: 0, q: 0, n: 0, mx: -1, mn: 999999
     });
     zoneGroup.pcs += pVal; zoneGroup.q += qVal; zoneGroup.n += lineVal; if (si.smMax > zoneGroup.mx) zoneGroup.mx = si.smMax; if (si.smMin < zoneGroup.mn) zoneGroup.mn = si.smMin;
 
-    // แยกกลุ่มเพื่อวัด Productivity ตาม Owner และ Type Pick โดยใช้กติกาเวลาเดียวกับรายคน
-    const ownerTypeKey = picker + '|' + si.sd + '|' + si.sh + '|' + zoneInfo.owner + '|' + zoneInfo.typePick;
+    const ownerTypeKey = picker + '|' + si.sd + '|' + zoneInfo.owner + '|' + zoneInfo.typePick;
     const ownerType = ownerTypeGrp[ownerTypeKey] || (ownerTypeGrp[ownerTypeKey] = {
-      picker, sd: si.sd, sh: si.sh, owner: zoneInfo.owner || '-', typePick: zoneInfo.typePick || '-',
+      picker, sd: si.sd, sh: reportShift, owner: zoneInfo.owner || '-', typePick: zoneInfo.typePick || '-',
       pcs: 0, q: 0, n: 0, mx: -1, mn: 999999
     });
     ownerType.pcs += pVal; ownerType.q += qVal; ownerType.n += lineVal; if (si.smMax > ownerType.mx) ownerType.mx = si.smMax; if (si.smMin < ownerType.mn) ownerType.mn = si.smMin;
 
-    // ผูกสังกัดจากรหัสพนักงานใน Sheet บันทึกเวลาทำงาน เพื่อสรุป Productivity และ OT รายสังกัด
     const affiliation = getPickerAffiliation(picker);
-    const affiliationKey = picker + '|' + si.sd + '|' + si.sh + '|' + affiliation;
+    const affiliationKey = picker + '|' + si.sd + '|' + affiliation;
     const affiliationGroup = affiliationGrp[affiliationKey] || (affiliationGrp[affiliationKey] = {
-      picker, sd: si.sd, sh: si.sh, affiliation,
+      picker, sd: si.sd, sh: reportShift, affiliation,
       pcs: 0, q: 0, n: 0, mx: -1, mn: 999999
     });
     affiliationGroup.pcs += pVal; affiliationGroup.q += qVal; affiliationGroup.n += lineVal; if (si.smMax > affiliationGroup.mx) affiliationGroup.mx = si.smMax; if (si.smMin < affiliationGroup.mn) affiliationGroup.mn = si.smMin;
@@ -1921,10 +1924,11 @@ function aggregate(system, from, to, sf) {
     });
     pDrill.dates.add(si.sd);
     const dRec = pDrill.byDate[si.sd] || (pDrill.byDate[si.sd] = {
-      date: si.sd, pcs: 0, qty: 0, lines: 0, minMinutes: 999999, maxMinutes: -1,
+      date: si.sd, pcs: 0, qty: 0, lines: 0, minMinutes: 999999, maxMinutes: -1, hourMask: 0,
       zones: {}, slots: {}, skus: {}
     });
     dRec.pcs += pVal; dRec.qty += qVal; dRec.lines += lineVal;
+    dRec.hourMask = mergeHourMask(dRec.hourMask, row.hourMask);
     if (si.smMin < dRec.minMinutes) dRec.minMinutes = si.smMin;
     if (si.smMax > dRec.maxMinutes) dRec.maxMinutes = si.smMax;
 
@@ -1997,17 +2001,20 @@ function aggregate(system, from, to, sf) {
   });
 
   function applyProductivityHours(g) {
-    g.ot = otHours(g.mx);
-    g.wh = g.n > 0 ? productivityHours(g.mx) : 0;
-    g.countable = g.n > 0 && g.wh > 0;
-    g.prod = g.countable ? (g.q / g.wh) : 0;
-    g.pcsProd = g.countable ? (g.pcs / g.wh) : 0;
+    g.activeHours = activeHourCount(g.hourMask);
+    g.ot = activeOtHoursFromMask(g.hourMask, g.picker);
+    const roundedProd = v2RoundedProductivity(g.q, g.activeHours);
+    const roundedPcsProd = v2RoundedProductivity(g.pcs, g.activeHours);
+    g.wh = g.activeHours;
+    g.countable = g.n > 0 && isV2CountableProductivity(g.picker, g.activeHours, roundedProd);
+    g.prod = g.countable ? roundedProd : 0;
+    g.pcsProd = g.countable ? roundedPcsProd : 0;
   }
 
   function allocateParentHours(sourceGroups) {
     const buckets = Object.create(null);
     sourceGroups.forEach(g => {
-      const key = g.picker + '|' + g.sd + '|' + g.sh;
+      const key = g.picker + '|' + g.sd;
       (buckets[key] = buckets[key] || []).push(g);
     });
     Object.entries(buckets).forEach(([key, children]) => {
@@ -2029,9 +2036,9 @@ function aggregate(system, from, to, sf) {
         else share = 1 / children.length;
         g.ot = parent.ot * share;
         g.wh = parent.wh * share;
-        g.countable = g.wh > 0;
-        g.prod = g.countable ? (g.q / g.wh) : 0;
-        g.pcsProd = g.countable ? (g.pcs / g.wh) : 0;
+        g.countable = true;
+        g.prod = parent.prod;
+        g.pcsProd = parent.pcsProd;
       });
     });
   }
@@ -2044,7 +2051,7 @@ function aggregate(system, from, to, sf) {
   allocateParentHours(ownerTypeGroups);
   const affiliationGroups = Object.values(affiliationGrp);
   affiliationGroups.forEach(g => {
-    const parent = grp[g.picker + '|' + g.sd + '|' + g.sh];
+    const parent = grp[g.picker + '|' + g.sd];
     if (!parent || !parent.countable) {
       g.ot = 0; g.wh = 0; g.countable = false; g.prod = 0; g.pcsProd = 0;
       return;
@@ -2052,8 +2059,8 @@ function aggregate(system, from, to, sf) {
     g.ot = parent.ot;
     g.wh = parent.wh;
     g.countable = true;
-    g.prod = g.q / g.wh;
-    g.pcsProd = g.pcs / g.wh;
+    g.prod = parent.prod;
+    g.pcsProd = parent.pcsProd;
   });
   const r1 = n => Math.round(n * 10) / 10;
   const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
@@ -2061,9 +2068,9 @@ function aggregate(system, from, to, sf) {
 
   const byDate = {};
   productiveGroups.forEach(g => {
-    const d = byDate[g.sd] || (byDate[g.sd] = { q: 0, pcs: 0, h: 0 });
-    d.q += g.q;
-    d.pcs += g.pcs;
+    const d = byDate[g.sd] || (byDate[g.sd] = { prod: [], pcsProd: [], h: 0 });
+    d.prod.push(g.prod);
+    d.pcsProd.push(g.pcsProd);
     d.h += g.wh;
   });
   const daily = Object.keys(dayVol).sort().map(d => ({
@@ -2072,17 +2079,22 @@ function aggregate(system, from, to, sf) {
     pcs: dayVol[d].pcs,
     qty: dayVol[d].qty,
     pickers: dayVol[d].pk.size,
-    avg_prod: r1(byDate[d] && byDate[d].h > 0 ? byDate[d].q / byDate[d].h : 0),
-    avg_pcs_prod: r1(byDate[d] && byDate[d].h > 0 ? byDate[d].pcs / byDate[d].h : 0)
+    avg_prod: r1(byDate[d] ? mean(byDate[d].prod) : 0),
+    avg_pcs_prod: r1(byDate[d] ? mean(byDate[d].pcsProd) : 0)
   }));
 
   const byPicker = {};
   groups.forEach(g => {
     const o = byPicker[g.picker] || (byPicker[g.picker] = {
-      pcs: 0, q: 0, n: 0, ot: 0, hours: 0, sh: {}, affiliation: getPickerAffiliation(g.picker)
+      pcs: 0, q: 0, n: 0, ot: 0, hours: 0, sh: {}, affiliation: getPickerAffiliation(g.picker),
+      prodValues: [], pcsProdValues: []
     });
     o.pcs += g.pcs; o.q += g.q; o.n += g.n; o.ot += g.ot;
-    if (g.countable) o.hours += g.wh;
+    if (g.countable) {
+      o.hours += g.wh;
+      o.prodValues.push(g.prod);
+      o.pcsProdValues.push(g.pcsProd);
+    }
     o.sh[g.sh] = (o.sh[g.sh] || 0) + g.n;
   });
   const by_picker = Object.entries(byPicker).map(([picker, o]) => {
@@ -2091,8 +2103,8 @@ function aggregate(system, from, to, sf) {
     const shift = Object.keys(o.sh).sort((a, b) => o.sh[b] - o.sh[a])[0] || '-';
     return {
       picker, name: getPickerName(picker), affiliation: o.affiliation, pcs: o.pcs, qty: o.q, lines: o.n, ot: r1(o.ot), shift,
-      avg_prod: r1(o.hours > 0 ? o.q / o.hours : 0),
-      avg_pcs_prod: r1(o.hours > 0 ? o.pcs / o.hours : 0),
+      avg_prod: r1(mean(o.prodValues)),
+      avg_pcs_prod: r1(mean(o.pcsProdValues)),
       zone, location
     };
   }).sort((a, b) => b.qty - a.qty);
@@ -2131,8 +2143,8 @@ function aggregate(system, from, to, sf) {
       hours: r1(v.hours), eligiblePcs: v.eligiblePcs, eligibleQty: v.eligibleQty,
       productiveGroups: v.productiveGroups, pickers: v.pickers.size, productivePickers: v.productivePickers.size,
       types: [...v.types].sort(), owners: [...v.owners].sort(),
-      avg_prod: r1(v.hours ? v.eligibleQty / v.hours : 0),
-      avg_pcs_prod: r1(v.hours ? v.eligiblePcs / v.hours : 0),
+      avg_prod: r1(mean(v.avgValues)),
+      avg_pcs_prod: r1(mean(v.avgPcsValues)),
       mean_prod: r1(mean(v.avgValues)), mean_pcs_prod: r1(mean(v.avgPcsValues))
     })).sort((a, b) => {
       const aUnknown = a.name === '-' || a.name === 'ไม่พบใน Zone_V2' ? 1 : 0;
@@ -2147,15 +2159,12 @@ function aggregate(system, from, to, sf) {
   by_zone_prod.forEach(z => zone_prod_map[z.name] = z);
 
   // Productivity ปกติของ PTT/BPS ยังเป็นค่าของระบบที่ผู้ใช้เลือก เพื่อให้ KPI/กราฟปริมาณสอดคล้องกัน
-  // KPI Weighted Overall คำนวณแยกต่างหากโดยรวม PTT+BPS ตามสูตรวันที่ 22 ส.ค.
-  const rawTotalHours = productiveGroups.reduce((sum, g) => sum + Number(g.wh || 0), 0);
-  const rawTotalQty = productiveGroups.reduce((sum, g) => sum + Number(g.q || 0), 0);
-  const rawTotalPcs = productiveGroups.reduce((sum, g) => sum + Number(g.pcs || 0), 0);
-  const rawOverallProd = r1(rawTotalHours > 0 ? rawTotalQty / rawTotalHours : 0);
-  const rawOverallPcsProd = r1(rawTotalHours > 0 ? rawTotalPcs / rawTotalHours : 0);
+  // KPI Weighted Overall คำนวณแบบ V2 จาก PTT: Active Hour + ค่าเฉลี่ยราย Picker/วัน + Position ประจำ แล้วใช้สูตร Weight วันที่ 22 ส.ค.
+  const rawOverallProd = r1(mean(productiveGroups.map(g => g.prod)));
+  const rawOverallPcsProd = r1(mean(productiveGroups.map(g => g.pcsProd)));
   const weightedOverall = calculateCrossSystemWeightedProductivity(from, to, sf);
 
-  // กราฟรายวัน/Target ใช้ KPI Weighted รายวันแบบเดียวกับ KPI Sheet
+  // กราฟรายวัน/Target คำนวณ V2-style แยกตามวัน ส่วนช่วงหลายวันใช้ค่าเฉลี่ยราย Picker/วันภายใน Position ก่อน Weight
   // แต่เก็บ Raw ของระบบที่เลือกไว้ใน raw_avg_* เพื่อ Audit ได้ตลอด
   const weightedDailyMap = new Map((weightedOverall.daily || []).map(d => [d.date, d]));
   daily.forEach(day => {
@@ -2173,7 +2182,7 @@ function aggregate(system, from, to, sf) {
     const out = affiliationMap[key] || (affiliationMap[key] = {
       name: key, pcs: 0, qty: 0, lines: 0, ot: 0, hours: 0,
       eligiblePcs: 0, eligibleQty: 0, productiveGroups: 0,
-      pickers: new Set(), productivePickers: new Set()
+      pickers: new Set(), productivePickers: new Set(), prodValues: [], pcsProdValues: []
     });
     out.pcs += g.pcs; out.qty += g.q; out.lines += g.n; out.ot += g.ot; out.pickers.add(g.picker);
     if (g.countable) {
@@ -2182,13 +2191,15 @@ function aggregate(system, from, to, sf) {
       out.eligibleQty += g.q;
       out.productiveGroups++;
       out.productivePickers.add(g.picker);
+      out.prodValues.push(g.prod);
+      out.pcsProdValues.push(g.pcsProd);
     }
 
     const dailyKey = g.sd + '|' + key;
     const day = affiliationDailyMap[dailyKey] || (affiliationDailyMap[dailyKey] = {
       date: g.sd, name: key, pcs: 0, qty: 0, lines: 0, ot: 0, hours: 0,
       eligiblePcs: 0, eligibleQty: 0, productiveGroups: 0,
-      pickers: new Set(), productivePickers: new Set()
+      pickers: new Set(), productivePickers: new Set(), prodValues: [], pcsProdValues: []
     });
     day.pcs += g.pcs; day.qty += g.q; day.lines += g.n; day.ot += g.ot; day.pickers.add(g.picker);
     if (g.countable) {
@@ -2197,14 +2208,16 @@ function aggregate(system, from, to, sf) {
       day.eligibleQty += g.q;
       day.productiveGroups++;
       day.productivePickers.add(g.picker);
+      day.prodValues.push(g.prod);
+      day.pcsProdValues.push(g.pcsProd);
     }
   });
   const by_affiliation = Object.values(affiliationMap).map(v => ({
     name: v.name, pcs: v.pcs, qty: v.qty, lines: v.lines, ot: r1(v.ot), hours: r1(v.hours),
     eligiblePcs: v.eligiblePcs, eligibleQty: v.eligibleQty,
     productiveGroups: v.productiveGroups, pickers: v.pickers.size, productivePickers: v.productivePickers.size,
-    avg_prod: r1(v.hours ? v.eligibleQty / v.hours : 0),
-    avg_pcs_prod: r1(v.hours ? v.eligiblePcs / v.hours : 0)
+    avg_prod: r1(mean(v.prodValues || [])),
+    avg_pcs_prod: r1(mean(v.pcsProdValues || []))
   })).sort((a, b) => {
     const aUnknown = a.name === 'ไม่พบสังกัด' ? 1 : 0;
     const bUnknown = b.name === 'ไม่พบสังกัด' ? 1 : 0;
@@ -2214,8 +2227,8 @@ function aggregate(system, from, to, sf) {
     date: v.date, name: v.name, pcs: v.pcs, qty: v.qty, lines: v.lines, ot: r1(v.ot), hours: r1(v.hours),
     eligiblePcs: v.eligiblePcs, eligibleQty: v.eligibleQty,
     productiveGroups: v.productiveGroups, pickers: v.pickers.size, productivePickers: v.productivePickers.size,
-    avg_prod: r1(v.hours ? v.eligibleQty / v.hours : 0),
-    avg_pcs_prod: r1(v.hours ? v.eligiblePcs / v.hours : 0)
+    avg_prod: r1(mean(v.prodValues || [])),
+    avg_pcs_prod: r1(mean(v.pcsProdValues || []))
   })).sort((a, b) => b.date.localeCompare(a.date) || (b.qty - a.qty) || a.name.localeCompare(b.name));
   function finalizeItemLocationFields(v) {
     const locations = v.locations instanceof Set
@@ -2250,7 +2263,7 @@ function aggregate(system, from, to, sf) {
   const result = {
     kpis: {
       lines, pcs, qty: pickQty, pickers: pickers.size, ot: r1(totOt),
-      // KPI หลักตามเกณฑ์หัวหน้า = Weighted Overall ของ PTT+BPS
+      // KPI หลัก = V2-style Productivity จาก PTT แล้ว Weight ตาม Position/Zone วันที่ 22
       avg_prod: r1(weightedOverall.avg_prod),
       avg_pcs_prod: r1(weightedOverall.avg_pcs_prod),
       // Raw ของระบบที่เลือกเก็บไว้สำหรับเทียบ/Audit
@@ -2540,15 +2553,15 @@ function renderWeightedProductivityBanner() {
 
   box.style.cssText = 'display:flex;margin:10px 0 16px;padding:11px 14px;border:1px solid #c7d2fe;border-left:5px solid #6366f1;border-radius:12px;background:#eef2ff;color:#3730a3;gap:10px;align-items:center;flex-wrap:wrap;font-size:11.5px;';
   box.innerHTML = `<div style="width:100%;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">` +
-    `<div><b>⚖️ KPI Weighted Overall (PTT+BPS):</b> <span style="font-size:15px;">${fmtDecimal1(weighted)}</span> ${unit} · Productivity ${escapeZoneHtml(sys)} ปัจจุบัน ${fmtDecimal1(raw)} ${unit}</div>` +
-    `<div style="font-size:10.5px;opacity:.82;">สูตร 22 ส.ค. · ฐาน 7.5 ชม. + Actual OT · หลายวัน = เฉลี่ย Weighted รายวันแบบ MTD</div></div>` +
+    `<div><b>⚖️ KPI Weighted Overall (V2-style PTT):</b> <span style="font-size:15px;">${fmtDecimal1(weighted)}</span> ${unit} · Productivity ${escapeZoneHtml(sys)} ปัจจุบัน ${fmtDecimal1(raw)} ${unit}</div>` +
+    `<div style="font-size:10.5px;opacity:.82;">สูตร 22 ส.ค. · Active Hour แบบ V2 · Zone = ค่าเฉลี่ย Productivity ราย Picker/วันตาม Position ประจำ</div></div>` +
     `<div style="display:flex;gap:6px;flex-wrap:wrap;">${groups}</div>` +
     `<details style="width:100%;margin-top:2px;"><summary style="cursor:pointer;font-weight:800;user-select:none;">ดูค่า Productivity ราย Zone ที่นำไป Weight</summary>` +
     `<div style="overflow:auto;margin-top:7px;border:1px solid #c7d2fe;border-radius:9px;background:#fff;max-height:360px;">` +
     `<table style="width:100%;border-collapse:collapse;min-width:620px;font-size:11px;color:#334155;"><thead style="position:sticky;top:0;background:#e0e7ff;"><tr>` +
-    `<th style="padding:6px 7px;text-align:left;">Zone KPI</th><th style="padding:6px 7px;text-align:right;">Productivity</th><th style="padding:6px 7px;text-align:right;">Weight</th><th style="padding:6px 7px;text-align:right;">ผลหลัง Weight</th><th style="padding:6px 7px;text-align:right;">ชั่วโมงจัดสรร</th>` +
+    `<th style="padding:6px 7px;text-align:left;">Zone KPI</th><th style="padding:6px 7px;text-align:right;">Productivity</th><th style="padding:6px 7px;text-align:right;">Weight</th><th style="padding:6px 7px;text-align:right;">ผลหลัง Weight</th><th style="padding:6px 7px;text-align:right;">Active Hours รวม</th>` +
     `</tr></thead><tbody>${detailRows}</tbody></table></div>` +
-    `<div style="margin-top:6px;font-size:10.5px;color:#6366f1;">ฐาน Productivity = 7.5 ชม. + Actual OT ต่อ Picker/Calendar Date/Actual Shift · กระจายชั่วโมงไป Zone ตามสัดส่วน Pick Units · Zone ไม่มีข้อมูลคิดเป็น 0 ตาม KPI Sheet</div>` +
+    `<div style="margin-top:6px;font-size:10.5px;color:#6366f1;">ฐาน Productivity = ROUND(Total Pick ÷ Active Hours,0) ต่อ Picker/Calendar Date · Position ใช้ Zone ประจำจาก roster แบบ XLOOKUP ของ V2 · Zone ไม่มีข้อมูลคิดเป็น 0 ตาม KPI Sheet</div>` +
     `</details>`;
 }
 
@@ -4037,9 +4050,9 @@ function renderPickerDrilldown() {
     totalQty += dRec.qty;
     totalLines += dRec.lines;
 
-    // ฐานคงที่ 7.5 ชม. ต่อ Calendar Date + Actual OT จากเวลาหยิบสุดท้าย
-    if (dRec.lines > 0 && Number.isFinite(Number(dRec.maxMinutes))) {
-      totalWorkHours += productivityHours(dRec.maxMinutes);
+    // V2 Active Hours = จำนวนชั่วโมงที่มียอด Pick ในวันนั้น
+    if (dRec.lines > 0) {
+      totalWorkHours += activeHourCount(dRec.hourMask);
     }
 
     // zones
@@ -5429,7 +5442,7 @@ const builders = {
     <div class="rpt-kcard" style="--c1:#0ea5e9;--c2:#0284c7;">
       <div class="icon">⚡</div>
       <div class="val">${avgProd}</div>
-      <div class="lbl">KPI Weighted Overall (PTT+BPS)</div>
+      <div class="lbl">KPI Weighted Overall (V2-style PTT)</div>
       <div class="sub">${unitLabel} · ${escapeZoneHtml(sys)} Raw ${fmtDecimal1(isPcs ? kpis.raw_avg_pcs_prod : kpis.raw_avg_prod)}</div>
     </div>
     <div class="rpt-kcard" style="--c1:#10b981;--c2:#059669;">
@@ -6715,9 +6728,9 @@ async function clearDashboardResponseCache() {
 
 function dashboardPayloadRowCount(payload) {
   const validSource = source =>
-    source && Number(source.row_width) === 9 && Number(source.item_row_width) === 8 && Number(source.slot_row_width) === 8 &&
+    source && Number(source.row_width) === 10 && Number(source.item_row_width) === 8 && Number(source.slot_row_width) === 8 &&
     Array.isArray(source.dates) && Array.isArray(source.pickers) && Array.isArray(source.skus) &&
-    Array.isArray(source.rows) && source.rows.length % 9 === 0 &&
+    Array.isArray(source.rows) && source.rows.length % 10 === 0 &&
     Array.isArray(source.item_rows) && source.item_rows.length % 8 === 0 &&
     Array.isArray(source.slot_rows) && source.slot_rows.length % 8 === 0;
   const validSchema = payload && payload.meta &&

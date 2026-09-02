@@ -1934,13 +1934,13 @@
 
         <div class="card wide">
           <h3>Productivity รายคน — Top 12</h3>
-          <div class="sub">Overall KPI = ถ่วง Weight แบบวันที่ 22 ส.ค. โดยรวม PTT+BPS · Productivity ดิบใช้ 7.5 ชม. +
-            Actual OT ต่อ Picker/วัน/กะ · หลายวันใช้ค่าเฉลี่ย Weighted รายวันแบบ MTD</div>
+          <div class="sub">Overall KPI = Productivity แบบ V2 จาก PTT · Active Hours = จำนวนชั่วโมงที่มี Pick > 0 ·
+            เฉลี่ยราย Picker/วันตาม Position แล้วถ่วง Weight วันที่ 22 ส.ค.</div>
           <div class="chartbox tall"><canvas id="picker"></canvas></div>
-          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery โดยตรง · PTT ลบเวลา 7 ชั่วโมง ส่วน BPS ใช้เวลาเดิม
-            และนับตาม Calendar Date หลัง Normalize · Productivity = หน่วยหยิบ ÷ (7.5 ชม. + Actual OT) · Overall KPI ใช้
-            Weight: Full Rack 37% / Half Rack 48% / EA 15% ตามสูตรวันที่ 22 ส.ค. · ชั่วโมงถูกกระจายไป Zone ตามสัดส่วน
-            Pick Units เพื่อไม่ให้นับซ้ำ</div>
+          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery · PTT ลบเวลา 7 ชั่วโมง ส่วน BPS ใช้เวลาเดิม และนับตาม
+            Calendar Date หลัง Normalize · Productivity แบบ V2 = ROUND(Total Pick Units ÷ Active Hours,0) · Count เมื่อ
+            Active Hours > 3 และ Productivity 1–999 · OT ถูกนับอัตโนมัติเมื่อมี Pick ในชั่วโมง OT · Overall ใช้ Weight
+            Full Rack 37% / Half Rack 48% / EA 15%</div>
         </div>
         <div class="card wide affiliation-breakdown-card">
           <h3>Productivity แยกตามสังกัด</h3>
@@ -1978,8 +1978,8 @@
         </div>
         <div class="card wide zone-breakdown-card" style="margin-bottom:18px">
           <h3>Productivity แยกตาม Zone, Owner และ Type Pick</h3>
-          <div class="sub">Productivity ใช้ฐาน 7.5 ชม. + Actual OT ต่อ Picker/วัน/กะ และกระจายชั่วโมงไป Zone ตามสัดส่วน
-            Pick Units
+          <div class="sub">Productivity ใช้ Active Hour แบบ V2 และค่าเฉลี่ยราย Picker/Calendar Date; KPI Weight ใช้
+            Position ประจำจาก roster
           </div>
           <div class="zone-breakdown-switch" id="zoneBreakdownSwitch"><button data-breakdown="zone">ตาม
               Zone</button><button data-breakdown="owner" class="active">ตาม Owner</button><button
@@ -2469,7 +2469,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260901-fixed75-ot-calendar-weight-v72"></script>
+  <script src="app.js?v=20260902-v2-active-hour-weight-v73"></script>
 </body>
 
 </html>
