@@ -134,7 +134,7 @@ let ALL_DATES = [], DMIN = '', DMAX = '';
 let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
 let unitMode = 'units'; // เปิดหน้าเริ่มต้นเป็นหน่วยหยิบ (UOM ที่ BigQuery คำนวณแล้ว)
 let trendMode = 'day';
-let datePresetMode = 'all';
+let datePresetMode = 'month';
 let excludedSkus = new Set();
 let excludedSkusSavedAt = null;
 let itemSearchTerm = '';
@@ -595,6 +595,12 @@ function rangeForPeriod(mode, baseDate) {
     return { from: clampDate(base.slice(0, 7) + '-01'), to: clampDate(monthEnd(base)) };
   }
   return { from: base, to: base };
+}
+
+function defaultCurrentMonthRange(baseDate = DMAX) {
+  const todayMonth = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' }).slice(0, 7);
+  const base = (DMAX && DMAX >= todayMonth + '-01') ? DMAX : (baseDate || DMAX);
+  return rangeForPeriod('month', base);
 }
 function shiftOf(ds, t) {
   if (t >= 420 && t < 1140) return { sh: 'morning', sd: ds, sm: t - 420 };   // A: 07:00–18:59
@@ -6514,7 +6520,7 @@ function clearDashboardState() {
   ITEM_MASTER = Object.create(null); ITEM_MASTER_BY_SKU = Object.create(null);
   prepareZoneMaster();
   ALL_DATES = []; DMIN = ''; DMAX = ''; dfrom = ''; dto = '';
-  datePresetMode = 'all';
+  datePresetMode = 'month';
   trendMode = 'day';
   A = null; built = {}; lastFetchTime = null;
   itemSearchTerm = '';
@@ -6874,9 +6880,10 @@ function applyDashboardPayload(payload, previous, source, options) {
   computeBounds();
   const keepFrom = previous.dfrom && previous.dfrom >= DMIN && previous.dfrom <= DMAX;
   const keepTo = previous.dto && previous.dto >= DMIN && previous.dto <= DMAX;
-  dfrom = keepFrom ? previous.dfrom : DMIN;
-  dto = keepTo ? previous.dto : DMAX;
-  datePresetMode = (keepFrom || keepTo) ? (previous.datePresetMode || 'custom') : 'all';
+  const defMonth = defaultCurrentMonthRange();
+  dfrom = keepFrom ? previous.dfrom : defMonth.from;
+  dto = keepTo ? previous.dto : defMonth.to;
+  datePresetMode = (keepFrom || keepTo) ? (previous.datePresetMode || 'custom') : 'month';
   trendMode = previous.trendMode || trendMode;
   if (options && options.deferReady) {
     setSideBadge('กำลังเตรียมข้อมูลพนักงาน\nสินค้า และช่วงเวลา…');
@@ -6998,8 +7005,12 @@ async function loadDataOnce(force, transientAttempt = 0, options = {}) {
           dashboardCacheRevision = probe.revision;
           DMIN = probe.minDate;
           DMAX = probe.maxDate;
-          dfrom = previous.dfrom && previous.dfrom >= DMIN && previous.dfrom <= DMAX ? previous.dfrom : DMIN;
-          dto = previous.dto && previous.dto >= DMIN && previous.dto <= DMAX ? previous.dto : DMAX;
+          const keepFrom = previous.dfrom && previous.dfrom >= DMIN && previous.dfrom <= DMAX;
+          const keepTo = previous.dto && previous.dto >= DMIN && previous.dto <= DMAX;
+          const defMonth = defaultCurrentMonthRange(DMAX);
+          dfrom = keepFrom ? previous.dfrom : defMonth.from;
+          dto = keepTo ? previous.dto : defMonth.to;
+          datePresetMode = (keepFrom || keepTo) ? (previous.datePresetMode || 'custom') : 'month';
           if (!silent) showLoading(true, 'กำลังดึงข้อมูลพนักงาน สินค้า และช่วงเวลาพร้อมกัน…');
           earlyCubePromise = Promise.all([
             loadItemMaster(false),
