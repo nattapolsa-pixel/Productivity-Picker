@@ -65,22 +65,22 @@ const PRODUCTIVITY_WEIGHT_CONFIG = Object.freeze([
   Object.freeze({
     key: 'FULL_RACK', label: 'Full Rack', weight: 0.37,
     zones: Object.freeze([
-      Object.freeze({ label: 'AH-AI', weight: 0.20, members: Object.freeze(['AH', 'AI']) }),
-      Object.freeze({ label: 'AL-BL-AM-BM', weight: 0.30, members: Object.freeze(['AL', 'BL', 'AM', 'BM']) }),
+      Object.freeze({ label: 'AH-AI', weight: 0.20, members: Object.freeze(['AH', 'AI', 'AH-AI']) }),
+      Object.freeze({ label: 'AL-BL-AM-BM', weight: 0.30, members: Object.freeze(['AL', 'BL', 'AM', 'BM', 'AL-BL-BM-AM', 'AL-BL-AM-BM']) }),
       Object.freeze({ label: 'BE', weight: 0.50, members: Object.freeze(['BE']) })
     ])
   }),
   Object.freeze({
     key: 'HALF_RACK', label: 'Half Rack', weight: 0.48,
     zones: Object.freeze([
-      Object.freeze({ label: 'AJ-AK', weight: 0.30, members: Object.freeze(['AJ', 'AK']) }),
-      Object.freeze({ label: 'AN-CA', weight: 0.10, members: Object.freeze(['AN', 'CA']) }),
-      Object.freeze({ label: 'BN-DA', weight: 0.10, members: Object.freeze(['BN', 'DA']) }),
-      Object.freeze({ label: 'BG-BH', weight: 0.05, members: Object.freeze(['BG', 'BH']) }),
-      Object.freeze({ label: 'BI-BK', weight: 0.05, members: Object.freeze(['BI', 'BK']) }),
-      Object.freeze({ label: 'CB-DB-DC-CC', weight: 0.15, members: Object.freeze(['CB', 'DB', 'DC', 'CC']) }),
-      Object.freeze({ label: 'DD-DE', weight: 0.10, members: Object.freeze(['DD', 'DE']) }),
-      Object.freeze({ label: 'CF-DF', weight: 0.15, members: Object.freeze(['CF', 'DF']) })
+      Object.freeze({ label: 'AJ-AK', weight: 0.30, members: Object.freeze(['AJ', 'AK', 'AJ-AK']) }),
+      Object.freeze({ label: 'AN-CA', weight: 0.10, members: Object.freeze(['AN', 'CA', 'AN-CA']) }),
+      Object.freeze({ label: 'BN-DA', weight: 0.10, members: Object.freeze(['BN', 'DA', 'BN-DA']) }),
+      Object.freeze({ label: 'BG-BH', weight: 0.05, members: Object.freeze(['BG', 'BH', 'BG-BH']) }),
+      Object.freeze({ label: 'BI-BK', weight: 0.05, members: Object.freeze(['BI', 'BK', 'BJ', 'BI-BK']) }),
+      Object.freeze({ label: 'CB-DB-DC-CC', weight: 0.15, members: Object.freeze(['CB', 'DB', 'DC', 'CC', 'CB-DB-DC-CC']) }),
+      Object.freeze({ label: 'DD-DE', weight: 0.10, members: Object.freeze(['DD', 'DE', 'DD-DE']) }),
+      Object.freeze({ label: 'CF-DF', weight: 0.15, members: Object.freeze(['CF', 'DF', 'CF-DF']) })
     ])
   }),
   Object.freeze({
@@ -138,6 +138,11 @@ try {
   if (savedSys === 'PTT' || savedSys === 'BPS' || savedSys === 'ALL') sys = savedSys;
 } catch (_) {}
 let unitMode = 'units'; // เปิดหน้าเริ่มต้นเป็นหน่วยหยิบ (UOM ที่ BigQuery คำนวณแล้ว)
+let prodCalcMode = 'raw'; // 'raw' | 'weighted'
+try {
+  const savedCalc = localStorage.getItem('pickProductivityCalcMode');
+  if (savedCalc === 'raw' || savedCalc === 'weighted') prodCalcMode = savedCalc;
+} catch (_) {}
 let trendMode = 'day';
 let datePresetMode = 'month';
 let excludedSkus = new Set();
@@ -2017,7 +2022,7 @@ function calculateCrossSystemWeightedProductivity(from, to, sf) {
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // Work cube = [shiftDateIdx, shiftCode, zone, pickerIdx, pcs, pick_qty, lines, minSm, maxSm]
 function aggregate(system, from, to, sf) {
-  const cacheKey = [system, from, to, sf, excludedSkuRevision].join('|');
+  const cacheKey = [system, from, to, sf, excludedSkuRevision, prodCalcMode].join('|');
   if (aggregateCache.has(cacheKey)) return aggregateCache.get(cacheKey);
 
   const S = DATA[system];
@@ -2353,13 +2358,24 @@ function aggregate(system, from, to, sf) {
   const zone_prod_map = {};
   by_zone_prod.forEach(z => zone_prod_map[z.name] = z);
 
-  // KPI หลักใช้ Raw V2 ของระบบที่เลือกตรง ๆ: ค่าเฉลี่ย Productivity ราย Picker/Calendar Date
-  // ไม่ถ่วง Weight Zone เพื่อให้เทียบกับ New_Z856 V2 ได้ตรงกว่าและตรวจสอบง่าย
   const rawOverallProd = r1(mean(productiveGroups.map(g => g.prod)));
   const rawOverallPcsProd = r1(mean(productiveGroups.map(g => g.pcsProd)));
+  const overallWeighted = calculateWeightedProductivity(by_zone_prod);
+  const weightedOverallProd = r1(overallWeighted.avg_prod);
+  const weightedOverallPcsProd = r1(overallWeighted.avg_pcs_prod);
+
   daily.forEach(day => {
     day.raw_avg_prod = day.avg_prod;
     day.raw_avg_pcs_prod = day.avg_pcs_prod;
+    const dayZoneGroups = zoneGroups.filter(g => g.sd === day.date && g.countable);
+    const dayZoneRows = buildBreakdown(dayZoneGroups, 'zone');
+    const dayWeighted = calculateWeightedProductivity(dayZoneRows);
+    day.weighted_avg_prod = r1(dayWeighted.avg_prod);
+    day.weighted_avg_pcs_prod = r1(dayWeighted.avg_pcs_prod);
+    if (prodCalcMode === 'weighted') {
+      day.avg_prod = day.weighted_avg_prod || day.raw_avg_prod;
+      day.avg_pcs_prod = day.weighted_avg_pcs_prod || day.raw_avg_pcs_prod;
+    }
   });
 
   const affiliationMap = {};
@@ -2450,18 +2466,18 @@ function aggregate(system, from, to, sf) {
   const result = {
     kpis: {
       lines, pcs, qty: pickQty, pickers: pickers.size, ot: r1(totOt),
-      // KPI หลัก = Raw V2 ของระบบที่เลือก ไม่ถ่วง Weight Zone
-      avg_prod: rawOverallProd,
-      avg_pcs_prod: rawOverallPcsProd,
+      avg_prod: prodCalcMode === 'weighted' ? (weightedOverallProd || rawOverallProd) : rawOverallProd,
+      avg_pcs_prod: prodCalcMode === 'weighted' ? (weightedOverallPcsProd || rawOverallPcsProd) : rawOverallPcsProd,
       raw_avg_prod: rawOverallProd,
       raw_avg_pcs_prod: rawOverallPcsProd,
-      // คง field เดิมไว้เพื่อ backward compatibility แต่ค่าเท่ากับ Raw V2
-      kpi_weighted_avg_prod: rawOverallProd,
-      kpi_weighted_avg_pcs_prod: rawOverallPcsProd,
-      weight_coverage: 0,
-      weight_mapping_coverage: 0
+      weighted_avg_prod: weightedOverallProd,
+      weighted_avg_pcs_prod: weightedOverallPcsProd,
+      kpi_weighted_avg_prod: weightedOverallProd,
+      kpi_weighted_avg_pcs_prod: weightedOverallPcsProd,
+      weight_coverage: overallWeighted.coverage,
+      weight_mapping_coverage: overallWeighted.mapping_coverage
     },
-    productivity_weighting: null,
+    productivity_weighting: overallWeighted,
     daily, by_zone, by_location, by_picker, by_zone_prod, zone_prod_map, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all, picker_drilldown: pickerDrilldownMap
   };
   aggregateCache.set(cacheKey, result);
@@ -2501,6 +2517,8 @@ function ensureStyles() {
     + '.systog button.active[data-sys="BPS"]{background:linear-gradient(135deg,#f59e0b,#ea580c)}'
     + '.shiftog button.active{background:linear-gradient(135deg,#8b5cf6,#6366f1)}'
     + '.unittog button.active{background:linear-gradient(135deg,#0d9488,#0284c7);color:#fff;box-shadow:0 6px 14px -6px rgba(139,92,246,.6)}'
+    + '.prodmodetog button.active[data-prodmode="raw"]{background:linear-gradient(135deg,#0284c7,#2563eb);color:#fff;box-shadow:0 6px 14px -6px rgba(37,99,235,.6)}'
+    + '.prodmodetog button.active[data-prodmode="weighted"]{background:linear-gradient(135deg,#059669,#0d9488);color:#fff;box-shadow:0 6px 14px -6px rgba(13,148,136,.6)}'
     + '.datebar{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:6px 10px;box-shadow:0 4px 12px -8px rgba(30,41,59,.15)}'
     + '.datebar input[type=date]{font-family:inherit;font-size:12.5px;font-weight:600;color:#1e293b;border:1px solid #e2e8f0;border-radius:8px;padding:5px 8px;background:#f8fafc;cursor:pointer}'
     + '.datebar input[type=date]:focus{outline:0;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.15)}'
@@ -2529,6 +2547,8 @@ function buildControls() {
     + '<div class="systog"><button data-sys="ALL">ทั้งหมด (All)</button><button data-sys="PTT">Pick (PTT)</button><button data-sys="BPS">Pick to Sort (BPS)</button></div>'
     + '<span class="lab">หน่วยที่แสดง:</span>'
     + '<div class="systog unittog"><button data-unit="units">📦 หน่วยหยิบ (Units)</button><button data-unit="pcs">🧩 จำนวนชิ้น (Pcs)</button></div>'
+    + '<span class="lab">สูตรคำนวณ:</span>'
+    + '<div class="systog prodmodetog"><button data-prodmode="raw">⚡ หยิบจริง (Raw)</button><button data-prodmode="weighted">⚖️ ถ่วงน้ำหนัก (Weighted KPI)</button></div>'
     + '<span class="lab">กะ:</span>'
     + '<div class="systog shiftog"><button data-sh="all">ทุกกะ</button><button data-sh="morning">🅰️ กะ A</button><button data-sh="night">🅱️ กะ B</button><button data-sh="not_found">⚠️ Not Found</button></div>'
     + '<span class="lab">🎯 เป้า Target:</span>'
@@ -2568,7 +2588,7 @@ function buildControls() {
     };
   }
 
-  bar.querySelectorAll('.systog:not(.shiftog):not(.unittog) button').forEach(b => {
+  bar.querySelectorAll('.systog:not(.shiftog):not(.unittog):not(.prodmodetog) button').forEach(b => {
     b.classList.toggle('active', b.dataset.sys === sys); b.onclick = async () => {
       const nextSystem = b.dataset.sys;
       if (nextSystem === sys) return;
@@ -2594,7 +2614,7 @@ function buildControls() {
       }
       sys = nextSystem;
       try { localStorage.setItem('pickProductivitySystem', sys); } catch (_) {}
-      bar.querySelectorAll('.systog:not(.shiftog):not(.unittog) button').forEach(x => x.classList.toggle('active', x.dataset.sys === sys));
+      bar.querySelectorAll('.systog:not(.shiftog):not(.unittog):not(.prodmodetog) button').forEach(x => x.classList.toggle('active', x.dataset.sys === sys));
       render();
     };
   });
@@ -2602,6 +2622,17 @@ function buildControls() {
     b.classList.toggle('active', b.dataset.unit === unitMode); b.onclick = () => {
       if (b.dataset.unit === unitMode) return; unitMode = b.dataset.unit;
       bar.querySelectorAll('.unittog button').forEach(x => x.classList.toggle('active', x.dataset.unit === unitMode));
+      render();
+    };
+  });
+  bar.querySelectorAll('.prodmodetog button').forEach(b => {
+    b.classList.toggle('active', b.dataset.prodmode === prodCalcMode); b.onclick = () => {
+      const nextMode = b.dataset.prodmode;
+      if (nextMode === prodCalcMode) return;
+      prodCalcMode = nextMode;
+      try { localStorage.setItem('pickProductivityCalcMode', prodCalcMode); } catch (_) {}
+      bar.querySelectorAll('.prodmodetog button').forEach(x => x.classList.toggle('active', x.dataset.prodmode === prodCalcMode));
+      aggregateCache.clear();
       render();
     };
   });
@@ -2686,10 +2717,10 @@ function renderKPIs() {
     },
     { lbl: 'พนักงานหยิบ', val: k.pickers, unit: 'คน', grad: 'linear-gradient(90deg,#f59e0b,#f97316)' },
     {
-      lbl: isPcs ? 'Productivity V2 (ชิ้น/ชม.)' : 'Productivity V2 (หยิบ/ชม.)',
+      lbl: (isPcs ? 'Productivity V2 (ชิ้น/ชม.)' : 'Productivity V2 (หยิบ/ชม.)') + (prodCalcMode === 'weighted' ? ' ⚖️ ถ่วงน้ำหนัก' : ' ⚡ หยิบจริง'),
       val: isPcs ? k.avg_pcs_prod : k.avg_prod,
       unit: isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.',
-      grad: 'linear-gradient(90deg,#f43f5e,#ec4899)'
+      grad: prodCalcMode === 'weighted' ? 'linear-gradient(90deg,#059669,#0d9488)' : 'linear-gradient(90deg,#f43f5e,#ec4899)'
     },
     { lbl: 'OT รวม', val: k.ot, unit: 'ชม.', grad: 'linear-gradient(90deg,#10b981,#22c55e)' }
   ];
@@ -2706,8 +2737,41 @@ function renderKPIs() {
 }
 
 function renderWeightedProductivityBanner() {
-  const box = document.getElementById('weightedProductivityBanner');
-  if (box) box.style.display = 'none';
+  let box = document.getElementById('weightedProductivityBanner');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'weightedProductivityBanner';
+    const anchor = document.getElementById('kpis');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor.nextSibling);
+  }
+  if (prodCalcMode !== 'weighted') {
+    box.style.display = 'none';
+    return;
+  }
+  const w = A && A.productivity_weighting;
+  if (!w || !Array.isArray(w.groups)) {
+    box.style.display = 'none';
+    return;
+  }
+  const fr = w.groups.find(g => g.key === 'FULL_RACK');
+  const hr = w.groups.find(g => g.key === 'HALF_RACK');
+  const ea = w.groups.find(g => g.key === 'EA');
+  const isPcs = unitMode === 'pcs';
+  const uTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+
+  box.style.cssText = 'display:flex;margin:12px 0 16px;padding:12px 18px;border:1px solid #6ee7b7;border-left:5px solid #059669;border-radius:12px;background:#ecfdf5;color:#065f46;gap:12px;align-items:center;flex-wrap:wrap;font-size:12.5px;box-shadow:0 2px 8px rgba(5,150,105,0.06);';
+  box.innerHTML = `
+    <div style="font-weight:700; display:flex; align-items:center; gap:6px;">
+      <span style="font-size:16px;">⚖️</span>
+      <span>สูตรถ่วงน้ำหนักตาม KPI Sheet:</span>
+      <code style="background:#d1fae5; color:#047857; padding:3px 8px; border-radius:6px; font-size:11.5px; font-weight:600;">Overall = (37% × Full Rack) + (48% × Half Rack) + (15% × EA)</code>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-left:auto;">
+      <span class="pill" style="background:#fff; color:#065f46; border:1px solid #a7f3d0; font-weight:700; padding:4px 10px;">Full Rack (37%): ${fmt(fr ? (isPcs ? fr.pcsProductivity : fr.productivity) : 0)} ${uTxt}</span>
+      <span class="pill" style="background:#fff; color:#065f46; border:1px solid #a7f3d0; font-weight:700; padding:4px 10px;">Half Rack (48%): ${fmt(hr ? (isPcs ? hr.pcsProductivity : hr.productivity) : 0)} ${uTxt}</span>
+      <span class="pill" style="background:#fff; color:#065f46; border:1px solid #a7f3d0; font-weight:700; padding:4px 10px;">EA (15%): ${fmt(ea ? (isPcs ? ea.pcsProductivity : ea.productivity) : 0)} ${uTxt}</span>
+    </div>
+  `;
 }
 
 function renderUnmappedTeamBanner() {
@@ -4619,7 +4683,7 @@ const builders = {
       const mainQty = isPcs ? b.pcs : b.qty;
       const mainLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
       const prodData = isPcs ? b.pcsProd : b.prod;
-      const prodLabel = isPcs ? 'Productivity (ชิ้น/ชม.)' : 'Productivity (หยิบ/ชม.)';
+      const prodLabel = (isPcs ? 'Productivity (ชิ้น/ชม.)' : 'Productivity (หยิบ/ชม.)') + (prodCalcMode === 'weighted' ? ' ⚖️ ถ่วงน้ำหนัก' : ' ⚡ หยิบจริง');
       const isManyBars = b.labels.length > 14;
 
       const maxMainQty = Math.max(1, ...mainQty);
