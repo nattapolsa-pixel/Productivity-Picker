@@ -2014,8 +2014,8 @@
         <div class="prod-subtabs-wrap">
           <div class="prod-subtabs" id="prodSubtabs">
             <button class="prod-tab-btn active" data-prodtab="target">
-              <span>🎯</span>
-              <span>เปรียบเทียบเป้าหมาย (Target vs Actual)</span>
+              <span>📊</span>
+              <span>วิเคราะห์เชิงลึก (Analytics &amp; Target)</span>
             </button>
             <button class="prod-tab-btn" data-prodtab="weighted">
               <span>⚖️</span>
@@ -2032,19 +2032,29 @@
           </div>
         </div>
 
-        <!-- 🎯 Panel 1: Target vs Actual -->
+        <!-- 🎯 Panel 1: Multi-Mode Analytics & Target -->
         <div class="prod-tab-panel" id="prodTabPanel-target">
           <!-- Quick Stat Cards -->
           <div class="zone-summary" id="prodTargetStats" style="margin-bottom:18px;"></div>
 
           <div class="card wide" style="margin-bottom:18px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
-              <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📈 กราฟเปรียบเทียบ Productivity จริง vs เป้าหมายรายวัน</h3>
-              <span class="pill" id="targetVsActualBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">
-                เป้าหมาย: <span id="targetBadgeVal">10</span>
-              </span>
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:10px;">
+              <div>
+                <h3 id="targetChartTitle" style="font-size:16px; font-weight:700; color:#0f172a; margin:0 0 3px 0;">📈 กราฟวิเคราะห์ Productivity เชิงลึก</h3>
+                <div id="targetChartSub" class="sub" style="margin:0;">เลือกมิติการวิเคราะห์เปรียบเทียบเพื่อค้นหาปัจจัยและคอขวดในการทำงาน</div>
+              </div>
+              <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                <div class="systog" id="prodChartModeTog" style="padding:2px; background:#f1f5f9; border-radius:12px; gap:2px;">
+                  <button data-cmode="rack" class="active" style="padding:5px 12px; font-size:12px; font-weight:700;">🏷️ ประเภท Rack</button>
+                  <button data-cmode="shift" style="padding:5px 12px; font-size:12px; font-weight:700;">🅰️🅱️ กะ A vs B</button>
+                  <button data-cmode="workload" style="padding:5px 12px; font-size:12px; font-weight:700;">📦 Workload vs Prod</button>
+                  <button data-cmode="target" style="padding:5px 12px; font-size:12px; font-weight:700;">🎯 เทียบเป้าหมาย</button>
+                </div>
+                <span class="pill" id="targetVsActualBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:4px 10px;">
+                  เป้าหมาย: <span id="targetBadgeVal">170</span>
+                </span>
+              </div>
             </div>
-            <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ Productivity V2 รายวันกับเป้าหมายที่ตั้งไว้ (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)</div>
             <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
           </div>
 

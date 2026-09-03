@@ -151,6 +151,13 @@ try {
   }
 } catch (_) {}
 let prodPickerCount = 12;
+let prodAnalyticsMode = 'rack'; // 'rack' | 'shift' | 'workload' | 'target'
+try {
+  const savedMode = localStorage.getItem('pickProductivityChartMode');
+  if (['rack', 'shift', 'workload', 'target'].includes(savedMode)) {
+    prodAnalyticsMode = savedMode;
+  }
+} catch (_) {}
 let trendMode = 'day';
 let datePresetMode = 'month';
 let excludedSkus = new Set();
@@ -2287,6 +2294,7 @@ function aggregate(system, from, to, sf) {
     pcs: dayVol[d].pcs,
     qty: dayVol[d].qty,
     pickers: dayVol[d].pk.size,
+    hours: r1(byDate[d] ? byDate[d].h : 0),
     avg_prod: r1(byDate[d] ? mean(byDate[d].prod) : 0),
     avg_pcs_prod: r1(byDate[d] ? mean(byDate[d].pcsProd) : 0)
   }));
@@ -2380,6 +2388,32 @@ function aggregate(system, from, to, sf) {
     const dayWeighted = calculateWeightedProductivity(dayZoneRows);
     day.weighted_avg_prod = r1(dayWeighted.avg_prod);
     day.weighted_avg_pcs_prod = r1(dayWeighted.avg_pcs_prod);
+    day.weighted_groups = dayWeighted.groups || [];
+
+    const frGroup = (dayWeighted.groups || []).find(x => x.key === 'FULL_RACK');
+    const hrGroup = (dayWeighted.groups || []).find(x => x.key === 'HALF_RACK');
+    const eaGroup = (dayWeighted.groups || []).find(x => x.key === 'EA');
+    day.full_rack_prod = r1(frGroup ? frGroup.productivity : 0);
+    day.full_rack_pcs_prod = r1(frGroup ? frGroup.pcsProductivity : 0);
+    day.half_rack_prod = r1(hrGroup ? hrGroup.productivity : 0);
+    day.half_rack_pcs_prod = r1(hrGroup ? hrGroup.pcsProductivity : 0);
+    day.ea_prod = r1(eaGroup ? eaGroup.productivity : 0);
+    day.ea_pcs_prod = r1(eaGroup ? eaGroup.pcsProductivity : 0);
+
+    const dayShiftGroups = groups.filter(g => g.sd === day.date && g.countable);
+    const shiftAGroups = dayShiftGroups.filter(g => g.sh === 'morning' || g.sh === 'A');
+    const shiftBGroups = dayShiftGroups.filter(g => g.sh === 'night' || g.sh === 'B');
+    day.shiftA_prod = r1(mean(shiftAGroups.map(g => g.prod)));
+    day.shiftA_pcs_prod = r1(mean(shiftAGroups.map(g => g.pcsProd)));
+    day.shiftA_qty = shiftAGroups.reduce((s, g) => s + g.q, 0);
+    day.shiftA_pcs = shiftAGroups.reduce((s, g) => s + g.pcs, 0);
+    day.shiftA_pickers = shiftAGroups.length;
+    day.shiftB_prod = r1(mean(shiftBGroups.map(g => g.prod)));
+    day.shiftB_pcs_prod = r1(mean(shiftBGroups.map(g => g.pcsProd)));
+    day.shiftB_qty = shiftBGroups.reduce((s, g) => s + g.q, 0);
+    day.shiftB_pcs = shiftBGroups.reduce((s, g) => s + g.pcs, 0);
+    day.shiftB_pickers = shiftBGroups.length;
+
     if (prodCalcMode === 'weighted') {
       day.avg_prod = day.weighted_avg_prod || day.raw_avg_prod;
       day.avg_pcs_prod = day.weighted_avg_pcs_prod || day.raw_avg_pcs_prod;
@@ -6606,16 +6640,16 @@ function renderTargetDailyTable() {
   const statsEl = document.getElementById('prodTargetStats');
   if (statsEl) {
     const cards = [
-      { label: '🎯 เป้าหมายปัจจุบัน (Target)', val: `${prodTarget}`, sub: `${uTxt} (คลิกตั้งค่า Target เพื่อปรับแก้)`, color: '#6366f1' },
-      { label: '✅ วันที่บรรลุเป้าหมาย', val: `${passCount} วัน`, sub: `คิดเป็น ${passPct}% ของช่วงที่เลือก`, color: '#10b981' },
-      { label: '⚠️ วันที่ต่ำกว่าเป้าหมาย', val: `${failCount} วัน`, sub: `คิดเป็น ${failPct}% ของช่วงที่เลือก`, color: '#ef4444' },
-      { label: '📊 ผลงานเฉลี่ยจริงทั้งช่วง', val: `${fmt(avgProd)}`, sub: `${uTxt} (ยอดรวมเฉลี่ย)`, color: avgProd >= prodTarget ? '#10b981' : '#f59e0b' },
-      { label: isPcs ? '🧩 ปริมาณชิ้นรวม' : '📦 หน่วยหยิบรวม', val: fmt(isPcs ? totalPcs : totalQty), sub: `${daily.length} วันทำการ`, color: '#0ea5e9' }
+      { label: '🎯 เป้าหมายปัจจุบัน (Target)', val: `${prodTarget}`, unit: uTxt, sub: `(คลิกตั้งค่า Target เพื่อปรับแก้)`, color: '#6366f1' },
+      { label: '✅ วันที่บรรลุเป้าหมาย', val: `${passCount}`, unit: 'วัน', sub: `คิดเป็น ${passPct}% ของช่วงที่เลือก`, color: '#10b981' },
+      { label: '⚠️ วันที่ต่ำกว่าเป้าหมาย', val: `${failCount}`, unit: 'วัน', sub: `คิดเป็น ${failPct}% ของช่วงที่เลือก`, color: '#ef4444' },
+      { label: '📊 ผลงานเฉลี่ยจริงทั้งช่วง', val: `${fmt(avgProd)}`, unit: uTxt, sub: `ยอดรวมเฉลี่ย`, color: avgProd >= prodTarget ? '#10b981' : '#f59e0b' },
+      { label: isPcs ? '🧩 ปริมาณชิ้นรวม' : '📦 หน่วยหยิบรวม', val: fmt(isPcs ? totalPcs : totalQty), unit: isPcs ? 'ชิ้น' : 'หน่วยหยิบ', sub: `${daily.length} วันทำการ`, color: '#0ea5e9' }
     ];
     statsEl.innerHTML = cards.map(c => `
       <div class="zone-stat" style="border-top:3px solid ${c.color};">
         <div class="zone-stat-label">${c.label}</div>
-        <div class="zone-stat-value" style="color:${c.color}; font-size:22px;">${c.val} <span style="font-size:12.5px; font-weight:600; color:#64748b;">${c.label.includes('วันที่') ? '' : uTxt}</span></div>
+        <div class="zone-stat-value" style="color:${c.color}; font-size:22px;">${c.val} <span style="font-size:12.5px; font-weight:600; color:#64748b;">${c.unit}</span></div>
         <div class="zone-stat-detail">${c.sub}</div>
       </div>
     `).join('');
@@ -6881,9 +6915,27 @@ function renderTopPickersView() {
   }
 }
 
-function renderTargetVsActualChart() {
+function initProdChartModeButtons() {
+  const tog = document.getElementById('prodChartModeTog');
+  if (!tog) return;
+  tog.querySelectorAll('button').forEach(b => {
+    b.classList.toggle('active', b.dataset.cmode === prodAnalyticsMode);
+    b.onclick = () => {
+      const mode = b.dataset.cmode;
+      if (mode === prodAnalyticsMode) return;
+      prodAnalyticsMode = mode;
+      try { localStorage.setItem('pickProductivityChartMode', prodAnalyticsMode); } catch (_) {}
+      tog.querySelectorAll('button').forEach(x => x.classList.toggle('active', x.dataset.cmode === prodAnalyticsMode));
+      renderAnalyticsChart();
+    };
+  });
+}
+
+function renderAnalyticsChart() {
   const el = document.getElementById('targetVsActualChart');
   if (!el || !A || !A.daily) return;
+
+  initProdChartModeButtons();
 
   const exChart = Chart.getChart('targetVsActualChart');
   if (exChart) exChart.destroy();
@@ -6894,59 +6946,320 @@ function renderTargetVsActualChart() {
   const badgeVal = document.getElementById('targetBadgeVal');
   if (badgeVal) badgeVal.textContent = prodTarget + ' ' + unitLabel;
 
-  const labels = A.daily.map(d => d.date.length > 5 ? d.date.slice(5) : d.date);
-  const actualValues = A.daily.map(d => isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0));
-  const targetValues = A.daily.map(() => prodTarget);
-  const barColors = actualValues.map(v => v >= prodTarget ? '#10b981' : '#ef4444');
+  const titleEl = document.getElementById('targetChartTitle');
+  const subEl = document.getElementById('targetChartSub');
 
-  new Chart(el, {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [
-        {
-          type: 'line',
-          label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
-          data: targetValues,
-          borderColor: '#6366f1',
-          borderWidth: 2.5,
-          borderDash: [6, 6],
-          pointRadius: 4,
-          pointBackgroundColor: '#6366f1',
-          fill: false,
-          order: 1
-        },
-        {
-          type: 'bar',
-          label: `Productivity จริง (${unitLabel})`,
-          data: actualValues,
-          backgroundColor: barColors,
-          borderRadius: 6,
-          barThickness: 24,
-          order: 2
-        }
-      ]
-    },
-    options: {
-      maintainAspectRatio: false,
-      layout: { padding: { top: 20, right: 10, bottom: 0, left: 10 } },
-      plugins: {
-        legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
-        datalabels: {
-          anchor: 'end',
-          align: 'end',
-          color: '#334155',
-          font: { weight: '700', size: 11 },
-          formatter: (v, ctx) => ctx.datasetIndex === 1 ? (fmt(v) + ' ' + unitLabel) : ''
-        }
+  const labels = A.daily.map(d => d.date.length > 5 ? d.date.slice(5) : d.date);
+
+  if (prodAnalyticsMode === 'rack') {
+    if (titleEl) titleEl.textContent = '🏷️ วิเคราะห์เปรียบเทียบ Productivity ตามประเภท Rack รายวัน';
+    if (subEl) subEl.textContent = `เปรียบเทียบความเร็วในการหยิบระหว่าง Full Rack (37%), Half Rack (48%) และ EA (15%) ในแต่ละวัน (${unitLabel})`;
+
+    const frData = A.daily.map(d => isPcs ? (d.full_rack_pcs_prod || 0) : (d.full_rack_prod || 0));
+    const hrData = A.daily.map(d => isPcs ? (d.half_rack_pcs_prod || 0) : (d.half_rack_prod || 0));
+    const eaData = A.daily.map(d => isPcs ? (d.ea_pcs_prod || 0) : (d.ea_prod || 0));
+    const targetValues = A.daily.map(() => prodTarget);
+
+    new Chart(el, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            type: 'line',
+            label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
+            data: targetValues,
+            borderColor: '#94a3b8',
+            borderWidth: 2,
+            borderDash: [5, 5],
+            pointRadius: 3,
+            pointBackgroundColor: '#94a3b8',
+            fill: false,
+            order: 1
+          },
+          {
+            type: 'bar',
+            label: `📦 Full Rack (37%)`,
+            data: frData,
+            backgroundColor: '#0284c7',
+            borderRadius: 6,
+            barThickness: 18,
+            order: 2
+          },
+          {
+            type: 'bar',
+            label: `🏢 Half Rack (48%)`,
+            data: hrData,
+            backgroundColor: '#6366f1',
+            borderRadius: 6,
+            barThickness: 18,
+            order: 3
+          },
+          {
+            type: 'bar',
+            label: `🛍️ EA (15%)`,
+            data: eaData,
+            backgroundColor: '#ec4899',
+            borderRadius: 6,
+            barThickness: 18,
+            order: 4
+          }
+        ]
       },
-      scales: {
-        x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
-        y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+      options: {
+        maintainAspectRatio: false,
+        layout: { padding: { top: 22, right: 10, bottom: 0, left: 10 } },
+        plugins: {
+          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
+          datalabels: {
+            anchor: 'end',
+            align: 'end',
+            color: '#1e293b',
+            font: { weight: '700', size: 10 },
+            formatter: (v, ctx) => ctx.datasetIndex > 0 && v > 0 ? fmt(v) : ''
+          },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)} ${unitLabel}`
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
+          y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+        }
       }
-    }
-  });
+    });
+
+  } else if (prodAnalyticsMode === 'shift') {
+    if (titleEl) titleEl.textContent = '🅰️🅱️ วิเคราะห์เปรียบเทียบผลงาน กะ A (กลางวัน) vs กะ B (กลางคืน)';
+    if (subEl) subEl.textContent = `เปรียบเทียบ Productivity และปริมาณการทำงานระหว่าง 2 กะในแต่ละวัน (${unitLabel})`;
+
+    const shiftAData = A.daily.map(d => isPcs ? (d.shiftA_pcs_prod || 0) : (d.shiftA_prod || 0));
+    const shiftBData = A.daily.map(d => isPcs ? (d.shiftB_pcs_prod || 0) : (d.shiftB_prod || 0));
+    const targetValues = A.daily.map(() => prodTarget);
+
+    new Chart(el, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            type: 'line',
+            label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
+            data: targetValues,
+            borderColor: '#ef4444',
+            borderWidth: 2,
+            borderDash: [5, 5],
+            pointRadius: 3,
+            pointBackgroundColor: '#ef4444',
+            fill: false,
+            order: 1
+          },
+          {
+            type: 'bar',
+            label: `กะ A (08:00 - 17:00)`,
+            data: shiftAData,
+            backgroundColor: '#0284c7',
+            borderRadius: 6,
+            barThickness: 24,
+            order: 2
+          },
+          {
+            type: 'bar',
+            label: `กะ B (20:00 - 05:00)`,
+            data: shiftBData,
+            backgroundColor: '#8b5cf6',
+            borderRadius: 6,
+            barThickness: 24,
+            order: 3
+          }
+        ]
+      },
+      options: {
+        maintainAspectRatio: false,
+        layout: { padding: { top: 22, right: 10, bottom: 0, left: 10 } },
+        plugins: {
+          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
+          datalabels: {
+            anchor: 'end',
+            align: 'end',
+            color: '#1e293b',
+            font: { weight: '700', size: 10.5 },
+            formatter: (v, ctx) => ctx.datasetIndex > 0 && v > 0 ? (fmt(v) + ' ' + unitLabel) : ''
+          },
+          tooltip: {
+            callbacks: {
+              afterLabel: (ctx) => {
+                const day = A.daily[ctx.dataIndex];
+                if (!day) return '';
+                if (ctx.datasetIndex === 1) {
+                  return `  ปริมาณ: ${fmt(isPcs ? day.shiftA_pcs : day.shiftA_qty)} ${isPcs ? 'ชิ้น' : 'หยิบ'} (${day.shiftA_pickers || 0} คน)`;
+                } else if (ctx.datasetIndex === 2) {
+                  return `  ปริมาณ: ${fmt(isPcs ? day.shiftB_pcs : day.shiftB_qty)} ${isPcs ? 'ชิ้น' : 'หยิบ'} (${day.shiftB_pickers || 0} คน)`;
+                }
+                return '';
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
+          y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+        }
+      }
+    });
+
+  } else if (prodAnalyticsMode === 'workload') {
+    const wUnit = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
+    if (titleEl) titleEl.textContent = '📦 วิเคราะห์ปริมาณงาน vs Productivity (Workload vs Efficiency)';
+    if (subEl) subEl.textContent = `เปรียบเทียบความสัมพันธ์ระหว่างปริมาณงานที่หยิบ (${wUnit} - แกนซ้าย) กับ Productivity จริง (${unitLabel} - แกนขวา)`;
+
+    const workData = A.daily.map(d => isPcs ? (d.pcs || 0) : (d.qty || 0));
+    const prodData = A.daily.map(d => isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0));
+    const targetValues = A.daily.map(() => prodTarget);
+
+    new Chart(el, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            type: 'line',
+            label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
+            data: targetValues,
+            borderColor: '#6366f1',
+            borderWidth: 2,
+            borderDash: [6, 6],
+            pointRadius: 0,
+            fill: false,
+            yAxisID: 'y1',
+            order: 1
+          },
+          {
+            type: 'line',
+            label: `Productivity จริง (${unitLabel})`,
+            data: prodData,
+            borderColor: '#f43f5e',
+            backgroundColor: '#f43f5e',
+            borderWidth: 3,
+            pointRadius: 5,
+            pointHoverRadius: 7,
+            fill: false,
+            yAxisID: 'y1',
+            order: 2
+          },
+          {
+            type: 'bar',
+            label: `ปริมาณงาน (${wUnit})`,
+            data: workData,
+            backgroundColor: 'rgba(14, 165, 233, 0.45)',
+            borderColor: '#0ea5e9',
+            borderWidth: 1.5,
+            borderRadius: 6,
+            barThickness: 28,
+            yAxisID: 'y',
+            order: 3
+          }
+        ]
+      },
+      options: {
+        maintainAspectRatio: false,
+        layout: { padding: { top: 22, right: 10, bottom: 0, left: 10 } },
+        plugins: {
+          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
+          datalabels: {
+            anchor: 'end',
+            align: 'top',
+            font: { weight: '700', size: 10.5 },
+            formatter: (v, ctx) => {
+              if (ctx.datasetIndex === 1) return fmt(v) + ' ' + unitLabel;
+              if (ctx.datasetIndex === 2) return fmt(v) + ' ' + wUnit;
+              return '';
+            },
+            color: (ctx) => ctx.datasetIndex === 1 ? '#e11d48' : '#0369a1'
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
+          y: {
+            type: 'linear',
+            position: 'left',
+            grid: { color: '#f1f5f9' },
+            ticks: { callback: fmt },
+            title: { display: true, text: `ปริมาณงาน (${wUnit})`, font: { weight: '700', size: 11 } }
+          },
+          y1: {
+            type: 'linear',
+            position: 'right',
+            grid: { display: false },
+            ticks: { callback: fmt },
+            title: { display: true, text: `Productivity (${unitLabel})`, font: { weight: '700', size: 11 } }
+          }
+        }
+      }
+    });
+
+  } else {
+    // Mode 'target': Target vs Actual (เดิม)
+    if (titleEl) titleEl.textContent = '🎯 กราฟเปรียบเทียบ Productivity จริง vs เป้าหมายรายวัน';
+    if (subEl) subEl.textContent = `เปรียบเทียบ Productivity รายวันกับเป้าหมายที่ตั้งไว้ (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)`;
+
+    const actualValues = A.daily.map(d => isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0));
+    const targetValues = A.daily.map(() => prodTarget);
+    const barColors = actualValues.map(v => v >= prodTarget ? '#10b981' : '#ef4444');
+
+    new Chart(el, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            type: 'line',
+            label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
+            data: targetValues,
+            borderColor: '#6366f1',
+            borderWidth: 2.5,
+            borderDash: [6, 6],
+            pointRadius: 4,
+            pointBackgroundColor: '#6366f1',
+            fill: false,
+            order: 1
+          },
+          {
+            type: 'bar',
+            label: `Productivity จริง (${unitLabel})`,
+            data: actualValues,
+            backgroundColor: barColors,
+            borderRadius: 6,
+            barThickness: 24,
+            order: 2
+          }
+        ]
+      },
+      options: {
+        maintainAspectRatio: false,
+        layout: { padding: { top: 22, right: 10, bottom: 0, left: 10 } },
+        plugins: {
+          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
+          datalabels: {
+            anchor: 'end',
+            align: 'end',
+            color: '#334155',
+            font: { weight: '700', size: 11 },
+            formatter: (v, ctx) => ctx.datasetIndex === 1 ? (fmt(v) + ' ' + unitLabel) : ''
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
+          y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+        }
+      }
+    });
+  }
 }
+
+const renderTargetVsActualChart = renderAnalyticsChart;
 
 function exportPDF() {
   const tsEl = document.getElementById('printTimestamp');
