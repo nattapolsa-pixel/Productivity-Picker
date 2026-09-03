@@ -126,12 +126,17 @@ Chart.defaults.color = '#64748b';
 // ===== state =====
 const emptyData = () => ({
   meta: { schema_version: DASHBOARD_SCHEMA_VERSION },
+  ALL: { row_width: 10, item_row_width: 8, slot_row_width: 8, dates: [], pickers: [], skus: [], rows: [], item_rows: [], slot_rows: [] },
   PTT: { row_width: 10, item_row_width: 8, slot_row_width: 8, dates: [], pickers: [], skus: [], rows: [], item_rows: [], slot_rows: [] },
   BPS: { row_width: 10, item_row_width: 8, slot_row_width: 8, dates: [], pickers: [], skus: [], rows: [], item_rows: [], slot_rows: [] }
 });
 let DATA = emptyData();
 let ALL_DATES = [], DMIN = '', DMAX = '';
-let sys = 'PTT', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
+let sys = 'ALL', currentPage = 'overview', dfrom = '', dto = '', shiftF = 'all', built = {}, A = null;
+try {
+  const savedSys = localStorage.getItem('pickProductivitySystem');
+  if (savedSys === 'PTT' || savedSys === 'BPS' || savedSys === 'ALL') sys = savedSys;
+} catch (_) {}
 let unitMode = 'units'; // เปิดหน้าเริ่มต้นเป็นหน่วยหยิบ (UOM ที่ BigQuery คำนวณแล้ว)
 let trendMode = 'day';
 let datePresetMode = 'month';
@@ -727,9 +732,150 @@ function packedSlotRowData(S, i) {
   };
 }
 
+function buildAllSystemCube() {
+  if (!DATA || typeof DATA !== 'object') return;
+  const ptt = DATA['PTT'];
+  const bps = DATA['BPS'];
+  if (!ptt && !bps) return;
+  const pttCount = packedRowCount(ptt);
+  const bpsCount = packedRowCount(bps);
+  if (pttCount === 0 && bpsCount === 0) {
+    DATA['ALL'] = emptyData().ALL;
+    return;
+  }
+  if (pttCount === 0 && bps) {
+    DATA['ALL'] = bps;
+    return;
+  }
+  if (bpsCount === 0 && ptt) {
+    DATA['ALL'] = ptt;
+    return;
+  }
+
+  const dateSet = new Set([...(ptt.dates || []), ...(bps.dates || [])]);
+  const dates = [...dateSet].sort();
+  const dateIndexMapPtt = (ptt.dates || []).map(d => dates.indexOf(d));
+  const dateIndexMapBps = (bps.dates || []).map(d => dates.indexOf(d));
+
+  const pickerSet = new Set([...(ptt.pickers || []), ...(bps.pickers || [])]);
+  const pickers = [...pickerSet].sort();
+  const pickerIndexMapPtt = (ptt.pickers || []).map(p => pickers.indexOf(p));
+  const pickerIndexMapBps = (bps.pickers || []).map(p => pickers.indexOf(p));
+
+  const skuSet = new Set([...(ptt.skus || []), ...(bps.skus || [])]);
+  const skus = [...skuSet].sort();
+  const skuIndexMapPtt = (ptt.skus || []).map(s => skus.indexOf(s));
+  const skuIndexMapBps = (bps.skus || []).map(s => skus.indexOf(s));
+
+  const rows = [];
+  for (let i = 0; i < pttCount; i++) {
+    const o = i * 10;
+    rows.push(
+      dateIndexMapPtt[ptt.rows[o]],
+      ptt.rows[o + 1],
+      ptt.rows[o + 2],
+      pickerIndexMapPtt[ptt.rows[o + 3]],
+      ptt.rows[o + 4],
+      ptt.rows[o + 5],
+      ptt.rows[o + 6],
+      ptt.rows[o + 7],
+      ptt.rows[o + 8],
+      ptt.rows[o + 9]
+    );
+  }
+  for (let i = 0; i < bpsCount; i++) {
+    const o = i * 10;
+    rows.push(
+      dateIndexMapBps[bps.rows[o]],
+      bps.rows[o + 1],
+      bps.rows[o + 2],
+      pickerIndexMapBps[bps.rows[o + 3]],
+      bps.rows[o + 4],
+      bps.rows[o + 5],
+      bps.rows[o + 6],
+      bps.rows[o + 7],
+      bps.rows[o + 8],
+      bps.rows[o + 9]
+    );
+  }
+
+  const slot_rows = [];
+  const pttSlotCount = packedSlotRowCount(ptt);
+  for (let i = 0; i < pttSlotCount; i++) {
+    const o = i * 8;
+    slot_rows.push(
+      dateIndexMapPtt[ptt.slot_rows[o]],
+      ptt.slot_rows[o + 1],
+      ptt.slot_rows[o + 2],
+      pickerIndexMapPtt[ptt.slot_rows[o + 3]],
+      ptt.slot_rows[o + 4],
+      ptt.slot_rows[o + 5],
+      ptt.slot_rows[o + 6],
+      ptt.slot_rows[o + 7]
+    );
+  }
+  const bpsSlotCount = packedSlotRowCount(bps);
+  for (let i = 0; i < bpsSlotCount; i++) {
+    const o = i * 8;
+    slot_rows.push(
+      dateIndexMapBps[bps.slot_rows[o]],
+      bps.slot_rows[o + 1],
+      bps.slot_rows[o + 2],
+      pickerIndexMapBps[bps.slot_rows[o + 3]],
+      bps.slot_rows[o + 4],
+      bps.slot_rows[o + 5],
+      bps.slot_rows[o + 6],
+      bps.slot_rows[o + 7]
+    );
+  }
+
+  const item_rows = [];
+  const pttItemCount = packedItemRowCount(ptt);
+  for (let i = 0; i < pttItemCount; i++) {
+    const o = i * 8;
+    item_rows.push(
+      dateIndexMapPtt[ptt.item_rows[o]],
+      ptt.item_rows[o + 1],
+      ptt.item_rows[o + 2],
+      ptt.item_rows[o + 3],
+      skuIndexMapPtt[ptt.item_rows[o + 4]],
+      ptt.item_rows[o + 5],
+      ptt.item_rows[o + 6],
+      ptt.item_rows[o + 7]
+    );
+  }
+  const bpsItemCount = packedItemRowCount(bps);
+  for (let i = 0; i < bpsItemCount; i++) {
+    const o = i * 8;
+    item_rows.push(
+      dateIndexMapBps[bps.item_rows[o]],
+      bps.item_rows[o + 1],
+      bps.item_rows[o + 2],
+      bps.item_rows[o + 3],
+      skuIndexMapBps[bps.item_rows[o + 4]],
+      bps.item_rows[o + 5],
+      bps.item_rows[o + 6],
+      bps.item_rows[o + 7]
+    );
+  }
+
+  DATA['ALL'] = {
+    dates,
+    pickers,
+    skus,
+    row_width: 10,
+    rows,
+    slot_row_width: 8,
+    slot_rows,
+    item_row_width: 8,
+    item_rows
+  };
+}
+
 // Work cube ส่ง Calendar Date หลัง Normalize พร้อม min/max นาทีใน time band มาแล้ว จึงไม่ต้องคำนวณวันที่ซ้ำจากข้อมูลรายบรรทัด
 function prepShifts() {
-  ['PTT', 'BPS'].forEach(n => {
+  buildAllSystemCube();
+  ['ALL', 'PTT', 'BPS'].forEach(n => {
     const S = DATA[n];
     if (!S || !Array.isArray(S.rows)) return;
     const count = packedRowCount(S);
@@ -2350,10 +2496,11 @@ function ensureStyles() {
     + '.systog button{border:0;background:transparent;font-family:inherit;font-size:13px;font-weight:600;color:#64748b;padding:8px 16px;border-radius:9px;cursor:pointer;transition:all .2s}'
     + '.systog button:hover{color:#1e293b}'
     + '.systog button.active{color:#fff;box-shadow:0 6px 14px -6px rgba(14,165,233,.6)}'
+    + '.systog button.active[data-sys="ALL"]{background:linear-gradient(135deg,#8b5cf6,#6366f1);color:#fff;box-shadow:0 6px 14px -6px rgba(139,92,246,.6)}'
     + '.systog button.active[data-sys="PTT"]{background:linear-gradient(135deg,#0ea5e9,#2563eb)}'
     + '.systog button.active[data-sys="BPS"]{background:linear-gradient(135deg,#f59e0b,#ea580c)}'
     + '.shiftog button.active{background:linear-gradient(135deg,#8b5cf6,#6366f1)}'
-    + '.unittog button.active{background:linear-gradient(135deg,#0d9488,#0284c7);color:#fff;box-shadow:0 6px 14px -6px rgba(13,148,136,.6)}'
+    + '.unittog button.active{background:linear-gradient(135deg,#0d9488,#0284c7);color:#fff;box-shadow:0 6px 14px -6px rgba(139,92,246,.6)}'
     + '.datebar{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:6px 10px;box-shadow:0 4px 12px -8px rgba(30,41,59,.15)}'
     + '.datebar input[type=date]{font-family:inherit;font-size:12.5px;font-weight:600;color:#1e293b;border:1px solid #e2e8f0;border-radius:8px;padding:5px 8px;background:#f8fafc;cursor:pointer}'
     + '.datebar input[type=date]:focus{outline:0;border-color:#6366f1;box-shadow:0 0 0 3px rgba(99,102,241,0.15)}'
@@ -2379,7 +2526,7 @@ function buildControls() {
   const targetUnitTxt = unitMode === 'pcs' ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
   bar.innerHTML =
     '<span class="lab">ระบบ:</span>'
-    + '<div class="systog"><button data-sys="PTT">Pick (PTT)</button><button data-sys="BPS">Pick to Sort (BPS)</button></div>'
+    + '<div class="systog"><button data-sys="ALL">ทั้งหมด (All)</button><button data-sys="PTT">Pick (PTT)</button><button data-sys="BPS">Pick to Sort (BPS)</button></div>'
     + '<span class="lab">หน่วยที่แสดง:</span>'
     + '<div class="systog unittog"><button data-unit="units">📦 หน่วยหยิบ (Units)</button><button data-unit="pcs">🧩 จำนวนชิ้น (Pcs)</button></div>'
     + '<span class="lab">กะ:</span>'
@@ -2425,7 +2572,7 @@ function buildControls() {
     b.classList.toggle('active', b.dataset.sys === sys); b.onclick = async () => {
       const nextSystem = b.dataset.sys;
       if (nextSystem === sys) return;
-      if (!hasCurrentItemCube(nextSystem) || !hasCurrentSlotCube(nextSystem)) {
+      if (nextSystem !== 'ALL' && (!hasCurrentItemCube(nextSystem) || !hasCurrentSlotCube(nextSystem))) {
         showLoading(true, `กำลังเตรียมข้อมูล ${nextSystem} ให้ครบทุกหน้า…`);
         dashboardBundleLoading = true;
         try {
@@ -2446,6 +2593,7 @@ function buildControls() {
         }
       }
       sys = nextSystem;
+      try { localStorage.setItem('pickProductivitySystem', sys); } catch (_) {}
       bar.querySelectorAll('.systog:not(.shiftog):not(.unittog) button').forEach(x => x.classList.toggle('active', x.dataset.sys === sys));
       render();
     };
@@ -2858,11 +3006,17 @@ async function loadItemMaster(force) {
 }
 
 function hasCurrentItemCube(system = sys, from = dfrom, to = dto, sf = shiftF) {
+  if (system === 'ALL') return hasCurrentItemCube('PTT', from, to, sf) && hasCurrentItemCube('BPS', from, to, sf);
   if (itemCubePayloadCache.has(itemCubeRequestKey(system, from, to, sf))) return true;
   const source = DATA && DATA[system];
   return packedItemRowCount(source) > 0;
 }
 function forEachCurrentItemRow(system, from, to, sf, callback) {
+  if (system === 'ALL') {
+    const p1 = forEachCurrentItemRow('PTT', from, to, sf, callback);
+    const p2 = forEachCurrentItemRow('BPS', from, to, sf, callback);
+    return p1 || p2;
+  }
   const payload = itemCubePayloadCache.get(itemCubeRequestKey(system, from, to, sf));
   if (payload) {
     const rows = payload.rows;
@@ -3053,6 +3207,9 @@ async function fetchDailyItemCube(system, date, shift, signal, force) {
 }
 
 async function loadCurrentItemCube(force, system = sys) {
+  if (system === 'ALL') {
+    return Promise.all([loadCurrentItemCube(force, 'PTT'), loadCurrentItemCube(force, 'BPS')]);
+  }
   if (!DATA_URL || !dfrom || !dto) return;
   const requestSystem = system;
   const requestFrom = dfrom;
@@ -3149,6 +3306,7 @@ function isValidSlotCubePayload(payload, system, from, to, shift, expectedEpoch 
 }
 
 function hasCurrentSlotCube(system = sys, from = dfrom, to = dto, sf = shiftF) {
+  if (system === 'ALL') return hasCurrentSlotCube('PTT', from, to, sf) && hasCurrentSlotCube('BPS', from, to, sf);
   if (slotCubePayloadCache.has(slotCubeRequestKey(system, from, to, sf))) return true;
   return packedSlotRowCount(DATA && DATA[system]) > 0;
 }
@@ -3237,6 +3395,10 @@ async function fetchDailySlotCube(system, date, shift, signal, force) {
 }
 
 async function loadCurrentSlotCube(force, system = sys) {
+  if (system === 'ALL') {
+    const [p1, p2] = await Promise.all([loadCurrentSlotCube(force, 'PTT'), loadCurrentSlotCube(force, 'BPS')]);
+    return p1 || p2;
+  }
   if (!DATA_URL || !dfrom || !dto) return null;
   const requestSystem = system;
   const requestFrom = dfrom;
@@ -6941,7 +7103,7 @@ function applyDashboardPayload(payload, previous, source, options) {
   prepareZoneMaster();
   lastFetchTime = payload.meta ? payload.meta.generated : new Date().toISOString();
   dashboardCacheRevision = String(payload.meta && payload.meta.data_revision || '');
-  sys = previous.sys;
+  sys = previous.sys || sys || 'ALL';
   shiftF = previous.shiftF;
   computeBounds();
   const keepFrom = previous.dfrom && previous.dfrom >= DMIN && previous.dfrom <= DMAX;
