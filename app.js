@@ -3208,7 +3208,27 @@ async function fetchDailyItemCube(system, date, shift, signal, force) {
 
 async function loadCurrentItemCube(force, system = sys) {
   if (system === 'ALL') {
-    return Promise.all([loadCurrentItemCube(force, 'PTT'), loadCurrentItemCube(force, 'BPS')]);
+    const requestKey = itemCubeRequestKey('ALL', dfrom, dto, shiftF);
+    const currentState = itemCubeLoadState.get(requestKey);
+    if (!force && currentState && currentState.status === 'loading') return currentState.promise;
+    if (!force && hasCurrentItemCube('ALL')) return true;
+
+    const task = (async () => {
+      try {
+        const [p1, p2] = await Promise.all([loadCurrentItemCube(force, 'PTT'), loadCurrentItemCube(force, 'BPS')]);
+        itemCubeLoadState.set(requestKey, { status: 'done' });
+        aggregateCache.clear();
+        delete built['items'];
+        if (!dashboardBundleLoading && currentPage === 'items') render();
+        return p1 || p2;
+      } catch (err) {
+        itemCubeLoadState.set(requestKey, { status: 'error', message: String(err && err.message || err) });
+        if (!dashboardBundleLoading && currentPage === 'items') render();
+        return null;
+      }
+    })();
+    itemCubeLoadState.set(requestKey, { status: 'loading', promise: task });
+    return task;
   }
   if (!DATA_URL || !dfrom || !dto) return;
   const requestSystem = system;
@@ -3312,6 +3332,11 @@ function hasCurrentSlotCube(system = sys, from = dfrom, to = dto, sf = shiftF) {
 }
 
 function forEachCurrentSlotRow(system, from, to, sf, callback) {
+  if (system === 'ALL') {
+    const p1 = forEachCurrentSlotRow('PTT', from, to, sf, callback);
+    const p2 = forEachCurrentSlotRow('BPS', from, to, sf, callback);
+    return p1 || p2;
+  }
   const payload = slotCubePayloadCache.get(slotCubeRequestKey(system, from, to, sf));
   if (payload) {
     const rows = payload.rows;
@@ -3396,8 +3421,26 @@ async function fetchDailySlotCube(system, date, shift, signal, force) {
 
 async function loadCurrentSlotCube(force, system = sys) {
   if (system === 'ALL') {
-    const [p1, p2] = await Promise.all([loadCurrentSlotCube(force, 'PTT'), loadCurrentSlotCube(force, 'BPS')]);
-    return p1 || p2;
+    const requestKey = slotCubeRequestKey('ALL', dfrom, dto, shiftF);
+    const currentState = slotCubeLoadState.get(requestKey);
+    if (!force && currentState && currentState.status === 'loading') return currentState.promise;
+    if (!force && hasCurrentSlotCube('ALL')) return true;
+
+    const task = (async () => {
+      try {
+        const [p1, p2] = await Promise.all([loadCurrentSlotCube(force, 'PTT'), loadCurrentSlotCube(force, 'BPS')]);
+        slotCubeLoadState.set(requestKey, { status: 'done' });
+        aggregateCache.clear();
+        if (!dashboardBundleLoading && (currentPage === 'time' || currentPage === 'typebreak' || currentPage === 'overview')) render();
+        return p1 || p2;
+      } catch (err) {
+        slotCubeLoadState.set(requestKey, { status: 'error', message: String(err && err.message || err) });
+        if (!dashboardBundleLoading && (currentPage === 'time' || currentPage === 'typebreak' || currentPage === 'overview')) render();
+        return null;
+      }
+    })();
+    slotCubeLoadState.set(requestKey, { status: 'loading', promise: task });
+    return task;
   }
   if (!DATA_URL || !dfrom || !dto) return null;
   const requestSystem = system;
