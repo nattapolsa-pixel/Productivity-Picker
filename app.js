@@ -89,7 +89,7 @@ const PRODUCTIVITY_WEIGHT_CONFIG = Object.freeze([
   })
 ]);
 // ==============================================
-const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
+const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
 const HISTORICAL_V1 = Object.freeze({
   source: 'Results Master!E (Total pick)',
   startDate: '2026-01-02',
@@ -5076,6 +5076,7 @@ const builders = {
     });
   },
   items() {
+    return;
     const itemCubeReady = hasCurrentItemCube();
     const itemMasterReady = Object.keys(ITEM_MASTER).length > 0;
     const itemLoadStatus = document.getElementById('itemLoadStatus');
@@ -6449,7 +6450,7 @@ function show(page) {
   document.getElementById('ptitle').textContent = TITLES[page];
   if (page === 'history') document.getElementById('daterange').textContent = `ช่วงข้อมูลย้อนหลัง: ${HISTORICAL_V1.startDate} ถึง ${HISTORICAL_V1.endDate}`;
   else updateDateHeader();
-  if (!built[page]) { builders[page](); built[page] = true; }
+  if (builders[page] && !built[page]) { builders[page](); built[page] = true; }
 }
 function preloadAllCubes() {
   if (!hasLiveData || !dfrom || !dto) return;
