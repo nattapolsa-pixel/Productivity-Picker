@@ -639,6 +639,58 @@
     .rank-medal.r3 { background: #ffedd5; color: #c2410c; border: 1px solid #fed7aa; }
     .rank-medal.rn { background: #f8fafc; color: #94a3b8; }
 
+    /* Productivity Chart Mode Switcher */
+    .prod-chart-tog {
+      display: inline-flex;
+      background: #f1f5f9;
+      border-radius: 12px;
+      padding: 3px;
+      gap: 3px;
+      border: 1px solid #e2e8f0;
+    }
+    .prod-chart-tog button {
+      border: 0;
+      background: transparent;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      color: #64748b;
+      padding: 6px 14px;
+      border-radius: 9px;
+      cursor: pointer;
+      transition: all .2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .prod-chart-tog button:hover {
+      color: #0f172a;
+      background: rgba(255, 255, 255, 0.7);
+    }
+    .prod-chart-tog button.active {
+      background: #0284c7;
+      color: #ffffff !important;
+      font-weight: 700;
+      box-shadow: 0 4px 12px -2px rgba(2, 132, 199, 0.35);
+    }
+    .prod-chart-tog button.active[data-cmode="rack"] {
+      background: linear-gradient(135deg, #0284c7, #2563eb);
+      color: #ffffff !important;
+      box-shadow: 0 4px 12px -2px rgba(37, 99, 235, 0.4);
+    }
+    .prod-chart-tog button.active[data-cmode="shift"] {
+      background: linear-gradient(135deg, #8b5cf6, #6366f1);
+      color: #ffffff !important;
+      box-shadow: 0 4px 12px -2px rgba(99, 102, 241, 0.4);
+    }
+    .prod-chart-tog button.active[data-cmode="workload"] {
+      background: linear-gradient(135deg, #0ea5e9, #059669);
+      color: #ffffff !important;
+      box-shadow: 0 4px 12px -2px rgba(5, 150, 105, 0.4);
+    }
+    .prod-chart-tog button.active[data-cmode="target"] {
+      background: linear-gradient(135deg, #f59e0b, #ea580c);
+      color: #ffffff !important;
+      box-shadow: 0 4px 12px -2px rgba(234, 88, 12, 0.4);
+    }
+
     .heat {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -2041,21 +2093,22 @@
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:10px;">
               <div>
                 <h3 id="targetChartTitle" style="font-size:16px; font-weight:700; color:#0f172a; margin:0 0 3px 0;">📈 กราฟวิเคราะห์ Productivity เชิงลึก</h3>
-                <div id="targetChartSub" class="sub" style="margin:0;">เลือกมิติการวิเคราะห์เปรียบเทียบเพื่อค้นหาปัจจัยและคอขวดในการทำงาน</div>
+                <div id="targetChartSub" class="sub" style="margin:0 0 8px 0;">เลือกมิติการวิเคราะห์เปรียบเทียบเพื่อค้นหาปัจจัยและคอขวดในการทำงาน</div>
+                <div id="prodChartSummaryPills" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;"></div>
               </div>
               <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                <div class="systog" id="prodChartModeTog" style="padding:2px; background:#f1f5f9; border-radius:12px; gap:2px;">
-                  <button data-cmode="rack" class="active" style="padding:5px 12px; font-size:12px; font-weight:700;">🏷️ ประเภท Rack</button>
-                  <button data-cmode="shift" style="padding:5px 12px; font-size:12px; font-weight:700;">🅰️🅱️ กะ A vs B</button>
-                  <button data-cmode="workload" style="padding:5px 12px; font-size:12px; font-weight:700;">📦 Workload vs Prod</button>
-                  <button data-cmode="target" style="padding:5px 12px; font-size:12px; font-weight:700;">🎯 เทียบเป้าหมาย</button>
+                <div class="prod-chart-tog" id="prodChartModeTog">
+                  <button data-cmode="rack" class="active">🏷️ ประเภท Rack</button>
+                  <button data-cmode="shift">🅰️🅱️ กะ A vs B</button>
+                  <button data-cmode="workload">📦 Workload vs Prod</button>
+                  <button data-cmode="target">🎯 เทียบเป้าหมาย</button>
                 </div>
-                <span class="pill" id="targetVsActualBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:4px 10px;">
+                <span class="pill" id="targetVsActualBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:6px 12px; border-radius:9px;">
                   เป้าหมาย: <span id="targetBadgeVal">170</span>
                 </span>
               </div>
             </div>
-            <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
+            <div class="chartbox" style="position:relative; min-height:360px;"><canvas id="targetVsActualChart"></canvas></div>
           </div>
 
           <!-- Daily Target Comparison Table -->

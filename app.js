@@ -6946,8 +6946,14 @@ function renderAnalyticsChart() {
   const badgeVal = document.getElementById('targetBadgeVal');
   if (badgeVal) badgeVal.textContent = prodTarget + ' ' + unitLabel;
 
+  const targetBadge = document.getElementById('targetVsActualBadge');
+  if (targetBadge) {
+    targetBadge.style.display = prodAnalyticsMode === 'target' ? 'inline-flex' : 'none';
+  }
+
   const titleEl = document.getElementById('targetChartTitle');
   const subEl = document.getElementById('targetChartSub');
+  const pillsEl = document.getElementById('prodChartSummaryPills');
 
   const labels = A.daily.map(d => d.date.length > 5 ? d.date.slice(5) : d.date);
 
@@ -6958,7 +6964,23 @@ function renderAnalyticsChart() {
     const frData = A.daily.map(d => isPcs ? (d.full_rack_pcs_prod || 0) : (d.full_rack_prod || 0));
     const hrData = A.daily.map(d => isPcs ? (d.half_rack_pcs_prod || 0) : (d.half_rack_prod || 0));
     const eaData = A.daily.map(d => isPcs ? (d.ea_pcs_prod || 0) : (d.ea_prod || 0));
-    const targetValues = A.daily.map(() => prodTarget);
+
+    if (pillsEl) {
+      const avgFR = r1(mean(frData.filter(v => v > 0)));
+      const avgHR = r1(mean(hrData.filter(v => v > 0)));
+      const avgEA = r1(mean(eaData.filter(v => v > 0)));
+      pillsEl.innerHTML = `
+        <span class="pill" style="background:#e0f2fe; color:#0369a1; font-weight:700; font-size:12px; padding:4px 11px; border:1px solid #bae6fd;">
+          📦 Full Rack (37%): <b style="color:#0284c7;">${fmt(avgFR)}</b> ${unitLabel}
+        </span>
+        <span class="pill" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12px; padding:4px 11px; border:1px solid #c7d2fe;">
+          🏢 Half Rack (48%): <b style="color:#4f46e5;">${fmt(avgHR)}</b> ${unitLabel}
+        </span>
+        <span class="pill" style="background:#fdf2f8; color:#be185d; font-weight:700; font-size:12px; padding:4px 11px; border:1px solid #fbcfe8;">
+          🛍️ EA (15%): <b style="color:#db2777;">${fmt(avgEA)}</b> ${unitLabel}
+        </span>
+      `;
+    }
 
     new Chart(el, {
       type: 'bar',
@@ -6966,66 +6988,51 @@ function renderAnalyticsChart() {
         labels: labels,
         datasets: [
           {
-            type: 'line',
-            label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
-            data: targetValues,
-            borderColor: '#94a3b8',
-            borderWidth: 2,
-            borderDash: [5, 5],
-            pointRadius: 3,
-            pointBackgroundColor: '#94a3b8',
-            fill: false,
-            order: 1
-          },
-          {
-            type: 'bar',
             label: `📦 Full Rack (37%)`,
             data: frData,
             backgroundColor: '#0284c7',
-            borderRadius: 6,
-            barThickness: 18,
-            order: 2
+            borderRadius: { topLeft: 6, topRight: 6 },
+            maxBarThickness: 45
           },
           {
-            type: 'bar',
             label: `🏢 Half Rack (48%)`,
             data: hrData,
             backgroundColor: '#6366f1',
-            borderRadius: 6,
-            barThickness: 18,
-            order: 3
+            borderRadius: { topLeft: 6, topRight: 6 },
+            maxBarThickness: 45
           },
           {
-            type: 'bar',
             label: `🛍️ EA (15%)`,
             data: eaData,
             backgroundColor: '#ec4899',
-            borderRadius: 6,
-            barThickness: 18,
-            order: 4
+            borderRadius: { topLeft: 6, topRight: 6 },
+            maxBarThickness: 45
           }
         ]
       },
       options: {
         maintainAspectRatio: false,
-        layout: { padding: { top: 22, right: 10, bottom: 0, left: 10 } },
+        categoryPercentage: 0.65,
+        barPercentage: 0.88,
+        layout: { padding: { top: 32, right: 15, bottom: 0, left: 15 } },
         plugins: {
-          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
+          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 14 } },
           datalabels: {
             anchor: 'end',
-            align: 'end',
+            align: 'top',
+            offset: 4,
             color: '#1e293b',
-            font: { weight: '700', size: 10 },
-            formatter: (v, ctx) => ctx.datasetIndex > 0 && v > 0 ? fmt(v) : ''
+            font: { weight: '800', size: 11 },
+            formatter: (v) => v > 0 ? fmt(v) : ''
           },
           tooltip: {
             callbacks: {
-              label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)} ${unitLabel}`
+              label: (ctx) => ` ${ctx.dataset.label}: ${fmt(ctx.parsed.y)} ${unitLabel}`
             }
           }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
+          x: { grid: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
           y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
         }
       }
@@ -7037,7 +7044,19 @@ function renderAnalyticsChart() {
 
     const shiftAData = A.daily.map(d => isPcs ? (d.shiftA_pcs_prod || 0) : (d.shiftA_prod || 0));
     const shiftBData = A.daily.map(d => isPcs ? (d.shiftB_pcs_prod || 0) : (d.shiftB_prod || 0));
-    const targetValues = A.daily.map(() => prodTarget);
+
+    if (pillsEl) {
+      const avgA = r1(mean(shiftAData.filter(v => v > 0)));
+      const avgB = r1(mean(shiftBData.filter(v => v > 0)));
+      pillsEl.innerHTML = `
+        <span class="pill" style="background:#e0f2fe; color:#0369a1; font-weight:700; font-size:12px; padding:4px 11px; border:1px solid #bae6fd;">
+          🅰️ กะ A เฉลี่ย: <b style="color:#0284c7;">${fmt(avgA)}</b> ${unitLabel}
+        </span>
+        <span class="pill" style="background:#f5f3ff; color:#6d28d9; font-weight:700; font-size:12px; padding:4px 11px; border:1px solid #ddd6fe;">
+          🅱️ กะ B เฉลี่ย: <b style="color:#7c3aed;">${fmt(avgB)}</b> ${unitLabel}
+        </span>
+      `;
+    }
 
     new Chart(el, {
       type: 'bar',
@@ -7045,57 +7064,44 @@ function renderAnalyticsChart() {
         labels: labels,
         datasets: [
           {
-            type: 'line',
-            label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
-            data: targetValues,
-            borderColor: '#ef4444',
-            borderWidth: 2,
-            borderDash: [5, 5],
-            pointRadius: 3,
-            pointBackgroundColor: '#ef4444',
-            fill: false,
-            order: 1
-          },
-          {
-            type: 'bar',
-            label: `กะ A (08:00 - 17:00)`,
+            label: `🅰️ กะ A (08:00 - 17:00)`,
             data: shiftAData,
             backgroundColor: '#0284c7',
-            borderRadius: 6,
-            barThickness: 24,
-            order: 2
+            borderRadius: { topLeft: 6, topRight: 6 },
+            maxBarThickness: 52
           },
           {
-            type: 'bar',
-            label: `กะ B (20:00 - 05:00)`,
+            label: `🅱️ กะ B (20:00 - 05:00)`,
             data: shiftBData,
             backgroundColor: '#8b5cf6',
-            borderRadius: 6,
-            barThickness: 24,
-            order: 3
+            borderRadius: { topLeft: 6, topRight: 6 },
+            maxBarThickness: 52
           }
         ]
       },
       options: {
         maintainAspectRatio: false,
-        layout: { padding: { top: 22, right: 10, bottom: 0, left: 10 } },
+        categoryPercentage: 0.5,
+        barPercentage: 0.88,
+        layout: { padding: { top: 32, right: 15, bottom: 0, left: 15 } },
         plugins: {
-          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
+          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 14 } },
           datalabels: {
             anchor: 'end',
-            align: 'end',
+            align: 'top',
+            offset: 4,
             color: '#1e293b',
-            font: { weight: '700', size: 10.5 },
-            formatter: (v, ctx) => ctx.datasetIndex > 0 && v > 0 ? (fmt(v) + ' ' + unitLabel) : ''
+            font: { weight: '800', size: 11 },
+            formatter: (v) => v > 0 ? (fmt(v) + ' ' + unitLabel) : ''
           },
           tooltip: {
             callbacks: {
               afterLabel: (ctx) => {
                 const day = A.daily[ctx.dataIndex];
                 if (!day) return '';
-                if (ctx.datasetIndex === 1) {
+                if (ctx.datasetIndex === 0) {
                   return `  ปริมาณ: ${fmt(isPcs ? day.shiftA_pcs : day.shiftA_qty)} ${isPcs ? 'ชิ้น' : 'หยิบ'} (${day.shiftA_pickers || 0} คน)`;
-                } else if (ctx.datasetIndex === 2) {
+                } else if (ctx.datasetIndex === 1) {
                   return `  ปริมาณ: ${fmt(isPcs ? day.shiftB_pcs : day.shiftB_qty)} ${isPcs ? 'ชิ้น' : 'หยิบ'} (${day.shiftB_pickers || 0} คน)`;
                 }
                 return '';
@@ -7104,7 +7110,7 @@ function renderAnalyticsChart() {
           }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
+          x: { grid: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
           y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
         }
       }
@@ -7117,7 +7123,19 @@ function renderAnalyticsChart() {
 
     const workData = A.daily.map(d => isPcs ? (d.pcs || 0) : (d.qty || 0));
     const prodData = A.daily.map(d => isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0));
-    const targetValues = A.daily.map(() => prodTarget);
+
+    if (pillsEl) {
+      const totVol = A.daily.reduce((s, d) => s + (isPcs ? d.pcs : d.qty), 0);
+      const avgProd = isPcs ? (A.kpis ? A.kpis.avg_pcs_prod : 0) : (A.kpis ? A.kpis.avg_prod : 0);
+      pillsEl.innerHTML = `
+        <span class="pill" style="background:#f0f9ff; color:#0369a1; font-weight:700; font-size:12px; padding:4px 11px; border:1px solid #bae6fd;">
+          📦 ปริมาณงานรวม: <b style="color:#0284c7;">${fmt(totVol)}</b> ${wUnit}
+        </span>
+        <span class="pill" style="background:#fff1f2; color:#be123c; font-weight:700; font-size:12px; padding:4px 11px; border:1px solid #fecdd3;">
+          ⚡ Productivity เฉลี่ย: <b style="color:#e11d48;">${fmt(avgProd)}</b> ${unitLabel}
+        </span>
+      `;
+    }
 
     new Chart(el, {
       type: 'bar',
@@ -7126,75 +7144,66 @@ function renderAnalyticsChart() {
         datasets: [
           {
             type: 'line',
-            label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
-            data: targetValues,
-            borderColor: '#6366f1',
-            borderWidth: 2,
-            borderDash: [6, 6],
-            pointRadius: 0,
+            label: `⚡ Productivity จริง (${unitLabel})`,
+            data: prodData,
+            borderColor: '#f43f5e',
+            backgroundColor: '#f43f5e',
+            borderWidth: 3.5,
+            pointRadius: 6,
+            pointHoverRadius: 8,
+            tension: 0.35,
             fill: false,
             yAxisID: 'y1',
             order: 1
           },
           {
-            type: 'line',
-            label: `Productivity จริง (${unitLabel})`,
-            data: prodData,
-            borderColor: '#f43f5e',
-            backgroundColor: '#f43f5e',
-            borderWidth: 3,
-            pointRadius: 5,
-            pointHoverRadius: 7,
-            fill: false,
-            yAxisID: 'y1',
-            order: 2
-          },
-          {
             type: 'bar',
-            label: `ปริมาณงาน (${wUnit})`,
+            label: `📊 ปริมาณงาน (${wUnit})`,
             data: workData,
-            backgroundColor: 'rgba(14, 165, 233, 0.45)',
-            borderColor: '#0ea5e9',
+            backgroundColor: 'rgba(14, 165, 233, 0.35)',
+            borderColor: '#0284c7',
             borderWidth: 1.5,
-            borderRadius: 6,
-            barThickness: 28,
+            borderRadius: 8,
+            maxBarThickness: 56,
+            categoryPercentage: 0.45,
             yAxisID: 'y',
-            order: 3
+            order: 2
           }
         ]
       },
       options: {
         maintainAspectRatio: false,
-        layout: { padding: { top: 22, right: 10, bottom: 0, left: 10 } },
+        layout: { padding: { top: 32, right: 15, bottom: 0, left: 15 } },
         plugins: {
-          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
+          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 14 } },
           datalabels: {
             anchor: 'end',
             align: 'top',
-            font: { weight: '700', size: 10.5 },
+            offset: 4,
+            font: { weight: '800', size: 11 },
             formatter: (v, ctx) => {
-              if (ctx.datasetIndex === 1) return fmt(v) + ' ' + unitLabel;
-              if (ctx.datasetIndex === 2) return fmt(v) + ' ' + wUnit;
+              if (ctx.datasetIndex === 0) return fmt(v) + ' ' + unitLabel;
+              if (ctx.datasetIndex === 1) return fmt(v) + ' ' + wUnit;
               return '';
             },
-            color: (ctx) => ctx.datasetIndex === 1 ? '#e11d48' : '#0369a1'
+            color: (ctx) => ctx.datasetIndex === 0 ? '#e11d48' : '#0369a1'
           }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
+          x: { grid: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
           y: {
             type: 'linear',
             position: 'left',
             grid: { color: '#f1f5f9' },
             ticks: { callback: fmt },
-            title: { display: true, text: `ปริมาณงาน (${wUnit})`, font: { weight: '700', size: 11 } }
+            title: { display: true, text: `ปริมาณงาน (${wUnit})`, font: { weight: '700', size: 11.5 }, color: '#0369a1' }
           },
           y1: {
             type: 'linear',
             position: 'right',
             grid: { display: false },
             ticks: { callback: fmt },
-            title: { display: true, text: `Productivity (${unitLabel})`, font: { weight: '700', size: 11 } }
+            title: { display: true, text: `Productivity (${unitLabel})`, font: { weight: '700', size: 11.5 }, color: '#e11d48' }
           }
         }
       }
@@ -7202,12 +7211,24 @@ function renderAnalyticsChart() {
 
   } else {
     // Mode 'target': Target vs Actual (เดิม)
-    if (titleEl) titleEl.textContent = '🎯 กราฟเปรียบเทียบ Productivity จริง vs เป้าหมายรายวัน';
-    if (subEl) subEl.textContent = `เปรียบเทียบ Productivity รายวันกับเป้าหมายที่ตั้งไว้ (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)`;
+    if (titleEl) titleEl.textContent = '🎯 กราฟเปรียบเทียบ Productivity จริงรายวัน';
+    if (subEl) subEl.textContent = `เปรียบเทียบ Productivity V2 รายวันกับเป้าหมาย ${prodTarget} ${unitLabel} (แท่งสีเขียว = ผ่านเกณฑ์ / แท่งสีแดง = ต่ำกว่าเกณฑ์)`;
 
     const actualValues = A.daily.map(d => isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0));
-    const targetValues = A.daily.map(() => prodTarget);
     const barColors = actualValues.map(v => v >= prodTarget ? '#10b981' : '#ef4444');
+
+    if (pillsEl) {
+      let passDays = 0, failDays = 0;
+      actualValues.forEach(v => { if (v >= prodTarget) passDays++; else failDays++; });
+      pillsEl.innerHTML = `
+        <span class="pill" style="background:#ecfdf5; color:#059669; font-weight:700; font-size:12px; padding:4px 11px; border:1px solid #a7f3d0;">
+          ✅ ผ่านเกณฑ์ (${prodTarget} ${unitLabel}): <b>${passDays} วัน</b>
+        </span>
+        <span class="pill" style="background:#fef2f2; color:#dc2626; font-weight:700; font-size:12px; padding:4px 11px; border:1px solid #fecaca;">
+          ⚠️ ต่ำกว่าเกณฑ์: <b>${failDays} วัน</b>
+        </span>
+      `;
+    }
 
     new Chart(el, {
       type: 'bar',
@@ -7215,43 +7236,36 @@ function renderAnalyticsChart() {
         labels: labels,
         datasets: [
           {
-            type: 'line',
-            label: `เป้าหมาย (${prodTarget} ${unitLabel})`,
-            data: targetValues,
-            borderColor: '#6366f1',
-            borderWidth: 2.5,
-            borderDash: [6, 6],
-            pointRadius: 4,
-            pointBackgroundColor: '#6366f1',
-            fill: false,
-            order: 1
-          },
-          {
-            type: 'bar',
             label: `Productivity จริง (${unitLabel})`,
             data: actualValues,
             backgroundColor: barColors,
-            borderRadius: 6,
-            barThickness: 24,
-            order: 2
+            borderRadius: 8,
+            maxBarThickness: 56
           }
         ]
       },
       options: {
         maintainAspectRatio: false,
-        layout: { padding: { top: 22, right: 10, bottom: 0, left: 10 } },
+        categoryPercentage: 0.45,
+        layout: { padding: { top: 32, right: 15, bottom: 0, left: 15 } },
         plugins: {
-          legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12 } } },
+          legend: { display: false },
           datalabels: {
             anchor: 'end',
-            align: 'end',
-            color: '#334155',
-            font: { weight: '700', size: 11 },
-            formatter: (v, ctx) => ctx.datasetIndex === 1 ? (fmt(v) + ' ' + unitLabel) : ''
+            align: 'top',
+            offset: 4,
+            color: '#1e293b',
+            font: { weight: '800', size: 11.5 },
+            formatter: (v) => fmt(v) + ' ' + unitLabel
+          },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => ` Productivity จริง: ${fmt(ctx.parsed.y)} ${unitLabel} (เป้าหมาย: ${prodTarget})`
+            }
           }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { weight: '600' } } },
+          x: { grid: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
           y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
         }
       }
