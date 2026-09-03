@@ -39,6 +39,8 @@ const fmt = n => Number(n).toLocaleString('en-US');
 const fmtDecimal1 = n => Number.isFinite(Number(n))
   ? Number(n).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
   : '-';
+const r1 = n => Math.round((Number(n) || 0) * 10) / 10;
+const mean = a => Array.isArray(a) && a.length ? a.reduce((x, y) => x + (Number(y) || 0), 0) / a.length : 0;
 const PALETTE = ['#6366f1', '#14b8a6', '#f59e0b', '#f43f5e', '#0ea5e9', '#8b5cf6', '#10b981', '#ec4899', '#f97316', '#22c55e', '#3b82f6', '#eab308'];
 const ZONE_OWNER_COLORS = Object.freeze({
   'max mart': '#0f766e',
@@ -5222,13 +5224,13 @@ const builders = {
     }
   },
   prod() {
-    initProdSubtabs();
-    renderTargetVsActualChart();
-    renderTargetDailyTable();
-    renderWeightedKpiView();
-    renderTopPickersView();
-    renderAffiliationBreakdown();
-    updateProdSubtabPanels();
+    try { initProdSubtabs(); } catch (e) { console.error('prod subtabs error:', e); }
+    try { renderAnalyticsChart(); } catch (e) { console.error('prod chart error:', e); }
+    try { renderTargetDailyTable(); } catch (e) { console.error('prod target table error:', e); }
+    try { renderWeightedKpiView(); } catch (e) { console.error('prod weighted error:', e); }
+    try { renderTopPickersView(); } catch (e) { console.error('prod pickers error:', e); }
+    try { renderAffiliationBreakdown(); } catch (e) { console.error('prod affiliation error:', e); }
+    try { updateProdSubtabPanels(); } catch (e) { console.error('prod update panels error:', e); }
   },
   zones() {
     const z = [...A.by_zone];
