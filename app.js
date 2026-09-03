@@ -6863,8 +6863,8 @@ function renderTopPickersView() {
           }
         },
         scales: {
-          x: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } },
-          y: { grid: { display: false }, ticks: { font: { weight: '600', size: 11.5 } } }
+          x: { grid: { display: false }, border: { display: false }, ticks: { callback: fmt } },
+          y: { grid: { display: false }, border: { display: false }, ticks: { font: { weight: '600', size: 11.5 } } }
         }
       }
     });
@@ -7032,8 +7032,8 @@ function renderAnalyticsChart() {
           }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
-          y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+          x: { grid: { display: false }, border: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
+          y: { grid: { display: false }, border: { display: false }, ticks: { callback: fmt } }
         }
       }
     });
@@ -7110,8 +7110,8 @@ function renderAnalyticsChart() {
           }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
-          y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+          x: { grid: { display: false }, border: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
+          y: { grid: { display: false }, border: { display: false }, ticks: { callback: fmt } }
         }
       }
     });
@@ -7119,7 +7119,7 @@ function renderAnalyticsChart() {
   } else if (prodAnalyticsMode === 'workload') {
     const wUnit = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
     if (titleEl) titleEl.textContent = '📦 วิเคราะห์ปริมาณงาน vs Productivity (Workload vs Efficiency)';
-    if (subEl) subEl.textContent = `เปรียบเทียบความสัมพันธ์ระหว่างปริมาณงานที่หยิบ (${wUnit} - แกนซ้าย) กับ Productivity จริง (${unitLabel} - แกนขวา)`;
+    if (subEl) subEl.textContent = `เปรียบเทียบปริมาณงานที่หยิบ (${wUnit} - แกนซ้าย) กับ Productivity จริง (${unitLabel} - แกนขวา)`;
 
     const workData = A.daily.map(d => isPcs ? (d.pcs || 0) : (d.qty || 0));
     const prodData = A.daily.map(d => isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0));
@@ -7143,36 +7143,29 @@ function renderAnalyticsChart() {
         labels: labels,
         datasets: [
           {
-            type: 'line',
-            label: `⚡ Productivity จริง (${unitLabel})`,
-            data: prodData,
-            borderColor: '#f43f5e',
-            backgroundColor: '#f43f5e',
-            borderWidth: 3.5,
-            pointRadius: 6,
-            pointHoverRadius: 8,
-            tension: 0.35,
-            fill: false,
-            yAxisID: 'y1',
-            order: 1
-          },
-          {
             type: 'bar',
             label: `📊 ปริมาณงาน (${wUnit})`,
             data: workData,
-            backgroundColor: 'rgba(14, 165, 233, 0.35)',
-            borderColor: '#0284c7',
-            borderWidth: 1.5,
-            borderRadius: 8,
-            maxBarThickness: 56,
-            categoryPercentage: 0.45,
-            yAxisID: 'y',
-            order: 2
+            backgroundColor: '#0284c7',
+            borderRadius: { topLeft: 6, topRight: 6 },
+            maxBarThickness: 50,
+            yAxisID: 'y'
+          },
+          {
+            type: 'bar',
+            label: `⚡ Productivity จริง (${unitLabel})`,
+            data: prodData,
+            backgroundColor: '#f43f5e',
+            borderRadius: { topLeft: 6, topRight: 6 },
+            maxBarThickness: 50,
+            yAxisID: 'y1'
           }
         ]
       },
       options: {
         maintainAspectRatio: false,
+        categoryPercentage: 0.55,
+        barPercentage: 0.88,
         layout: { padding: { top: 32, right: 15, bottom: 0, left: 15 } },
         plugins: {
           legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 14 } },
@@ -7182,26 +7175,28 @@ function renderAnalyticsChart() {
             offset: 4,
             font: { weight: '800', size: 11 },
             formatter: (v, ctx) => {
-              if (ctx.datasetIndex === 0) return fmt(v) + ' ' + unitLabel;
-              if (ctx.datasetIndex === 1) return fmt(v) + ' ' + wUnit;
+              if (ctx.datasetIndex === 0) return fmt(v) + ' ' + wUnit;
+              if (ctx.datasetIndex === 1) return fmt(v) + ' ' + unitLabel;
               return '';
             },
-            color: (ctx) => ctx.datasetIndex === 0 ? '#e11d48' : '#0369a1'
+            color: (ctx) => ctx.datasetIndex === 0 ? '#0284c7' : '#e11d48'
           }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
+          x: { grid: { display: false }, border: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
           y: {
             type: 'linear',
             position: 'left',
-            grid: { color: '#f1f5f9' },
+            grid: { display: false },
+            border: { display: false },
             ticks: { callback: fmt },
-            title: { display: true, text: `ปริมาณงาน (${wUnit})`, font: { weight: '700', size: 11.5 }, color: '#0369a1' }
+            title: { display: true, text: `ปริมาณงาน (${wUnit})`, font: { weight: '700', size: 11.5 }, color: '#0284c7' }
           },
           y1: {
             type: 'linear',
             position: 'right',
             grid: { display: false },
+            border: { display: false },
             ticks: { callback: fmt },
             title: { display: true, text: `Productivity (${unitLabel})`, font: { weight: '700', size: 11.5 }, color: '#e11d48' }
           }
@@ -7265,8 +7260,8 @@ function renderAnalyticsChart() {
           }
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
-          y: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } }
+          x: { grid: { display: false }, border: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
+          y: { grid: { display: false }, border: { display: false }, ticks: { callback: fmt } }
         }
       }
     });
