@@ -2702,8 +2702,17 @@ const slotCubeLoadState = new Map();
 const slotCubeDailyPayloadCache = new Map();
 let dashboardBundleLoading = false;
 
+function isEpochMatching(payloadEpoch, expectedEpoch) {
+  const pe = String(payloadEpoch || '');
+  const ee = String(expectedEpoch || '');
+  if (pe === ee) return true;
+  if (!pe || !ee) return false;
+  return pe.startsWith(ee + ':') || ee.startsWith(pe + ':');
+}
+
 function dashboardDataEpoch() {
   const parts = String(dashboardCacheRevision || '0').split(':');
+  if (parts.length >= 4) return parts.slice(0, 3).join(':');
   return parts.length >= 2 ? parts.slice(0, 2).join(':') : parts[0];
 }
 
@@ -2720,8 +2729,10 @@ function itemCubeRequestKey(system = sys, from = dfrom, to = dto, sf = shiftF) {
   return [dashboardDataEpoch(), system, from, to, sf].join('|');
 }
 function isValidItemCubePayload(payload, system, from, to, shift, expectedEpoch = dashboardDataEpoch()) {
+  const exactMatch = String(payload && payload.data_epoch || '') === String(expectedEpoch || '');
+  const epochOk = exactMatch || isEpochMatching(payload && payload.data_epoch, expectedEpoch);
   return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
-    String(payload.data_epoch || '') === String(expectedEpoch || '') &&
+    (String(payload.data_epoch || '') === String(expectedEpoch || '') || epochOk) &&
     payload.system === system && payload.from === from && payload.to === to &&
     payload.shift === shift && (Number(payload.row_width) === 7 || Number(payload.row_width) === 9) &&
     Array.isArray(payload.rows) && payload.rows.length % Number(payload.row_width) === 0;
@@ -2757,8 +2768,10 @@ function itemMasterRequestKey() {
 }
 
 function isValidItemMasterPayload(payload, expectedEpoch = dashboardDataEpoch()) {
+  const exactMatch = String(payload && payload.data_epoch || '') === String(expectedEpoch || '');
+  const epochOk = exactMatch || isEpochMatching(payload && payload.data_epoch, expectedEpoch);
   return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
-    String(payload.data_epoch || '') === String(expectedEpoch || '') &&
+    (String(payload.data_epoch || '') === String(expectedEpoch || '') || epochOk) &&
     Number(payload.row_width) === 9 && Array.isArray(payload.rows) && payload.rows.length % 9 === 0;
 }
 
@@ -3111,14 +3124,15 @@ function retryCurrentItemCube() {
   void loadCurrentItemCube(true);
 }
 
-function slotCubeRequestKey(system = sys, from = dfrom, to = dto) {
-  const scope = canonicalCubeScope(system, from, to);
-  return ['slot', dashboardDataEpoch(), scope.system, scope.from, scope.to, scope.shift, JSON.stringify(currentExcludedSkuList())].join('|');
+function slotCubeRequestKey(system = sys, from = dfrom, to = dto, sf = shiftF) {
+  return ['slot', dashboardDataEpoch(), system, from, to, sf, JSON.stringify(currentExcludedSkuList())].join('|');
 }
 
 function isValidSlotCubePayload(payload, system, from, to, shift, expectedEpoch = dashboardDataEpoch()) {
+  const exactMatch = String(payload && payload.data_epoch || '') === String(expectedEpoch || '');
+  const epochOk = exactMatch || isEpochMatching(payload && payload.data_epoch, expectedEpoch);
   return !!payload && payload.schema_version === DASHBOARD_SCHEMA_VERSION &&
-    String(payload.data_epoch || '') === String(expectedEpoch || '') &&
+    (String(payload.data_epoch || '') === String(expectedEpoch || '') || epochOk) &&
     payload.system === system && payload.from === from && payload.to === to &&
     payload.shift === shift && (Number(payload.row_width) === 6 || Number(payload.row_width) === 8) &&
     Array.isArray(payload.rows) && payload.rows.length % Number(payload.row_width) === 0;
@@ -5043,12 +5057,14 @@ const builders = {
   time() {
     if (!hasCurrentSlotCube()) setTimeout(() => void loadCurrentSlotCube(false), 0);
     const t = A.by_timeslot;
-    const slotState = slotCubeLoadState.get(slotCubeRequestKey());
+    const slotState = slotCubeLoadState.get(slotCubeRequestKey(sys, dfrom, dto, shiftF));
     const status = document.getElementById('slotLoadStatus');
     if (status) {
       if (t.length) status.innerHTML = '';
       else if (slotState && slotState.status === 'error') {
         status.innerHTML = `โหลดข้อมูลช่วงเวลาไม่สำเร็จ: ${escapeZoneHtml(slotState.message || '')} <button onclick="retryCurrentSlotCube()" class="refreshbtn">ลองอีกครั้ง</button>`;
+      } else if (slotState && slotState.status === 'done') {
+        status.innerHTML = '<span style="color:#64748b;">ไม่พบข้อมูลการหยิบในช่วงเวลาและตัวกรองที่เลือก</span>';
       } else status.textContent = '⏳ กำลังโหลดข้อมูลช่วงเวลาแบบรายวัน…';
     }
     const isPcs = unitMode === 'pcs';
@@ -6462,8 +6478,9 @@ function preloadAllCubes() {
         if (!hasCurrentSlotCube()) setTimeout(() => void loadCurrentSlotCube(false), 100);
       });
     }, 20);
-  } else if (!hasCurrentSlotCube()) {
-    setTimeout(() => void loadCurrentSlotCube(false), 100);
+  }
+  if (!hasCurrentSlotCube()) {
+    setTimeout(() => void loadCurrentSlotCube(false), 50);
   }
 }
 
@@ -6836,6 +6853,7 @@ async function ensureDashboardBundleReady(force, totalRows, source) {
   void Promise.all([loadItemMaster(false), loadCurrentItemCube(false, sys)]).then(() => {
     setTimeout(() => void loadCurrentSlotCube(force, sys), 100);
   });
+  if (!hasCurrentSlotCube()) setTimeout(() => void loadCurrentSlotCube(force, sys), 50);
   return true;
 }
 
