@@ -543,6 +543,7 @@ function buildItemMasterData_(dataEpoch) {
       const owner = String(r[0] || '').trim().toUpperCase();
       const item = String(r[1] || '').trim().replace(/\.0+$/, '');
       if (!owner || !item) return;
+      if (owner !== 'DM02' && owner !== 'DP02' && owner !== 'DG02' && owner !== 'DCWN') return;
       const key = owner + '|' + item;
       if (seen[key]) return;
       seen[key] = true;

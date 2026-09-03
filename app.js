@@ -28,7 +28,11 @@ const SHIFT_A_REGULAR_HOURS = 7.5;
 const SHIFT_B_REGULAR_HOURS = 470 / 60; // Workforce Planning เดิมเท่านั้น
 const OT_MAX = 2.5;
 // หน้า Items ใช้ Master_Item ทุก Owner เป็นฐาน เพื่อให้เห็นทั้งสินค้าที่เคลื่อนไหวและยอด 0
-function isItemPageAllowedOwner(value) { return !!normalizeOwnerKey(value); }
+const ALLOWED_ITEM_OWNERS = new Set(['DM02', 'DP02', 'DG02', 'DCWN', '-']);
+function isItemPageAllowedOwner(value) {
+  const norm = normalizeOwnerKey(value);
+  return norm ? ALLOWED_ITEM_OWNERS.has(norm) : false;
+}
 // ====================================
 
 const fmt = n => Number(n).toLocaleString('en-US');
@@ -89,7 +93,7 @@ const PRODUCTIVITY_WEIGHT_CONFIG = Object.freeze([
   })
 ]);
 // ==============================================
-const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
+const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
 const HISTORICAL_V1 = Object.freeze({
   source: 'Results Master!E (Total pick)',
   startDate: '2026-01-02',
@@ -5092,7 +5096,6 @@ const builders = {
     });
   },
   items() {
-    return;
     const itemCubeReady = hasCurrentItemCube();
     const itemMasterReady = Object.keys(ITEM_MASTER).length > 0;
     const itemLoadStatus = document.getElementById('itemLoadStatus');
