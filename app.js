@@ -4415,8 +4415,13 @@ const builders = {
       const mainLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
       const prodData = isPcs ? b.pcsProd : b.prod;
       const prodLabel = isPcs ? 'Productivity (ชิ้น/ชม.)' : 'Productivity (หยิบ/ชม.)';
+      const isManyBars = b.labels.length > 14;
 
       const maxMainQty = Math.max(1, ...mainQty);
+      const validProds = prodData.filter(v => Number(v) > 0);
+      const minProd = validProds.length ? Math.min(...validProds) : 0;
+      const maxProd = validProds.length ? Math.max(...validProds) : 100;
+
       const cfg = {
         data: {
           labels: b.labels, datasets: [
@@ -4430,17 +4435,20 @@ const builders = {
               datalabels: {
                 display: (ctx) => {
                   const v = Number(ctx.dataset.data[ctx.dataIndex] || 0);
-                  return v > 0 && (v / maxMainQty >= .08 || ctx.dataset.data.length <= 2);
+                  return v > 0 && (v / maxMainQty >= .06 || ctx.dataset.data.length <= 4);
                 },
-                anchor: 'end',
-                align: 'start',
-                offset: 4,
-                formatter: fmt,
-                color: '#fff',
-                backgroundColor: 'rgba(15,23,42,.16)',
+                anchor: 'center',
+                align: 'center',
+                rotation: isManyBars ? -90 : 0,
+                formatter: (val) => {
+                  const n = Math.round(Number(val) || 0);
+                  return n > 0 ? n.toLocaleString('en-US') : '';
+                },
+                color: '#ffffff',
+                backgroundColor: 'rgba(15,23,42,.45)',
                 borderRadius: 4,
-                padding: { top: 2, right: 5, bottom: 2, left: 5 },
-                font: { weight: '700', size: 10 }
+                padding: { top: 2, right: 4, bottom: 2, left: 4 },
+                font: { weight: '700', size: isManyBars ? 9.5 : 11 }
               }
             },
             {
@@ -4451,26 +4459,84 @@ const builders = {
               backgroundColor: '#f43f5e',
               tension: .35,
               borderWidth: 3,
-              pointRadius: 5,
+              pointRadius: isManyBars ? 4 : 5,
+              pointHoverRadius: 7,
               pointBackgroundColor: '#fff',
+              pointBorderColor: '#f43f5e',
               pointBorderWidth: 2,
               yAxisID: 'y1',
               datalabels: {
                 display: (ctx) => Number(ctx.dataset.data[ctx.dataIndex] || 0) > 0,
+                anchor: 'end',
                 align: 'top',
-                offset: 10,
+                offset: 8,
                 color: '#e11d48',
-                backgroundColor: 'rgba(255,255,255,.96)',
-                borderColor: 'rgba(244,63,94,.28)',
-                borderWidth: 1,
-                borderRadius: 4,
+                backgroundColor: 'rgba(255,255,255,.98)',
+                borderColor: 'rgba(244,63,94,.4)',
+                borderWidth: 1.5,
+                borderRadius: 5,
                 padding: { top: 2, right: 5, bottom: 2, left: 5 },
-                formatter: fmt,
-                font: { weight: '700', size: 10 }
+                formatter: (val) => {
+                  const n = Number(val) || 0;
+                  return n % 1 === 0 ? n.toFixed(0) : n.toFixed(1);
+                },
+                font: { weight: '700', size: isManyBars ? 9.5 : 11 }
               }
             }
           ]
-        }, options: { maintainAspectRatio: false, layout: { padding: { top: 36, right: 12, bottom: 18, left: 4 } }, plugins: { legend: { display: true, position: 'top', labels: { usePointStyle: true, boxWidth: 8 } }, datalabels: { clip: false, clamp: true } }, scales: { y: { grid: { color: '#eef2f7' }, ticks: { callback: fmt } }, y1: { position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: fmt } } } }
+        },
+        options: {
+          maintainAspectRatio: false,
+          layout: {
+            padding: { top: 40, right: 16, bottom: 12, left: 8 }
+          },
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top',
+              labels: {
+                usePointStyle: true,
+                boxWidth: 8,
+                padding: 16,
+                font: { size: 12, weight: '600' }
+              }
+            },
+            tooltip: {
+              backgroundColor: 'rgba(15, 23, 42, 0.92)',
+              titleFont: { size: 12, weight: '700' },
+              bodyFont: { size: 12 },
+              padding: 10,
+              cornerRadius: 8,
+              callbacks: {
+                label: (ctx) => {
+                  const val = Number(ctx.parsed.y || 0);
+                  if (ctx.datasetIndex === 0) {
+                    return ` ${ctx.dataset.label}: ${Math.round(val).toLocaleString('en-US')} ${mainLabel}`;
+                  }
+                  return ` ${ctx.dataset.label}: ${val.toFixed(1)}`;
+                }
+              }
+            },
+            datalabels: {
+              clip: false,
+              clamp: true
+            }
+          },
+          scales: {
+            y: {
+              grid: { color: '#f1f5f9' },
+              ticks: { callback: v => Math.round(v).toLocaleString('en-US'), font: { size: 11 } },
+              suggestedMax: Math.ceil((maxMainQty * 1.35) / 1000) * 1000
+            },
+            y1: {
+              position: 'right',
+              grid: { drawOnChartArea: false },
+              ticks: { callback: v => Number(v).toFixed(0), font: { size: 11 } },
+              suggestedMax: Math.ceil(maxProd * 1.15),
+              suggestedMin: Math.max(0, Math.floor(minProd * 0.8))
+            }
+          }
+        }
       };
       const ex = Chart.getChart('trend'); if (ex) ex.destroy();
       new Chart(document.getElementById('trend'), cfg);
