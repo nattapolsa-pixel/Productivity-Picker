@@ -6988,6 +6988,9 @@ function renderAnalyticsChart() {
         `;
       }
 
+      const maxVal = Math.max(...frData, ...hrData, ...eaData, 0);
+      const yMax = maxVal > 0 ? Math.ceil(maxVal * 1.35) : undefined;
+
       new Chart(el, {
         type: 'bar',
         data: {
@@ -7020,9 +7023,9 @@ function renderAnalyticsChart() {
           maintainAspectRatio: false,
           categoryPercentage: 0.65,
           barPercentage: 0.88,
-          layout: { padding: { top: 32, right: 15, bottom: 0, left: 15 } },
+          layout: { padding: { top: 12, right: 15, bottom: 0, left: 15 } },
           plugins: {
-            legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 14 } },
+            legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 24 } },
             datalabels: {
               anchor: 'end',
               align: 'top',
@@ -7039,7 +7042,13 @@ function renderAnalyticsChart() {
           },
           scales: {
             x: { grid: { display: false }, border: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
-            y: { grid: { display: false }, border: { display: false }, ticks: { callback: fmt } }
+            y: {
+              suggestedMax: yMax,
+              grace: '25%',
+              grid: { display: false },
+              border: { display: false },
+              ticks: { callback: fmt }
+            }
           }
         }
       });
@@ -7066,6 +7075,9 @@ function renderAnalyticsChart() {
         `;
       }
 
+      const maxVal = Math.max(...shiftAData, ...shiftBData, 0);
+      const yMax = maxVal > 0 ? Math.ceil(maxVal * 1.35) : undefined;
+
       new Chart(el, {
         type: 'bar',
         data: {
@@ -7091,9 +7103,9 @@ function renderAnalyticsChart() {
           maintainAspectRatio: false,
           categoryPercentage: 0.5,
           barPercentage: 0.88,
-          layout: { padding: { top: 32, right: 15, bottom: 0, left: 15 } },
+          layout: { padding: { top: 12, right: 15, bottom: 0, left: 15 } },
           plugins: {
-            legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 14 } },
+            legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 24 } },
             datalabels: {
               anchor: 'end',
               align: 'top',
@@ -7119,7 +7131,13 @@ function renderAnalyticsChart() {
           },
           scales: {
             x: { grid: { display: false }, border: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
-            y: { grid: { display: false }, border: { display: false }, ticks: { callback: fmt } }
+            y: {
+              suggestedMax: yMax,
+              grace: '25%',
+              grid: { display: false },
+              border: { display: false },
+              ticks: { callback: fmt }
+            }
           }
         }
       });
@@ -7144,6 +7162,11 @@ function renderAnalyticsChart() {
           </span>
         `;
       }
+
+      const maxWork = Math.max(...workData, 0);
+      const maxProd = Math.max(...prodData, 0);
+      const yMaxWork = maxWork > 0 ? Math.ceil(maxWork * 1.35) : undefined;
+      const yMaxProd = maxProd > 0 ? Math.ceil(maxProd * 1.35) : undefined;
 
       new Chart(el, {
         type: 'bar',
@@ -7174,9 +7197,9 @@ function renderAnalyticsChart() {
           maintainAspectRatio: false,
           categoryPercentage: 0.55,
           barPercentage: 0.88,
-          layout: { padding: { top: 32, right: 15, bottom: 0, left: 15 } },
+          layout: { padding: { top: 12, right: 15, bottom: 0, left: 15 } },
           plugins: {
-            legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 14 } },
+            legend: { display: true, position: 'top', labels: { font: { weight: '600', size: 12.5 }, boxWidth: 14, padding: 24 } },
             datalabels: {
               anchor: 'end',
               align: 'top',
@@ -7195,6 +7218,8 @@ function renderAnalyticsChart() {
             y: {
               type: 'linear',
               position: 'left',
+              suggestedMax: yMaxWork,
+              grace: '25%',
               grid: { display: false },
               border: { display: false },
               ticks: { callback: fmt },
@@ -7203,6 +7228,8 @@ function renderAnalyticsChart() {
             y1: {
               type: 'linear',
               position: 'right',
+              suggestedMax: yMaxProd,
+              grace: '25%',
               grid: { display: false },
               border: { display: false },
               ticks: { callback: fmt },
@@ -7233,6 +7260,9 @@ function renderAnalyticsChart() {
         `;
       }
 
+      const maxVal = Math.max(...actualValues, prodTarget, 0);
+      const yMax = maxVal > 0 ? Math.ceil(maxVal * 1.35) : undefined;
+
       new Chart(el, {
         type: 'bar',
         data: {
@@ -7250,7 +7280,7 @@ function renderAnalyticsChart() {
         options: {
           maintainAspectRatio: false,
           categoryPercentage: 0.45,
-          layout: { padding: { top: 32, right: 15, bottom: 0, left: 15 } },
+          layout: { padding: { top: 12, right: 15, bottom: 0, left: 15 } },
           plugins: {
             legend: { display: false },
             datalabels: {
@@ -7269,7 +7299,13 @@ function renderAnalyticsChart() {
           },
           scales: {
             x: { grid: { display: false }, border: { display: false }, ticks: { font: { weight: '700', size: 12 } } },
-            y: { grid: { display: false }, border: { display: false }, ticks: { callback: fmt } }
+            y: {
+              suggestedMax: yMax,
+              grace: '25%',
+              grid: { display: false },
+              border: { display: false },
+              ticks: { callback: fmt }
+            }
           }
         }
       });
