@@ -143,6 +143,14 @@ try {
   const savedCalc = localStorage.getItem('pickProductivityCalcMode');
   if (savedCalc === 'raw' || savedCalc === 'weighted') prodCalcMode = savedCalc;
 } catch (_) {}
+let prodActiveSubTab = 'target'; // 'target' | 'weighted' | 'pickers' | 'affiliation'
+try {
+  const savedSubTab = localStorage.getItem('pickProductivitySubTab');
+  if (['target', 'weighted', 'pickers', 'affiliation'].includes(savedSubTab)) {
+    prodActiveSubTab = savedSubTab;
+  }
+} catch (_) {}
+let prodPickerCount = 12;
 let trendMode = 'day';
 let datePresetMode = 'month';
 let excludedSkus = new Set();
@@ -5180,48 +5188,13 @@ const builders = {
     }
   },
   prod() {
+    initProdSubtabs();
     renderTargetVsActualChart();
-
-    const isPcs = unitMode === 'pcs';
-    let p = [...A.by_picker];
-    p.sort((a, b) => isPcs ? (b.avg_pcs_prod - a.avg_pcs_prod) : (b.avg_prod - a.avg_prod));
-    p = p.slice(0, 12);
-
-    const mainProd = isPcs ? p.map(x => x.avg_pcs_prod) : p.map(x => x.avg_prod);
-    const unitLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
-
-    const exPicker = Chart.getChart('picker'); if (exPicker) exPicker.destroy();
-    new Chart(document.getElementById('picker'), {
-      type: 'bar',
-      data: { labels: p.map(x => x.picker + ' (' + x.location + ')'), datasets: [{ data: mainProd, backgroundColor: p.map((x, i) => PALETTE[i % PALETTE.length]), borderRadius: 6 }] },
-      options: {
-        indexAxis: 'y', maintainAspectRatio: false, layout: { padding: { right: 55 } },
-        plugins: {
-          legend: { display: false },
-          datalabels: { anchor: 'end', align: 'end', formatter: (v) => fmt(v) + ' ' + unitLabel, color: '#334155', font: { size: 10, weight: '600' } },
-          tooltip: {
-            callbacks: {
-              label: (ctx) => {
-                const picker = p[ctx.dataIndex];
-                const zoneInfo = getZoneInfo(picker.location);
-                const affiliation = picker.affiliation || getPickerAffiliation(picker.picker);
-                return [
-                  ` สังกัด: ${affiliation}`,
-                  ` พนักงาน: ${picker.picker}${picker.name && picker.name !== picker.picker ? ' · ' + picker.name : ''}`,
-                  ` Location / Zone: ${picker.location} / ${picker.zone}`,
-                  ` Type Pick / Owner: ${zoneInfo.typePick} / ${zoneInfo.owner}`,
-                  ` Productivity (หยิบ): ${fmt(picker.avg_prod)} หยิบ/ชม.`,
-                  ` Productivity (ชิ้น): ${fmt(picker.avg_pcs_prod)} ชิ้น/ชม.`,
-                  ` ปริมาณ: ${fmt(picker.pcs)} ชิ้น (${fmt(picker.qty)} หน่วยหยิบ) (OT: ${picker.ot > 0 ? picker.ot + ' ชม.' : '-'})`
-                ];
-              }
-            }
-          }
-        },
-        scales: { x: { grid: { color: '#eef2f7' }, ticks: { callback: fmt } }, y: { grid: { display: false } } }
-      }
-    });
+    renderTargetDailyTable();
+    renderWeightedKpiView();
+    renderTopPickersView();
     renderAffiliationBreakdown();
+    updateProdSubtabPanels();
   },
   zones() {
     const z = [...A.by_zone];
@@ -6566,6 +6539,347 @@ const builders = {
 
 
 
+
+// ===== Productivity Sub-navigation & Component Renderers =====
+function initProdSubtabs() {
+  const btns = document.querySelectorAll('#prodSubtabs button');
+  if (!btns.length) return;
+  btns.forEach(b => {
+    b.classList.toggle('active', b.dataset.prodtab === prodActiveSubTab);
+    b.onclick = () => {
+      const tab = b.dataset.prodtab;
+      if (tab === prodActiveSubTab) return;
+      prodActiveSubTab = tab;
+      try { localStorage.setItem('pickProductivitySubTab', prodActiveSubTab); } catch (_) {}
+      btns.forEach(x => x.classList.toggle('active', x.dataset.prodtab === prodActiveSubTab));
+      updateProdSubtabPanels();
+    };
+  });
+}
+
+function updateProdSubtabPanels() {
+  const panels = {
+    target: document.getElementById('prodTabPanel-target'),
+    weighted: document.getElementById('prodTabPanel-weighted'),
+    pickers: document.getElementById('prodTabPanel-pickers'),
+    affiliation: document.getElementById('prodTabPanel-affiliation')
+  };
+  Object.keys(panels).forEach(k => {
+    if (panels[k]) {
+      panels[k].style.display = k === prodActiveSubTab ? 'block' : 'none';
+    }
+  });
+
+  if (prodActiveSubTab === 'target') {
+    renderTargetVsActualChart();
+    renderTargetDailyTable();
+  } else if (prodActiveSubTab === 'weighted') {
+    renderWeightedKpiView();
+  } else if (prodActiveSubTab === 'pickers') {
+    renderTopPickersView();
+  } else if (prodActiveSubTab === 'affiliation') {
+    renderAffiliationBreakdown();
+  }
+}
+
+function renderTargetDailyTable() {
+  if (!A) return;
+  const isPcs = unitMode === 'pcs';
+  const uTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+  const daily = A.daily ? [...A.daily] : [];
+
+  let passCount = 0, failCount = 0;
+  let totalQty = 0, totalPcs = 0;
+  daily.forEach(d => {
+    const val = isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0);
+    if (val >= prodTarget) passCount++;
+    else failCount++;
+    totalQty += Number(d.qty || 0);
+    totalPcs += Number(d.pcs || 0);
+  });
+
+  const totalDays = daily.length || 1;
+  const passPct = Math.round((passCount / totalDays) * 100);
+  const failPct = Math.round((failCount / totalDays) * 100);
+  const avgProd = isPcs ? (A.kpis ? A.kpis.avg_pcs_prod : 0) : (A.kpis ? A.kpis.avg_prod : 0);
+
+  const statsEl = document.getElementById('prodTargetStats');
+  if (statsEl) {
+    const cards = [
+      { label: '🎯 เป้าหมายปัจจุบัน (Target)', val: `${prodTarget}`, sub: `${uTxt} (คลิกตั้งค่า Target เพื่อปรับแก้)`, color: '#6366f1' },
+      { label: '✅ วันที่บรรลุเป้าหมาย', val: `${passCount} วัน`, sub: `คิดเป็น ${passPct}% ของช่วงที่เลือก`, color: '#10b981' },
+      { label: '⚠️ วันที่ต่ำกว่าเป้าหมาย', val: `${failCount} วัน`, sub: `คิดเป็น ${failPct}% ของช่วงที่เลือก`, color: '#ef4444' },
+      { label: '📊 ผลงานเฉลี่ยจริงทั้งช่วง', val: `${fmt(avgProd)}`, sub: `${uTxt} (ยอดรวมเฉลี่ย)`, color: avgProd >= prodTarget ? '#10b981' : '#f59e0b' },
+      { label: isPcs ? '🧩 ปริมาณชิ้นรวม' : '📦 หน่วยหยิบรวม', val: fmt(isPcs ? totalPcs : totalQty), sub: `${daily.length} วันทำการ`, color: '#0ea5e9' }
+    ];
+    statsEl.innerHTML = cards.map(c => `
+      <div class="zone-stat" style="border-top:3px solid ${c.color};">
+        <div class="zone-stat-label">${c.label}</div>
+        <div class="zone-stat-value" style="color:${c.color}; font-size:22px;">${c.val} <span style="font-size:12.5px; font-weight:600; color:#64748b;">${c.label.includes('วันที่') ? '' : uTxt}</span></div>
+        <div class="zone-stat-detail">${c.sub}</div>
+      </div>
+    `).join('');
+  }
+
+  const tableEl = document.getElementById('prodTargetDailyTable');
+  if (tableEl) {
+    if (!daily.length) {
+      tableEl.innerHTML = '<tbody><tr><td class="empty-cell">ไม่มีข้อมูลในช่วงวันที่เลือก</td></tr></tbody>';
+      return;
+    }
+    const rowsHtml = daily.map((d, idx) => {
+      const prodVal = isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0);
+      const diff = Math.round((prodVal - prodTarget) * 10) / 10;
+      const isPass = prodVal >= prodTarget;
+      const diffTxt = diff >= 0 ? `+${diff}` : `${diff}`;
+      const diffColor = diff >= 0 ? '#059669' : '#dc2626';
+      const statusBadge = isPass
+        ? '<span class="badge-status pass">✅ บรรลุเป้า</span>'
+        : '<span class="badge-status fail">⚠️ ต่ำกว่าเป้า</span>';
+
+      return `<tr>
+        <td style="text-align:center; color:#94a3b8; font-size:12px;">${idx + 1}</td>
+        <td style="font-weight:700; color:#0f172a;">${escapeZoneHtml(d.date)}</td>
+        <td class="num">${fmt(isPcs ? d.pcs : d.qty)} ${isPcs ? 'ชิ้น' : 'หยิบ'}</td>
+        <td class="num">${fmt(d.hours || 0)} ชม.</td>
+        <td class="num"><span class="metric-main" style="color:${isPass ? '#059669' : '#dc2626'}; font-weight:700;">${fmt(prodVal)}</span></td>
+        <td class="num" style="color:#64748b;">${prodTarget}</td>
+        <td class="num" style="font-weight:700; color:${diffColor};">${diffTxt}</td>
+        <td style="text-align:center;">${statusBadge}</td>
+      </tr>`;
+    }).join('');
+
+    tableEl.innerHTML = `
+      <thead>
+        <tr>
+          <th style="width:40px; text-align:center;">#</th>
+          <th>วันที่ (Date)</th>
+          <th class="num">ปริมาณงาน</th>
+          <th class="num">ชั่วโมงทำงาน</th>
+          <th class="num">Productivity จริง (${uTxt})</th>
+          <th class="num">เป้าหมาย (${uTxt})</th>
+          <th class="num">ส่วนต่าง (+/-)</th>
+          <th style="text-align:center;">สถานะ</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    `;
+  }
+}
+
+function renderWeightedKpiView() {
+  if (!A) return;
+  const w = A.productivity_weighting || calculateWeightedProductivity(A.by_zone_prod);
+  if (!w || !Array.isArray(w.groups)) return;
+  const isPcs = unitMode === 'pcs';
+  const uTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+
+  const statsEl = document.getElementById('prodWeightedStats');
+  if (statsEl) {
+    const fr = w.groups.find(g => g.key === 'FULL_RACK');
+    const hr = w.groups.find(g => g.key === 'HALF_RACK');
+    const ea = w.groups.find(g => g.key === 'EA');
+    const cards = [
+      { label: '⚖️ ถ่วงน้ำหนักรวม (Overall)', val: fmt(isPcs ? w.avg_pcs_prod : w.avg_prod), sub: `เป้าหมาย: ${prodTarget} ${uTxt}`, color: '#059669' },
+      { label: '📦 Full Rack (37%)', val: fmt(fr ? (isPcs ? fr.pcsProductivity : fr.productivity) : 0), sub: `คะแนนสะสม: ${fmt(fr ? (isPcs ? fr.pcsContribution : fr.contribution) : 0)}`, color: '#0284c7' },
+      { label: '🏢 Half Rack (48%)', val: fmt(hr ? (isPcs ? hr.pcsProductivity : hr.productivity) : 0), sub: `คะแนนสะสม: ${fmt(hr ? (isPcs ? hr.pcsContribution : hr.contribution) : 0)}`, color: '#6366f1' },
+      { label: '🛍️ EA (15%)', val: fmt(ea ? (isPcs ? ea.pcsProductivity : ea.productivity) : 0), sub: `คะแนนสะสม: ${fmt(ea ? (isPcs ? ea.pcsContribution : ea.contribution) : 0)}`, color: '#ec4899' }
+    ];
+    statsEl.innerHTML = cards.map(c => `
+      <div class="zone-stat" style="border-top:3px solid ${c.color};">
+        <div class="zone-stat-label">${c.label}</div>
+        <div class="zone-stat-value" style="color:${c.color}; font-size:22px;">${c.val} <span style="font-size:13px; font-weight:600; color:#64748b;">${uTxt}</span></div>
+        <div class="zone-stat-detail">${c.sub}</div>
+      </div>
+    `).join('');
+  }
+
+  const tableEl = document.getElementById('prodWeightedTable');
+  if (tableEl) {
+    let tbodyRows = '';
+    let itemIndex = 1;
+    w.groups.forEach(g => {
+      const gWeightPct = Math.round(g.weight * 100);
+      const gProd = isPcs ? g.pcsProductivity : g.productivity;
+      const gContrib = isPcs ? g.pcsContribution : g.contribution;
+
+      g.zones.forEach((z, zIdx) => {
+        const zWeightPct = Math.round(z.weight * 100);
+        const overallWeightPct = (g.weight * z.weight * 100).toFixed(1);
+        const zProd = isPcs ? z.pcsProd : z.prod;
+        const zContrib = isPcs ? z.pcsContribution : z.contribution;
+        const groupCell = zIdx === 0 ? `<td rowspan="${g.zones.length}" style="vertical-align:top; font-weight:700; background:#f8fafc; border-right:1px solid #e2e8f0;"><span style="color:#1e293b; font-size:13.5px;">${g.label}</span><div style="color:#0284c7; font-size:12px; margin-top:2px;">สัดส่วนกลุ่ม ${gWeightPct}%</div><div style="font-size:11.5px; color:#64748b; margin-top:4px;">เฉลี่ยกลุ่ม: <b>${fmt(gProd)}</b> ${uTxt}</div></td>` : '';
+
+        tbodyRows += `<tr>
+          <td style="text-align:center; color:#94a3b8; font-size:12px;">${itemIndex++}</td>
+          ${groupCell}
+          <td style="font-weight:700; color:#0f172a;"><span class="pill" style="background:#e0f2fe; color:#0369a1; font-size:12px; font-weight:700;">${escapeZoneHtml(z.label)}</span></td>
+          <td class="num">${zWeightPct}%</td>
+          <td class="num" style="color:#475569; font-weight:600;">${overallWeightPct}%</td>
+          <td class="num"><span class="metric-main" style="color:#059669; font-weight:700;">${fmt(zProd)}</span></td>
+          <td class="num"><span class="metric-main" style="color:#0284c7; font-weight:700;">+${fmt(zContrib)}</span></td>
+          <td class="num">${fmt(z.eligibleQty || 0)}</td>
+          <td class="num">${fmt(z.eligiblePcs || 0)}</td>
+          <td class="num">${fmt(z.hours || 0)} ชม.</td>
+        </tr>`;
+      });
+    });
+
+    const totOverallProd = isPcs ? w.avg_pcs_prod : w.avg_prod;
+    tableEl.innerHTML = `
+      <thead>
+        <tr>
+          <th style="width:40px; text-align:center;">#</th>
+          <th>กลุ่มหลัก (Type Pick)</th>
+          <th>Zone / Rack</th>
+          <th class="num">น้ำหนักในกลุ่ม</th>
+          <th class="num">น้ำหนักรวมคลัง</th>
+          <th class="num">Productivity (${uTxt})</th>
+          <th class="num">Contribution สู่ยอดรวม</th>
+          <th class="num">หน่วยหยิบ</th>
+          <th class="num">จำนวนชิ้น</th>
+          <th class="num">ชั่วโมงที่นับ</th>
+        </tr>
+      </thead>
+      <tbody>${tbodyRows}</tbody>
+      <tfoot>
+        <tr style="background:#f0fdf4; font-weight:800; border-top:2px solid #059669;">
+          <td colspan="4" style="text-align:right; color:#065f46; font-size:13.5px;">รวมสัดส่วนถ่วงน้ำหนักทั้งหมด (100%):</td>
+          <td class="num" style="color:#065f46;">100%</td>
+          <td class="num" style="color:#059669; font-size:15px; font-weight:800;">${fmt(totOverallProd)}</td>
+          <td class="num" style="color:#0284c7; font-size:15px; font-weight:800;">${fmt(totOverallProd)}</td>
+          <td colspan="3" style="color:#047857; font-size:12px; vertical-align:middle;">คะแนนรวมตามสูตร DC 2026</td>
+        </tr>
+      </tfoot>
+    `;
+  }
+}
+
+function renderTopPickersView() {
+  if (!A || !A.by_picker) return;
+  const isPcs = unitMode === 'pcs';
+  const unitLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+
+  let p = [...A.by_picker];
+  p.sort((a, b) => isPcs ? (b.avg_pcs_prod - a.avg_pcs_prod) : (b.avg_prod - a.avg_prod));
+  const topList = p.slice(0, prodPickerCount);
+
+  // Wire buttons in #pickerCountTog
+  const tog = document.getElementById('pickerCountTog');
+  if (tog) {
+    tog.querySelectorAll('button').forEach(b => {
+      b.classList.toggle('active', Number(b.dataset.count) === prodPickerCount);
+      b.onclick = () => {
+        prodPickerCount = Number(b.dataset.count) || 12;
+        renderTopPickersView();
+      };
+    });
+  }
+
+  // Render Horizontal Bar Chart
+  const el = document.getElementById('picker');
+  if (el) {
+    const exPicker = Chart.getChart('picker');
+    if (exPicker) exPicker.destroy();
+
+    const chartLabels = topList.map(x => (x.name && x.name !== x.picker ? x.name : x.picker) + ' (' + (x.location || x.zone) + ')');
+    const chartData = isPcs ? topList.map(x => x.avg_pcs_prod) : topList.map(x => x.avg_prod);
+
+    new Chart(el, {
+      type: 'bar',
+      data: {
+        labels: chartLabels,
+        datasets: [{
+          data: chartData,
+          backgroundColor: topList.map((x, i) => PALETTE[i % PALETTE.length]),
+          borderRadius: 6,
+          barThickness: topList.length > 20 ? 14 : 20
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        maintainAspectRatio: false,
+        layout: { padding: { right: 65 } },
+        plugins: {
+          legend: { display: false },
+          datalabels: {
+            anchor: 'end',
+            align: 'end',
+            formatter: (v) => fmt(v) + ' ' + unitLabel,
+            color: '#1e293b',
+            font: { size: 10.5, weight: '700' }
+          },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const picker = topList[ctx.dataIndex];
+                const zoneInfo = getZoneInfo(picker.location);
+                const affiliation = picker.affiliation || getPickerAffiliation(picker.picker);
+                return [
+                  ` สังกัด: ${affiliation}`,
+                  ` พนักงาน: ${picker.picker}${picker.name && picker.name !== picker.picker ? ' · ' + picker.name : ''}`,
+                  ` Location / Zone: ${picker.location} / ${picker.zone}`,
+                  ` Type Pick / Owner: ${zoneInfo.typePick} / ${zoneInfo.owner}`,
+                  ` Productivity (หยิบ): ${fmt(picker.avg_prod)} หยิบ/ชม.`,
+                  ` Productivity (ชิ้น): ${fmt(picker.avg_pcs_prod)} ชิ้น/ชม.`,
+                  ` ปริมาณ: ${fmt(picker.pcs)} ชิ้น (${fmt(picker.qty)} หน่วยหยิบ) (OT: ${picker.ot > 0 ? picker.ot + ' ชม.' : '-'})`
+                ];
+              }
+            }
+          }
+        },
+        scales: {
+          x: { grid: { color: '#f1f5f9' }, ticks: { callback: fmt } },
+          y: { grid: { display: false }, ticks: { font: { weight: '600', size: 11.5 } } }
+        }
+      }
+    });
+  }
+
+  // Render Leaderboard Table
+  const tableEl = document.getElementById('prodTopPickersTable');
+  if (tableEl) {
+    const rowsHtml = topList.map((x, idx) => {
+      let medal = `<span class="rank-medal rn">${idx + 1}</span>`;
+      if (idx === 0) medal = `<span class="rank-medal r1">🥇 1</span>`;
+      else if (idx === 1) medal = `<span class="rank-medal r2">🥈 2</span>`;
+      else if (idx === 2) medal = `<span class="rank-medal r3">🥉 3</span>`;
+
+      const aff = x.affiliation || getPickerAffiliation(x.picker) || '-';
+      const nameTxt = x.name && x.name !== x.picker ? `${x.name} (${x.picker})` : x.picker;
+      const zoneInfo = getZoneInfo(x.location);
+
+      return `<tr>
+        <td style="text-align:center; width:50px;">${medal}</td>
+        <td style="font-weight:700; color:#0f172a;">${escapeZoneHtml(nameTxt)}</td>
+        <td><span class="affiliation-key">${escapeZoneHtml(aff)}</span></td>
+        <td><span class="pill" style="background:#f1f5f9; color:#334155; font-size:11.5px; font-weight:600;">${escapeZoneHtml(x.location || x.zone || '-')}</span> <span style="font-size:11px; color:#64748b;">${escapeZoneHtml(zoneInfo.typePick || '')}</span></td>
+        <td class="num">${fmt(x.qty)} หน่วย</td>
+        <td class="num">${fmt(x.pcs)} ชิ้น</td>
+        <td class="num"><span class="metric-main" style="color:#0284c7; font-weight:700;">${fmt(x.avg_prod)}</span></td>
+        <td class="num"><span class="metric-main" style="color:#059669; font-weight:700;">${fmt(x.avg_pcs_prod)}</span></td>
+        <td class="num">${x.ot > 0 ? fmt(x.ot) + ' ชม.' : '-'}</td>
+      </tr>`;
+    }).join('');
+
+    tableEl.innerHTML = `
+      <thead>
+        <tr>
+          <th style="text-align:center; width:50px;">อันดับ</th>
+          <th>พนักงาน</th>
+          <th>สังกัด</th>
+          <th>Location / Zone หลัก</th>
+          <th class="num">หน่วยหยิบ</th>
+          <th class="num">จำนวนชิ้น</th>
+          <th class="num">Productivity (หยิบ/ชม.)</th>
+          <th class="num">Productivity (ชิ้น/ชม.)</th>
+          <th class="num">OT รวม</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    `;
+  }
+}
 
 function renderTargetVsActualChart() {
   const el = document.getElementById('targetVsActualChart');

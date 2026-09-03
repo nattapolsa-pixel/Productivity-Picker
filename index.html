@@ -545,6 +545,100 @@
       word-break: break-word
     }
 
+    .prod-subtabs-wrap {
+      margin-bottom: 20px;
+    }
+    .prod-subtabs {
+      display: inline-flex;
+      background: #f1f5f9;
+      border-radius: 14px;
+      padding: 4px;
+      border: 1px solid #e2e8f0;
+      gap: 4px;
+      flex-wrap: wrap;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+    }
+    .prod-tab-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 0;
+      background: transparent;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      color: #64748b;
+      padding: 9px 18px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all .2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .prod-tab-btn:hover {
+      color: #0f172a;
+      background: rgba(255, 255, 255, 0.65);
+    }
+    .prod-tab-btn.active {
+      background: #fff;
+      font-weight: 700;
+      box-shadow: 0 4px 12px -2px rgba(15, 23, 42, 0.12);
+    }
+    .prod-tab-btn.active[data-prodtab="target"] {
+      color: #0284c7;
+      box-shadow: 0 4px 12px -2px rgba(2, 132, 199, 0.25);
+    }
+    .prod-tab-btn.active[data-prodtab="weighted"] {
+      color: #059669;
+      box-shadow: 0 4px 12px -2px rgba(5, 150, 105, 0.25);
+    }
+    .prod-tab-btn.active[data-prodtab="pickers"] {
+      color: #d97706;
+      box-shadow: 0 4px 12px -2px rgba(217, 119, 6, 0.25);
+    }
+    .prod-tab-btn.active[data-prodtab="affiliation"] {
+      color: #7c3aed;
+      box-shadow: 0 4px 12px -2px rgba(124, 58, 237, 0.25);
+    }
+    .prod-tab-panel {
+      animation: fadeIn .25s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .badge-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px;
+      border-radius: 7px;
+      font-size: 11.5px;
+      font-weight: 700;
+    }
+    .badge-status.pass {
+      background: #ecfdf5;
+      color: #059669;
+      border: 1px solid #a7f3d0;
+    }
+    .badge-status.fail {
+      background: #fef2f2;
+      color: #dc2626;
+      border: 1px solid #fecaca;
+    }
+    .rank-medal {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .rank-medal.r1 { background: #fef3c7; color: #b45309; border: 1px solid #fde68a; }
+    .rank-medal.r2 { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+    .rank-medal.r3 { background: #ffedd5; color: #c2410c; border: 1px solid #fed7aa; }
+    .rank-medal.rn { background: #f8fafc; color: #94a3b8; }
+
     .heat {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -1916,37 +2010,103 @@
       </section>
 
       <section class="page" data-page="prod">
-        <!-- 📈 Chart 0: Target vs Actual Productivity Chart (Full Width) -->
-        <div class="card wide" style="margin-bottom:18px;">
-          <div
-            style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
-            <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📈 เปรียบเทียบ Productivity จริง vs
-              เป้าหมาย (Target vs Actual)</h3>
-            <span class="pill" id="targetVsActualBadge"
-              style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">เป้าหมาย:
-              <span id="targetBadgeVal">10</span></span>
+        <!-- 🗂️ Productivity Sub-Navigation Tabs -->
+        <div class="prod-subtabs-wrap">
+          <div class="prod-subtabs" id="prodSubtabs">
+            <button class="prod-tab-btn active" data-prodtab="target">
+              <span>🎯</span>
+              <span>เปรียบเทียบเป้าหมาย (Target vs Actual)</span>
+            </button>
+            <button class="prod-tab-btn" data-prodtab="weighted">
+              <span>⚖️</span>
+              <span>สูตรถ่วงน้ำหนัก (Weighted KPI)</span>
+            </button>
+            <button class="prod-tab-btn" data-prodtab="pickers">
+              <span>🏆</span>
+              <span>อันดับพนักงาน (Top Pickers)</span>
+            </button>
+            <button class="prod-tab-btn" data-prodtab="affiliation">
+              <span>🏢</span>
+              <span>แยกตามสังกัด (Affiliation)</span>
+            </button>
           </div>
-          <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ Productivity V2
-            รายวันของระบบที่เลือกกับเป้าหมายที่ตั้งไว้
-            (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)</div>
-          <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
         </div>
 
-        <div class="card wide">
-          <h3>Productivity รายคน — Top 12</h3>
-          <div class="sub">Overall KPI = Productivity แบบ V2 ของระบบที่เลือก · Active Hours = จำนวนชั่วโมงที่มี Pick > 0
-            · เฉลี่ยตรงราย Picker/วัน ไม่ถ่วง Weight Zone</div>
-          <div class="chartbox tall"><canvas id="picker"></canvas></div>
-          <div class="note">หน่วยหยิบใช้ค่า UOM จาก BigQuery · PTT ลบเวลา 7 ชั่วโมง ส่วน BPS ใช้เวลาเดิม และนับตาม
-            Calendar Date หลัง Normalize · Productivity แบบ V2 = ROUND(Total Pick Units ÷ Active Hours,0) ต่อ Picker/วัน
-            · Count เมื่อ Active Hours > 3 และ Productivity 1–999 · OT ถูกนับอัตโนมัติเมื่อมี Pick ในชั่วโมง OT ·
-            Overall เป็นค่าเฉลี่ยตรง ไม่ถ่วง Weight Zone</div>
+        <!-- 🎯 Panel 1: Target vs Actual -->
+        <div class="prod-tab-panel" id="prodTabPanel-target">
+          <!-- Quick Stat Cards -->
+          <div class="zone-summary" id="prodTargetStats" style="margin-bottom:18px;"></div>
+
+          <div class="card wide" style="margin-bottom:18px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
+              <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">📈 กราฟเปรียบเทียบ Productivity จริง vs เป้าหมายรายวัน</h3>
+              <span class="pill" id="targetVsActualBadge" style="background:#eef2ff; color:#4338ca; font-weight:700; font-size:12.5px; padding:3px 10px;">
+                เป้าหมาย: <span id="targetBadgeVal">10</span>
+              </span>
+            </div>
+            <div class="sub" style="margin-bottom:12px;">เปรียบเทียบ Productivity V2 รายวันกับเป้าหมายที่ตั้งไว้ (แท่งสีเขียว = ถึงเป้าหมาย / แท่งสีแดง = ต่ำกว่าเป้าหมาย)</div>
+            <div class="chartbox"><canvas id="targetVsActualChart"></canvas></div>
+          </div>
+
+          <!-- Daily Target Comparison Table -->
+          <div class="card wide">
+            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin-bottom:4px;">📋 ตารางสรุปผลงานเทียบเป้าหมายรายวัน</h3>
+            <div class="sub" style="margin-bottom:12px;">รายละเอียด Productivity รายวัน ส่วนต่างจากเป้าหมาย และสถานะการบรรลุเป้า</div>
+            <div style="overflow-x:auto;">
+              <table id="prodTargetDailyTable" class="affiliation-table"></table>
+            </div>
+          </div>
         </div>
-        <div class="card wide affiliation-breakdown-card">
-          <h3>Productivity แยกตามสังกัด</h3>
-          <div class="sub">จับรหัสพนักงานจาก Sheet “บันทึกเวลาทำงาน” · สรุปจำนวนชิ้น หน่วยหยิบ Productivity และ OT
-            รายวัน</div>
-          <div id="affiliationBreakdown"></div>
+
+        <!-- ⚖️ Panel 2: Weighted KPI DC 2026 -->
+        <div class="prod-tab-panel" id="prodTabPanel-weighted" style="display:none;">
+          <!-- 3 Main Category Stat Cards -->
+          <div class="zone-summary" id="prodWeightedStats" style="margin-bottom:18px;"></div>
+
+          <div class="card wide" style="margin-bottom:18px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
+              <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">⚖️ โครงสร้างสูตรถ่วงน้ำหนักตามชีต KPI DC 2026</h3>
+              <code style="background:#d1fae5; color:#047857; padding:4px 10px; border-radius:8px; font-size:12px; font-weight:700;">Overall = (37% × Full Rack) + (48% × Half Rack) + (15% × EA)</code>
+            </div>
+            <div class="sub" style="margin-bottom:14px;">จำแนกสัดส่วนน้ำหนักและคะแนน Productivity จาก 14 โซนย่อยตามตำแหน่งจริงในคลัง</div>
+            <div style="overflow-x:auto;">
+              <table id="prodWeightedTable" class="affiliation-table"></table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 🏆 Panel 3: Top Pickers -->
+        <div class="prod-tab-panel" id="prodTabPanel-pickers" style="display:none;">
+          <div class="card wide" style="margin-bottom:18px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
+              <h3 style="font-size:16px; font-weight:700; color:#0f172a; margin:0;">🏆 จัดอันดับ Productivity รายบุคคล (Top Pickers)</h3>
+              <div class="systog" id="pickerCountTog" style="padding:2px;">
+                <button data-count="12" class="active" style="padding:4px 12px; font-size:12px;">Top 12</button>
+                <button data-count="20" style="padding:4px 12px; font-size:12px;">Top 20</button>
+                <button data-count="50" style="padding:4px 12px; font-size:12px;">Top 50</button>
+              </div>
+            </div>
+            <div class="sub" style="margin-bottom:12px;">Active Hours > 3 และ Productivity 1–999 · เรียงตามผลงาน Productivity สูงสุด</div>
+            <div class="chartbox tall"><canvas id="picker"></canvas></div>
+            <div class="note" style="margin-top:10px;">หน่วยหยิบใช้ค่า UOM จาก BigQuery · PTT ลบเวลา 7 ชั่วโมง ส่วน BPS ใช้เวลาเดิม และนับตาม Calendar Date หลัง Normalize · Productivity แบบ V2 = ROUND(Total Pick Units ÷ Active Hours,0) ต่อ Picker/วัน</div>
+          </div>
+
+          <div class="card wide">
+            <h3 style="font-size:15.5px; font-weight:700; color:#0f172a; margin-bottom:4px;">🥇 ตารางจัดอันดับพนักงานยอดเยี่ยม</h3>
+            <div class="sub" style="margin-bottom:12px;">อันดับพนักงาน, สังกัด, โซนหลัก, หน่วยหยิบ และ Productivity</div>
+            <div style="overflow-x:auto;">
+              <table id="prodTopPickersTable" class="affiliation-table"></table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 🏢 Panel 4: Affiliation Breakdown -->
+        <div class="prod-tab-panel" id="prodTabPanel-affiliation" style="display:none;">
+          <div class="card wide affiliation-breakdown-card">
+            <h3>🏢 สรุปผล Productivity และ OT แยกตามสังกัด</h3>
+            <div class="sub">จับรหัสพนักงานจาก Sheet “บันทึกเวลาทำงาน” · สรุปจำนวนชิ้น หน่วยหยิบ Productivity และ OT รายวัน</div>
+            <div id="affiliationBreakdown"></div>
+          </div>
         </div>
       </section>
 
