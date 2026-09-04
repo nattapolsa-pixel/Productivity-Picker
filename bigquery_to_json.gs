@@ -3364,12 +3364,13 @@ function testRun() {
       payloadLines += Number(ptt.rows[i + 6]) || 0;
     }
 
-    // Calendar Date ต้องตรงกับ partition วันนั้นโดยตรง ไม่มีการดึงเช้ามืดของวันถัดไปกลับมา
+    // Shift Date (ตัดรอบ 07:00 น. ตามกะการทำงาน) ต้องตรงกับยอดใน payload ที่คำนวณตาม shift_date
     const direct = bqQueryAll_([
       'SELECT COUNT(*) AS records, SUM(pcs) AS total_pcs, SUM(pick_qty) AS total_pick_units',
       'FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
       "WHERE UPPER(category) = 'PTT'",
-      '  AND pick_date = DATE ' + sqlStringLiteral_(testDate)
+      '  AND pick_date BETWEEN DATE ' + sqlStringLiteral_(testDate) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(testDate) + ', INTERVAL 1 DAY)',
+      '  AND ' + dashboardShiftDateSql_('pick_date', 'tmin') + ' = DATE ' + sqlStringLiteral_(testDate)
     ].join('\n'), 60000);
     if (!direct.length) throw new Error('BigQuery ไม่ส่งผลตรวจยอด PTT');
     const bqLines = Number(direct[0][0]) || 0;
@@ -3383,10 +3384,10 @@ function testRun() {
         ' | BigQuery pcs=' + bqPcs + ', units=' + bqUnits + ', rows=' + bqLines
       );
     }
-    pass('PTT Calendar-date reconciliation',
+    pass('PTT Shift-date reconciliation',
       testDate + ' → ' + Number(payloadUnits).toLocaleString() + ' หน่วยหยิบ, ' +
       Number(payloadPcs).toLocaleString() + ' ชิ้น, ' + Number(payloadLines).toLocaleString() + ' records ตรง BigQuery');
-  } catch (err) { fail('PTT Calendar-date reconciliation', err); throw err; }
+  } catch (err) { fail('PTT Shift-date reconciliation', err); throw err; }
 
   try {
     const bounds = getOrLoadDashboardBounds_();
@@ -3402,7 +3403,7 @@ function testRun() {
     pass('Owner + Item + Location/Zone mapping', (itemCube.rows.length / 7).toLocaleString() + ' กลุ่มในวันที่ ' + testDate + ' · ครบทุก Owner');
   } catch (err) { fail('Owner + Item mapping', err); throw err; }
 
-  const summary = '🎉 TEST RUN PASSED — Calendar Date + PTT totals ถูกต้อง พร้อม Deploy\n' + results.join('\n');
+  const summary = '🎉 TEST RUN PASSED — Shift Date + PTT totals ถูกต้อง พร้อม Deploy\n' + results.join('\n');
   Logger.log(summary);
   return { status: 'success', message: 'TEST RUN PASSED', checks: results };
 }
