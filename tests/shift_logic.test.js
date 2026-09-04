@@ -19,12 +19,12 @@ const context = vm.createContext({
 vm.runInContext(source.slice(0, initMarker), context, {filename:'app.js'});
 
 const cases = [
-  ['2026-08-08', 419, 'night', '2026-08-08', 719],
+  ['2026-08-08', 419, 'night', '2026-08-07', 719],
   ['2026-08-08', 420, 'morning', '2026-08-08', 0],
   ['2026-08-08', 1139, 'morning', '2026-08-08', 719],
   ['2026-08-08', 1140, 'night', '2026-08-08', 0],
   ['2026-08-08', 1439, 'night', '2026-08-08', 299],
-  ['2026-08-09', 0, 'night', '2026-08-09', 300]
+  ['2026-08-09', 0, 'night', '2026-08-08', 300]
 ];
 for (const [date, minute, shift, shiftDate, shiftMinute] of cases) {
   context.__case = context.shiftOf(date, minute);

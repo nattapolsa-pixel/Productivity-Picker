@@ -451,11 +451,12 @@ function loadPickerSundayOtCalendar_(forceRefresh) {
   return result;
 }
 
-// Calendar Date หลัง Normalize:
-// PTT ถูกลบ 7 ชั่วโมงตั้งแต่ v_pick_clean, BPS ใช้เวลาเดิม
-// 00:00–06:59 ยังคงเป็นวันที่ปฏิทินนั้น ไม่ย้อนกลับไปวันก่อน
+// กะคลังสินค้า 24 ชม. ตัดรอบ 07:00 น. ถึง 06:59 น. ของวันถัดไป
+// งานช่วง 00:00–06:59 (tmin < 420) ถือเป็นกะดึกของวันก่อนหน้า (Shift Date = pick_date - 1 วัน)
 function dashboardShiftDateSql_(pickDateExpression, tminExpression) {
-  return String(pickDateExpression || 'pick_date');
+  const p = String(pickDateExpression || 'pick_date');
+  const t = String(tminExpression || 'tmin');
+  return "IF(" + t + " < 420, DATE_SUB(" + p + ", INTERVAL 1 DAY), " + p + ")";
 }
 
 // กะคลัง 24 ชม. ต้องตัดจาก normalized timestamp เท่านั้น
@@ -671,7 +672,7 @@ function buildSlotCubeData_(e, requestScope, dataEpoch) {
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
     "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
-    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
+    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
     '),',
     'filtered AS (',
     '  SELECT * FROM base',
@@ -741,8 +742,8 @@ function buildPickerItemsData_(e, requestScope) {
     '  FROM `' + BQ_PROJECT + '.' + BQ_DATASET + '.' + DASHBOARD_TABLE + '`',
     '  WHERE UPPER(category) = ' + sqlStringLiteral_(system),
     "    AND pick_date >= DATE_SUB(CURRENT_DATE('Asia/Bangkok'), INTERVAL " + RECENT_DAYS + ' DAY)',
-    // Calendar Date อ่านเฉพาะช่วง [from,to] เท่านั้น ไม่ดึงวันถัดไปมาปน
-    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE ' + sqlStringLiteral_(to),
+    // ครอบคลุมถึงเช้ามืดวันถัดไปสำหรับกะดึก แล้วกรองด้วย shift_date
+    '    AND pick_date BETWEEN DATE ' + sqlStringLiteral_(from) + ' AND DATE_ADD(DATE ' + sqlStringLiteral_(to) + ', INTERVAL 1 DAY)',
     '    AND COALESCE(CAST(picker_id AS STRING), \'(none)\') = ' + sqlStringLiteral_(picker),
     '),',
     'filtered AS (',

@@ -632,7 +632,7 @@ function defaultCurrentMonthRange(baseDate = DMAX) {
 function shiftOf(ds, t) {
   if (t >= 420 && t < 1140) return { sh: 'morning', sd: ds, sm: t - 420 };   // A: 07:00–18:59
   if (t >= 1140) return { sh: 'night', sd: ds, sm: t - 1140 };               // B: 19:00–23:59
-  return { sh: 'night', sd: ds, sm: t + 300 };                               // B: 00:00–06:59 แต่ยังเป็น Calendar Date เดิม
+  return { sh: 'night', sd: addDays(ds, -1), sm: t + 300 };                  // B: 00:00–06:59 รวมเป็น Shift Date ของวันก่อนหน้า
 }
 // OT card ยังแสดงจากช่วงเวลาที่มี Pick จริง แต่ OT ไม่ถูกบวกเป็นตัวหารแยก:
 // Active Hour Bucket ที่เกิดในช่วง OT จะถูกนับอยู่ใน Active Hours โดยอัตโนมัติ
