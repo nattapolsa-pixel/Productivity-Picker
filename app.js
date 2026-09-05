@@ -379,7 +379,21 @@ function saveProdTargetToStorage(val) {
 }
 
 function getTargetForZoneOrType(typePick, zone) {
-  const tStr = String(typePick || zone || '').toLowerCase();
+  let tp = typePick;
+  let zn = zone;
+  if (!zn && tp) {
+    const tLower = String(tp).toLowerCase();
+    if (!tLower.includes('rack') && !tLower.includes('sort') && !tLower.includes('mezz') && !tLower.includes('train')) {
+      zn = tp;
+      tp = '';
+    }
+  }
+  if (!tp || tp === '-' || tp === 'ไม่พบใน Zone_V2') {
+    if (typeof getTypePickForZone === 'function') {
+      tp = getTypePickForZone(zn);
+    }
+  }
+  const tStr = String(tp || zn || '').toLowerCase();
   if (tStr.includes('full rack') || tStr.includes('fullrack')) return prodTargets.fullRack;
   if (tStr.includes('half rack') || tStr.includes('halfrack')) return prodTargets.halfRack;
   if (tStr.includes('micro rack') || tStr.includes('microrack')) return prodTargets.microRack;
@@ -1213,6 +1227,54 @@ function getZoneInfo(rawLocation) {
     owner: info ? info.owner : '-',
     known: Boolean(info)
   };
+}
+
+function getTypePickForZone(zoneName, zObj) {
+  if (zObj) {
+    if (zObj.typePick && zObj.typePick !== '-' && zObj.typePick !== 'ไม่พบใน Zone_V2') {
+      return zObj.typePick;
+    }
+    if (Array.isArray(zObj.types) && zObj.types.length) {
+      const valid = zObj.types.filter(t => t && t !== '-' && t !== 'ไม่พบใน Zone_V2');
+      if (valid.length > 0) return valid.join(', ');
+    }
+  }
+  const zn = String(zoneName || (zObj && (zObj.name || zObj.zone)) || '').trim().toUpperCase();
+  if (!zn || zn === '-' || zn === '??') return '-';
+
+  const zm = (typeof ZONE_MASTER === 'object' && ZONE_MASTER) ? ZONE_MASTER : (typeof ZONE_MASTER_FALLBACK === 'object' ? ZONE_MASTER_FALLBACK : {});
+
+  // 1. Direct location match (e.g. 'BE', 'EA', 'FA')
+  if (zm[zn] && zm[zn].typePick && zm[zn].typePick !== '-' && zm[zn].typePick !== 'ไม่พบใน Zone_V2') {
+    return zm[zn].typePick;
+  }
+
+  // 2. Search entries where entry.zone matches zn (e.g. 'AA-AF', 'BG-BH', 'AJ-AK', 'CF-DF', 'CB-DB-DC-CC')
+  for (const key of Object.keys(zm)) {
+    const item = zm[key];
+    if (item && String(item.zone || '').trim().toUpperCase() === zn) {
+      if (item.typePick && item.typePick !== '-' && item.typePick !== 'ไม่พบใน Zone_V2') {
+        return item.typePick;
+      }
+    }
+  }
+
+  // 3. Try splitting compound zone name (e.g. "AA-AF" -> "AA", "BG-BH" -> "BG")
+  const parts = zn.split(/[-_]/);
+  for (const part of parts) {
+    const p = part.trim();
+    if (p && zm[p] && zm[p].typePick && zm[p].typePick !== '-' && zm[p].typePick !== 'ไม่พบใน Zone_V2') {
+      return zm[p].typePick;
+    }
+  }
+
+  // 4. Try prefix match with getZoneInfo
+  const zi = getZoneInfo(zn);
+  if (zi && zi.typePick && zi.typePick !== '-' && zi.typePick !== 'ไม่พบใน Zone_V2') {
+    return zi.typePick;
+  }
+
+  return '-';
 }
 
 function getZoneMasterEntries() {
@@ -2358,15 +2420,23 @@ function aggregate(system, from, to, sf) {
         out.avgPcsValues.push(g.pcsProd);
       }
     });
-    return Object.values(map).map(v => ({
-      name: v.name, pcs: v.pcs, qty: v.qty, lines: v.lines,
-      hours: r1(v.hours), eligiblePcs: v.eligiblePcs, eligibleQty: v.eligibleQty,
-      productiveGroups: v.productiveGroups, pickers: v.pickers.size, productivePickers: v.productivePickers.size,
-      types: [...v.types].sort(), owners: [...v.owners].sort(),
-      avg_prod: r1(mean(v.avgValues)),
-      avg_pcs_prod: r1(mean(v.avgPcsValues)),
-      mean_prod: r1(mean(v.avgValues)), mean_pcs_prod: r1(mean(v.avgPcsValues))
-    })).sort((a, b) => {
+    return Object.values(map).map(v => {
+      const typeStr = (function() {
+        const fromTypes = [...v.types].filter(t => t && t !== '-' && t !== 'ไม่พบใน Zone_V2').join(', ');
+        if (fromTypes) return fromTypes;
+        if (typeof getTypePickForZone === 'function') return getTypePickForZone(v.name);
+        return '-';
+      })();
+      return {
+        name: v.name, zone: v.name, typePick: typeStr, pcs: v.pcs, qty: v.qty, lines: v.lines,
+        hours: r1(v.hours), eligiblePcs: v.eligiblePcs, eligibleQty: v.eligibleQty,
+        productiveGroups: v.productiveGroups, pickers: v.pickers.size, productivePickers: v.productivePickers.size,
+        types: [...v.types].sort(), owners: [...v.owners].sort(),
+        avg_prod: r1(mean(v.avgValues)),
+        avg_pcs_prod: r1(mean(v.avgPcsValues)),
+        mean_prod: r1(mean(v.avgValues)), mean_pcs_prod: r1(mean(v.avgPcsValues))
+      };
+    }).sort((a, b) => {
       const aUnknown = a.name === '-' || a.name === 'ไม่พบใน Zone_V2' ? 1 : 0;
       const bUnknown = b.name === '-' || b.name === 'ไม่พบใน Zone_V2' ? 1 : 0;
       return (aUnknown - bUnknown) || (b.avg_prod - a.avg_prod) || (b.qty - a.qty) || a.name.localeCompare(b.name);
@@ -6889,15 +6959,17 @@ function drawEfficiencyTables(daily, target, isPcs, uTxt) {
 
     const rows = zones.map((z, index) => {
       const prod = isPcs ? Number(z.avg_pcs_prod || 0) : Number(z.avg_prod || 0);
-      const zoneTarget = getTargetForZoneOrType(z.typePick, z.zone);
+      const zoneName = z.name || z.zone || '-';
+      const typePick = getTypePickForZone(zoneName, z);
+      const zoneTarget = getTargetForZoneOrType(typePick, zoneName);
       const eff = zoneTarget > 0 ? Math.round(prod / zoneTarget * 1000) / 10 : 0;
       const isPass = prod >= zoneTarget;
       const statusBadge = isPass ? '<span class="badge-status pass">✅ Hit</span>' : '<span class="badge-status fail">⚠️ Miss</span>';
 
       return `<tr>
         <td>${index + 1}</td>
-        <td><b>${escapeZoneHtml(z.name || z.zone || '-')}</b></td>
-        <td><span class="pill" style="font-size:11.5px;padding:2px 8px;">${escapeZoneHtml(z.typePick || '-')}</span></td>
+        <td><b>${escapeZoneHtml(zoneName)}</b></td>
+        <td><span class="pill" style="font-size:11.5px;padding:2px 8px;">${escapeZoneHtml(typePick)}</span></td>
         <td class="num">${fmt(z.pcs || 0)}</td>
         <td class="num">${fmt(z.qty || 0)}</td>
         <td class="num" style="font-weight:700;color:#2563eb;">${fmtDecimal1(prod)}</td>
@@ -7164,6 +7236,8 @@ function drawCycleTimeTables(daily, targetCycleTime, isPcs, uTxt) {
     const zones = [...(A.by_zone_prod || A.by_zone || [])];
     const rows = zones.map((z, index) => {
       const prod = isPcs ? Number(z.avg_pcs_prod || 0) : Number(z.avg_prod || 0);
+      const zoneName = z.name || z.zone || '-';
+      const typePick = getTypePickForZone(zoneName, z);
       const secUnit = prod > 0 ? Math.round((3600 / prod) * 10) / 10 : 0;
       const pcsProd = Number(z.avg_pcs_prod || z.pcs || 0);
       const secPc = pcsProd > 0 ? Math.round((3600 / pcsProd) * 10) / 10 : 0;
@@ -7177,8 +7251,8 @@ function drawCycleTimeTables(daily, targetCycleTime, isPcs, uTxt) {
 
       return `<tr>
         <td>${index + 1}</td>
-        <td><b>${escapeZoneHtml(z.name || z.zone || '-')}</b></td>
-        <td><span class="pill" style="font-size:11.5px;padding:2px 8px;">${escapeZoneHtml(z.typePick || '-')}</span></td>
+        <td><b>${escapeZoneHtml(zoneName)}</b></td>
+        <td><span class="pill" style="font-size:11.5px;padding:2px 8px;">${escapeZoneHtml(typePick)}</span></td>
         <td class="num">${fmt(z.pcs || 0)}</td>
         <td class="num">${fmt(z.qty || 0)}</td>
         <td class="num" style="font-weight:700;color:#0891b2;">${fmtDecimal1(prod)}</td>
