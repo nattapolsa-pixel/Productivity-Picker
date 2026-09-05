@@ -95,7 +95,7 @@ const PRODUCTIVITY_WEIGHT_CONFIG = Object.freeze([
   })
 ]);
 // ==============================================
-const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
+const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', efficiency: '🎯 Efficiency (ประสิทธิภาพการหยิบ)', cycletime: '⏱️ Cycle Time (รอบเวลาการทำงาน)', incentive: '💰 Incentive (เบี้ยขยัน & ผลตอบแทนตามเป้า)', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
 const HISTORICAL_V1 = Object.freeze({
   source: 'Results Master!E (Total pick)',
   startDate: '2026-01-02',
@@ -2321,6 +2321,7 @@ function aggregate(system, from, to, sf) {
     const shift = Object.keys(o.sh).sort((a, b) => o.sh[b] - o.sh[a])[0] || '-';
     return {
       picker, name: getPickerName(picker), affiliation: o.affiliation, pcs: o.pcs, qty: o.q, lines: o.n, ot: r1(o.ot), shift,
+      hours: r1(o.hours),
       avg_prod: r1(mean(o.prodValues)),
       avg_pcs_prod: r1(mean(o.pcsProdValues)),
       zone, location
@@ -6570,7 +6571,1094 @@ const builders = {
     if (Date.now() - plannerRosterLastCheckedAt >= PLANNER_ROSTER_AUTO_REFRESH_MS) {
       setTimeout(() => void refreshPlannerRoster(false, { silent: true }).catch(() => { }), 0);
     }
+  },
+  efficiency() {
+    renderEfficiencyPage();
+  },
+  cycletime() {
+    renderCycleTimePage();
+  },
+  incentive() {
+    renderIncentivePage();
   }
+};
+
+// ===== 🎯 Efficiency Page Renderer =====
+function renderEfficiencyPage() {
+  const host = document.getElementById('efficiencyPage');
+  if (!host || !A) return;
+
+  const isPcs = unitMode === 'pcs';
+  const uTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+  const currentProd = isPcs ? Number(A.kpis.avg_pcs_prod || 0) : Number(A.kpis.avg_prod || 0);
+  const target = prodTarget > 0 ? prodTarget : 170;
+  const efficiencyPct = target > 0 ? (currentProd / target * 100) : 0;
+  const isHit = currentProd >= target;
+  const gap = Math.round((currentProd - target) * 10) / 10;
+
+  const daily = A.daily || [];
+  const hitDays = daily.filter(d => (isPcs ? (d.avg_pcs_prod || 0) : (d.avg_prod || 0)) >= target).length;
+  const hitDayPct = daily.length > 0 ? Math.round(hitDays / daily.length * 100) : 0;
+
+  const pickers = (A.by_picker || []).filter(p => (isPcs ? p.avg_pcs_prod : p.avg_prod) > 0);
+  const hitPickers = pickers.filter(p => (isPcs ? p.avg_pcs_prod : p.avg_prod) >= target).length;
+  const hitPickerPct = pickers.length > 0 ? Math.round(hitPickers / pickers.length * 100) : 0;
+
+  const cards = [
+    { label: '🎯 Efficiency เฉลี่ยรวม', val: `${fmtDecimal1(efficiencyPct)}%`, unit: '', sub: `เทียบเป้าหมาย ${target} ${uTxt}`, color: isHit ? '#059669' : '#d97706' },
+    { label: '📊 สถานะภาพรวม', val: isHit ? '✅ ผ่านเป้า (Hit)' : '⚠️ ต่ำกว่าเป้า (Miss)', unit: '', sub: gap >= 0 ? `เกินเป้า +${gap} ${uTxt}` : `ขาดอีก ${Math.abs(gap)} ${uTxt}`, color: isHit ? '#059669' : '#dc2626' },
+    { label: '📅 วันที่ผ่านเกณฑ์ (Hit Rate)', val: `${hitDays} / ${daily.length}`, unit: 'วัน', sub: `${hitDayPct}% ของวันทำงานทั้งหมด`, color: '#2563eb' },
+    { label: '👥 พนักงานที่ผ่านเกณฑ์', val: `${hitPickers} / ${pickers.length}`, unit: 'คน', sub: `${hitPickerPct}% ของพนักงาน Active`, color: '#7c3aed' }
+  ];
+
+  const cardsHtml = cards.map(c => `
+    <div class="zone-stat" style="border-top:3px solid ${c.color};background:#fff;border-radius:14px;padding:16px 20px;box-shadow:0 4px 14px rgba(15,23,42,0.05);">
+      <div class="zone-stat-label" style="font-size:12.5px;color:#64748b;font-weight:600;">${c.label}</div>
+      <div class="zone-stat-value" style="color:${c.color};font-size:24px;font-weight:800;margin:4px 0 2px 0;">${c.val} <span style="font-size:13px;color:#64748b;font-weight:500;">${c.unit}</span></div>
+      <div style="font-size:11.5px;color:#94a3b8;">${c.sub}</div>
+    </div>`).join('');
+
+  host.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:18px;">
+      <div>
+        <h2 style="margin:0;font-size:20px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:8px;">
+          <span>🎯 วิเคราะห์ประสิทธิภาพการหยิบสินค้า (Picking Efficiency &amp; Target Achievement)</span>
+        </h2>
+        <div class="sub" style="margin-top:3px;">วัดความคุ้มค่าและผลงานเทียบเป้าหมาย KPI (${target} ${uTxt}) · Hit Rate รายวันและรายบุคคล</div>
+      </div>
+      <button onclick="openTargetSettingsModal()" style="display:inline-flex;align-items:center;gap:6px;border:1px solid #c7d2fe;background:#eef2ff;color:#4338ca;padding:8px 16px;border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer;transition:.2s;">
+        ⚙️ ตั้งค่า Target (${target} ${uTxt})
+      </button>
+    </div>
+
+    <div class="zone-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:20px;">
+      ${cardsHtml}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:18px;margin-bottom:20px;">
+      <div class="card wide" style="margin:0;padding:20px 22px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin:0;">📈 แนวโน้ม % Efficiency รายวัน</h3>
+          <span class="pill" style="background:#ecfdf5;color:#059669;font-weight:700;font-size:12px;padding:3px 10px;">Target = 100%</span>
+        </div>
+        <div class="sub" style="margin-bottom:14px;">เส้น % ประสิทธิภาพเทียบเกณฑ์มาตรฐาน 100% (จุดเขียว = ผ่านเกณฑ์ / จุดส้ม = ต่ำกว่าเกณฑ์)</div>
+        <div class="chartbox" style="height:320px;position:relative;"><canvas id="efficiencyTrendChart"></canvas></div>
+      </div>
+
+      <div class="card wide" style="margin:0;padding:20px 22px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin:0;">🅰️🅱️ ประสิทธิภาพแยกตามกะ และระบบ</h3>
+          <span class="pill" style="background:#eef2ff;color:#4338ca;font-weight:700;font-size:12px;padding:3px 10px;">Shift &amp; System</span>
+        </div>
+        <div class="sub" style="margin-bottom:14px;">เปรียบเทียบ % Efficiency ของ กะ A vs กะ B และ PTT vs BPS เทียบกับเป้าหมาย</div>
+        <div class="chartbox" style="height:320px;position:relative;"><canvas id="efficiencyShiftChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card wide" style="margin-bottom:20px;">
+      <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:4px;">📋 รายละเอียดผลงานและ % Efficiency รายวัน</h3>
+      <div class="sub" style="margin-bottom:12px;">ปริมาณงาน, ชั่วโมง Active, Productivity จริงเทียบเป้าหมาย และส่วนต่าง Gap รายวัน</div>
+      <div style="overflow-x:auto;">
+        <table id="efficiencyDailyTable" class="affiliation-table"></table>
+      </div>
+    </div>
+
+    <div class="card wide">
+      <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:4px;">🏭 ประสิทธิภาพและอันดับแยกตามโซน (Zone Efficiency Ranking)</h3>
+      <div class="sub" style="margin-bottom:12px;">วิเคราะห์ Productivity และ % ประสิทธิภาพรายโซนเทียบเป้าหมายประจำประเภท (Full Rack, Half Rack, EA)</div>
+      <div style="overflow-x:auto;">
+        <table id="efficiencyZoneTable" class="affiliation-table"></table>
+      </div>
+    </div>
+  `;
+
+  drawEfficiencyCharts(daily, target, isPcs, uTxt);
+  drawEfficiencyTables(daily, target, isPcs, uTxt);
+}
+
+function drawEfficiencyCharts(daily, target, isPcs, uTxt) {
+  const c1 = Chart.getChart('efficiencyTrendChart'); if (c1) c1.destroy();
+  const c2 = Chart.getChart('efficiencyShiftChart'); if (c2) c2.destroy();
+
+  const el1 = document.getElementById('efficiencyTrendChart');
+  if (el1 && daily.length > 0) {
+    const labels = daily.map(d => d.date.slice(8, 10) + '/' + d.date.slice(5, 7));
+    const effData = daily.map(d => {
+      const p = isPcs ? Number(d.avg_pcs_prod || 0) : Number(d.avg_prod || 0);
+      return target > 0 ? Math.round(p / target * 1000) / 10 : 0;
+    });
+    const baseline = daily.map(() => 100);
+
+    new Chart(el1, {
+      data: {
+        labels,
+        datasets: [
+          {
+            type: 'line',
+            label: '% Efficiency',
+            data: effData,
+            borderColor: '#2563eb',
+            backgroundColor: '#2563eb',
+            borderWidth: 2.5,
+            pointRadius: 5,
+            pointHoverRadius: 7,
+            pointBackgroundColor: effData.map(v => v >= 100 ? '#10b981' : '#f59e0b'),
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+            tension: 0.3,
+            datalabels: {
+              display: true,
+              formatter: val => val > 0 ? `${val}%` : '',
+              align: 'top',
+              offset: 4,
+              color: ctx => (effData[ctx.dataIndex] >= 100 ? '#059669' : '#d97706'),
+              font: { weight: '700', size: 10.5 },
+              backgroundColor: 'rgba(255,255,255,0.9)',
+              borderRadius: 4,
+              padding: { top: 1, bottom: 1, left: 3, right: 3 }
+            }
+          },
+          {
+            type: 'line',
+            label: 'Target Baseline (100%)',
+            data: baseline,
+            borderColor: '#94a3b8',
+            borderWidth: 1.8,
+            borderDash: [5, 5],
+            pointRadius: 0,
+            fill: false,
+            datalabels: { display: false }
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top' },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                if (ctx.datasetIndex === 0) {
+                  const d = daily[ctx.dataIndex];
+                  const p = isPcs ? Number(d.avg_pcs_prod || 0) : Number(d.avg_prod || 0);
+                  const status = p >= target ? '✅ ผ่านเป้า' : '⚠️ ต่ำกว่าเป้า';
+                  return ` Efficiency: ${ctx.parsed.y}% (${p} ${uTxt}) - ${status}`;
+                }
+                return ` เป้าหมายมาตรฐาน: 100% (${target} ${uTxt})`;
+              }
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: false,
+            suggestedMin: 50,
+            suggestedMax: 150,
+            ticks: { callback: v => `${v}%` },
+            title: { display: true, text: '% ความสำเร็จเทียบเป้า' }
+          }
+        }
+      }
+    });
+  }
+
+  const el2 = document.getElementById('efficiencyShiftChart');
+  if (el2) {
+    const shiftAGroups = daily.map(d => d.shiftA_prod || 0).filter(v => v > 0);
+    const shiftBGroups = daily.map(d => d.shiftB_prod || 0).filter(v => v > 0);
+    const shiftAAvg = shiftAGroups.length ? shiftAGroups.reduce((a, b) => a + b, 0) / shiftAGroups.length : 0;
+    const shiftBAvg = shiftBGroups.length ? shiftBGroups.reduce((a, b) => a + b, 0) / shiftBGroups.length : 0;
+
+    let pttAvg = 0, bpsAvg = 0;
+    try {
+      const pttData = aggregate('PTT', dfrom, dto, shiftF);
+      pttAvg = Number(pttData?.kpis?.avg_prod || 0);
+      const bpsData = aggregate('BPS', dfrom, dto, shiftF);
+      bpsAvg = Number(bpsData?.kpis?.avg_prod || 0);
+    } catch (_) {}
+
+    const categories = [
+      { label: 'กะ A (เช้า)', prod: shiftAAvg },
+      { label: 'กะ B (ดึก)', prod: shiftBAvg },
+      { label: 'PTT (Pick)', prod: pttAvg },
+      { label: 'BPS (Sort)', prod: bpsAvg }
+    ];
+
+    const effValues = categories.map(c => target > 0 ? Math.round(c.prod / target * 1000) / 10 : 0);
+    const bgColors = effValues.map(v => v >= 100 ? 'rgba(16,185,129,0.85)' : 'rgba(245,158,11,0.85)');
+
+    new Chart(el2, {
+      type: 'bar',
+      data: {
+        labels: categories.map(c => c.label),
+        datasets: [
+          {
+            label: '% Efficiency',
+            data: effValues,
+            backgroundColor: bgColors,
+            borderRadius: 8,
+            datalabels: {
+              display: true,
+              formatter: (val, ctx) => `${val}%\n(${Math.round(categories[ctx.dataIndex].prod)} ${uTxt})`,
+              color: '#0f172a',
+              anchor: 'end',
+              align: 'top',
+              font: { weight: '700', size: 10.5 }
+            }
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` Efficiency: ${ctx.parsed.y}% (Productivity: ${Math.round(categories[ctx.dataIndex].prod * 10) / 10} ${uTxt})`
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            suggestedMax: Math.max(...effValues, 120) * 1.25,
+            ticks: { callback: v => `${v}%` }
+          }
+        }
+      }
+    });
+  }
+}
+
+function drawEfficiencyTables(daily, target, isPcs, uTxt) {
+  const dailyTable = document.getElementById('efficiencyDailyTable');
+  if (dailyTable) {
+    const rows = daily.map((d, index) => {
+      const prod = isPcs ? Number(d.avg_pcs_prod || 0) : Number(d.avg_prod || 0);
+      const eff = target > 0 ? Math.round(prod / target * 1000) / 10 : 0;
+      const gap = Math.round((prod - target) * 10) / 10;
+      const isPass = prod >= target;
+      const statusBadge = isPass ? '<span class="badge-status pass">✅ Hit</span>' : '<span class="badge-status fail">⚠️ Miss</span>';
+      const gapText = gap >= 0 ? `<span style="color:#059669;font-weight:700;">+${gap}</span>` : `<span style="color:#dc2626;font-weight:700;">${gap}</span>`;
+
+      return `<tr>
+        <td>${index + 1}</td>
+        <td><b>${d.date.slice(8, 10)}/${d.date.slice(5, 7)}/${d.date.slice(0, 4)}</b></td>
+        <td class="num">${fmt(d.pcs || 0)}</td>
+        <td class="num">${fmt(d.qty || 0)}</td>
+        <td class="num">${fmtDecimal1(d.hours || 0)}</td>
+        <td class="num" style="font-weight:700;color:#2563eb;">${fmtDecimal1(prod)}</td>
+        <td class="num">${target}</td>
+        <td class="num" style="font-weight:800;color:${isPass ? '#059669' : '#d97706'};">${fmtDecimal1(eff)}%</td>
+        <td class="num">${gapText}</td>
+        <td style="text-align:center;">${statusBadge}</td>
+      </tr>`;
+    }).join('');
+
+    dailyTable.innerHTML = `
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>วันที่</th>
+          <th class="num">จำนวนชิ้น</th>
+          <th class="num">หน่วยหยิบ</th>
+          <th class="num">ชั่วโมง Active</th>
+          <th class="num">Prod จริง (${uTxt})</th>
+          <th class="num">Target</th>
+          <th class="num">% Efficiency</th>
+          <th class="num">Gap ส่วนต่าง</th>
+          <th style="text-align:center;">สถานะ</th>
+        </tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="10" class="empty-cell">ไม่พบข้อมูลในช่วงที่เลือก</td></tr>'}</tbody>
+    `;
+  }
+
+  const zoneTable = document.getElementById('efficiencyZoneTable');
+  if (zoneTable) {
+    const zones = [...(A.by_zone_prod || A.by_zone || [])];
+    zones.sort((a, b) => {
+      const pa = isPcs ? Number(a.avg_pcs_prod || 0) : Number(a.avg_prod || 0);
+      const pb = isPcs ? Number(b.avg_pcs_prod || 0) : Number(b.avg_prod || 0);
+      return pb - pa;
+    });
+
+    const rows = zones.map((z, index) => {
+      const prod = isPcs ? Number(z.avg_pcs_prod || 0) : Number(z.avg_prod || 0);
+      const zoneTarget = getTargetForType(z.typePick || z.zone || '');
+      const eff = zoneTarget > 0 ? Math.round(prod / zoneTarget * 1000) / 10 : 0;
+      const isPass = prod >= zoneTarget;
+      const statusBadge = isPass ? '<span class="badge-status pass">✅ Hit</span>' : '<span class="badge-status fail">⚠️ Miss</span>';
+
+      return `<tr>
+        <td>${index + 1}</td>
+        <td><b>${escapeZoneHtml(z.name || z.zone || '-')}</b></td>
+        <td><span class="pill" style="font-size:11.5px;padding:2px 8px;">${escapeZoneHtml(z.typePick || '-')}</span></td>
+        <td class="num">${fmt(z.pcs || 0)}</td>
+        <td class="num">${fmt(z.qty || 0)}</td>
+        <td class="num" style="font-weight:700;color:#2563eb;">${fmtDecimal1(prod)}</td>
+        <td class="num">${zoneTarget}</td>
+        <td class="num" style="font-weight:800;color:${isPass ? '#059669' : '#d97706'};">${fmtDecimal1(eff)}%</td>
+        <td style="text-align:center;">${statusBadge}</td>
+      </tr>`;
+    }).join('');
+
+    zoneTable.innerHTML = `
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>โซน (Zone)</th>
+          <th>ประเภทการจัดเก็บ (Type Pick)</th>
+          <th class="num">จำนวนชิ้น</th>
+          <th class="num">หน่วยหยิบ</th>
+          <th class="num">Productivity (${uTxt})</th>
+          <th class="num">Target ประจำประเภท</th>
+          <th class="num">% Efficiency</th>
+          <th style="text-align:center;">สถานะ</th>
+        </tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="9" class="empty-cell">ไม่พบข้อมูลโซน</td></tr>'}</tbody>
+    `;
+  }
+}
+
+// ===== ⏱️ Cycle Time Page Renderer =====
+function renderCycleTimePage() {
+  const host = document.getElementById('cycletimePage');
+  if (!host || !A) return;
+
+  const isPcs = unitMode === 'pcs';
+  const uTxt = isPcs ? 'ชิ้น' : 'หน่วยหยิบ';
+  const daily = A.daily || [];
+  const totalVol = isPcs ? Number(A.kpis.pcs || 0) : Number(A.kpis.qty || 0);
+  const totalPcs = Number(A.kpis.pcs || 0);
+  const totalLines = Number(A.kpis.lines || 0);
+  const totalHours = daily.reduce((sum, d) => sum + Number(d.hours || 0), 0);
+  const totalSeconds = totalHours * 3600;
+
+  const secPerUnit = totalVol > 0 ? (totalSeconds / totalVol) : 0;
+  const secPerPc = totalPcs > 0 ? (totalSeconds / totalPcs) : 0;
+  const secPerLine = totalLines > 0 ? (totalSeconds / totalLines) : 0;
+  const targetCycleTime = prodTarget > 0 ? (3600 / prodTarget) : 21.2;
+  const speedPerHour = totalHours > 0 ? Math.round(totalVol / totalHours) : 0;
+
+  const cards = [
+    { label: '⏱️ Cycle Time ต่อหน่วยหยิบ', val: `${fmtDecimal1(secPerUnit)}`, unit: 'วินาที/หน่วย', sub: `เป้าหมาย Pace: ${fmtDecimal1(targetCycleTime)} วินาที`, color: secPerUnit <= targetCycleTime ? '#059669' : '#d97706' },
+    { label: '📦 Cycle Time ต่อชิ้น', val: `${fmtDecimal1(secPerPc)}`, unit: 'วินาที/ชิ้น', sub: `เฉลี่ยจากทั้งหมด ${fmt(totalPcs)} ชิ้น`, color: '#0891b2' },
+    { label: '📑 Line Pace (เวลาต่อบรรทัด)', val: `${fmtDecimal1(secPerLine)}`, unit: 'วินาที/Line', sub: `เฉลี่ยจาก ${fmt(totalLines)} Lines`, color: '#7c3aed' },
+    { label: '⚡ ความเร็วเฉลี่ย (Speed)', val: `${fmt(speedPerHour)}`, unit: `${uTxt}/ชม.`, sub: `เวลาทำงาน Active รวม ${fmtDecimal1(totalHours)} ชม.`, color: '#2563eb' }
+  ];
+
+  const cardsHtml = cards.map(c => `
+    <div class="zone-stat" style="border-top:3px solid ${c.color};background:#fff;border-radius:14px;padding:16px 20px;box-shadow:0 4px 14px rgba(15,23,42,0.05);">
+      <div class="zone-stat-label" style="font-size:12.5px;color:#64748b;font-weight:600;">${c.label}</div>
+      <div class="zone-stat-value" style="color:${c.color};font-size:24px;font-weight:800;margin:4px 0 2px 0;">${c.val} <span style="font-size:13px;color:#64748b;font-weight:500;">${c.unit}</span></div>
+      <div style="font-size:11.5px;color:#94a3b8;">${c.sub}</div>
+    </div>`).join('');
+
+  host.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:18px;">
+      <div>
+        <h2 style="margin:0;font-size:20px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:8px;">
+          <span>⏱️ วิเคราะห์รอบเวลาและความเร็วการหยิบสินค้า (Picking Cycle Time &amp; Speed)</span>
+        </h2>
+        <div class="sub" style="margin-top:3px;">รอบเวลาเฉลี่ยในการหยิบสินค้า (Cycle Time: วินาที/หน่วย) · ยิ่งใช้เวลาน้อย ยิ่งมีความเร็วและประสิทธิภาพสูง</div>
+      </div>
+      <span class="pill" style="background:#ecfeff;color:#0891b2;font-weight:700;font-size:13px;padding:8px 16px;border-radius:10px;">
+        เป้าหมาย Pace: ${fmtDecimal1(targetCycleTime)} วินาที/หน่วย
+      </span>
+    </div>
+
+    <div class="zone-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:20px;">
+      ${cardsHtml}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:18px;margin-bottom:20px;">
+      <div class="card wide" style="margin:0;padding:20px 22px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin:0;">📉 แนวโน้ม Cycle Time รายวัน (วินาที/หน่วย)</h3>
+          <span class="pill" style="background:#f0fdf4;color:#15803d;font-weight:700;font-size:12px;padding:3px 10px;">ยิ่งต่ำยิ่งเร็ว</span>
+        </div>
+        <div class="sub" style="margin-bottom:14px;">เวลาเฉลี่ยที่ใช้ต่อหน่วยหยิบในแต่ละวันเทียบกับ Pace มาตรฐาน (${fmtDecimal1(targetCycleTime)} วินาที)</div>
+        <div class="chartbox" style="height:320px;position:relative;"><canvas id="cycleTimeTrendChart"></canvas></div>
+      </div>
+
+      <div class="card wide" style="margin:0;padding:20px 22px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin:0;">🏭 Cycle Time เฉลี่ยแยกตาม Zone (วินาที/หน่วย)</h3>
+          <span class="pill" style="background:#fef3c7;color:#b45309;font-weight:700;font-size:12px;padding:3px 10px;">Zone Bottlenecks</span>
+        </div>
+        <div class="sub" style="margin-bottom:14px;">โซนที่ใช้เวลาหยิบเฉลี่ยต่อหน่วยสูงสุดไปต่ำสุด เพื่อวิเคราะห์คอขวดและระยะทางการเดิน</div>
+        <div class="chartbox" style="height:320px;position:relative;"><canvas id="cycleTimeByZoneChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card wide" style="margin-bottom:20px;">
+      <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:4px;">🏭 ตารางวิเคราะห์ Cycle Time &amp; ความเร็วรายโซน</h3>
+      <div class="sub" style="margin-bottom:12px;">รายละเอียดเวลาเฉลี่ยต่อหน่วย (Cycle Time), เวลาต่อชิ้น, ปริมาณหยิบ และการประเมินความเร็ว</div>
+      <div style="overflow-x:auto;">
+        <table id="cycleTimeZoneTable" class="affiliation-table"></table>
+      </div>
+    </div>
+
+    <div class="card wide">
+      <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:4px;">⚡ 10 อันดับพนักงานรอบเวลาหยิบเร็วที่สุด (Fastest Pickers)</h3>
+      <div class="sub" style="margin-bottom:12px;">พนักงานที่มีเวลาเฉลี่ยต่อหน่วยหยิบต่ำที่สุด (Active Hours > 3 และ Productivity 1–999)</div>
+      <div style="overflow-x:auto;">
+        <table id="cycleTimePickerTable" class="affiliation-table"></table>
+      </div>
+    </div>
+  `;
+
+  drawCycleTimeCharts(daily, targetCycleTime, isPcs, uTxt);
+  drawCycleTimeTables(daily, targetCycleTime, isPcs, uTxt);
+}
+
+function drawCycleTimeCharts(daily, targetCycleTime, isPcs, uTxt) {
+  const c1 = Chart.getChart('cycleTimeTrendChart'); if (c1) c1.destroy();
+  const c2 = Chart.getChart('cycleTimeByZoneChart'); if (c2) c2.destroy();
+
+  const el1 = document.getElementById('cycleTimeTrendChart');
+  if (el1 && daily.length > 0) {
+    const labels = daily.map(d => d.date.slice(8, 10) + '/' + d.date.slice(5, 7));
+    const secPerUnit = daily.map(d => {
+      const vol = isPcs ? Number(d.pcs || 0) : Number(d.qty || 0);
+      const hrs = Number(d.hours || 0);
+      return (vol > 0 && hrs > 0) ? Math.round((hrs * 3600 / vol) * 10) / 10 : 0;
+    });
+    const baseline = daily.map(() => Math.round(targetCycleTime * 10) / 10);
+
+    new Chart(el1, {
+      data: {
+        labels,
+        datasets: [
+          {
+            type: 'line',
+            label: 'Cycle Time (วินาที/หน่วย)',
+            data: secPerUnit,
+            borderColor: '#0891b2',
+            backgroundColor: '#0891b2',
+            borderWidth: 2.5,
+            pointRadius: 4.5,
+            pointHoverRadius: 7,
+            pointBackgroundColor: secPerUnit.map(v => (v <= targetCycleTime && v > 0) ? '#10b981' : '#f59e0b'),
+            pointBorderColor: '#fff',
+            pointBorderWidth: 2,
+            tension: 0.3,
+            datalabels: {
+              display: true,
+              formatter: val => val > 0 ? `${val}s` : '',
+              align: 'top',
+              offset: 4,
+              color: '#0e7490',
+              font: { weight: '700', size: 10.5 },
+              backgroundColor: 'rgba(255,255,255,0.9)',
+              borderRadius: 4,
+              padding: { top: 1, bottom: 1, left: 3, right: 3 }
+            }
+          },
+          {
+            type: 'line',
+            label: `Target Pace (${fmtDecimal1(targetCycleTime)} วินาที)`,
+            data: baseline,
+            borderColor: '#ef4444',
+            borderWidth: 1.8,
+            borderDash: [5, 5],
+            pointRadius: 0,
+            fill: false,
+            datalabels: { display: false }
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top' },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                if (ctx.datasetIndex === 0) {
+                  return ` Cycle Time: ${ctx.parsed.y} วินาที/${uTxt}`;
+                }
+                return ` เป้าหมาย Pace: ${ctx.parsed.y} วินาที/${uTxt}`;
+              }
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            suggestedMax: Math.max(...secPerUnit, targetCycleTime) * 1.25,
+            title: { display: true, text: 'วินาทีต่อหน่วยหยิบ (s)' }
+          }
+        }
+      }
+    });
+  }
+
+  const el2 = document.getElementById('cycleTimeByZoneChart');
+  if (el2) {
+    const zones = [...(A.by_zone_prod || A.by_zone || [])]
+      .filter(z => (z.qty > 0 || z.pcs > 0) && (z.name || z.zone) !== '-' && (z.name || z.zone) !== '??')
+      .slice(0, 10);
+
+    const labels = zones.map(z => z.name || z.zone);
+    const zoneSec = zones.map(z => {
+      const prod = isPcs ? Number(z.avg_pcs_prod || 0) : Number(z.avg_prod || 0);
+      return prod > 0 ? Math.round((3600 / prod) * 10) / 10 : 0;
+    });
+
+    new Chart(el2, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Cycle Time (วินาที/หน่วย)',
+            data: zoneSec,
+            backgroundColor: zoneSec.map(v => (v <= targetCycleTime && v > 0) ? 'rgba(16,185,129,0.85)' : 'rgba(239,68,68,0.85)'),
+            borderRadius: 7,
+            datalabels: {
+              display: true,
+              formatter: val => val > 0 ? `${val}s` : '',
+              color: '#0f172a',
+              anchor: 'end',
+              align: 'top',
+              font: { weight: '700', size: 10 }
+            }
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` Cycle Time: ${ctx.parsed.y} วินาที/${uTxt}`
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            suggestedMax: Math.max(...zoneSec, targetCycleTime) * 1.25,
+            title: { display: true, text: 'วินาที/หน่วย' }
+          }
+        }
+      }
+    });
+  }
+}
+
+function drawCycleTimeTables(daily, targetCycleTime, isPcs, uTxt) {
+  const zoneTable = document.getElementById('cycleTimeZoneTable');
+  if (zoneTable) {
+    const zones = [...(A.by_zone_prod || A.by_zone || [])];
+    const rows = zones.map((z, index) => {
+      const prod = isPcs ? Number(z.avg_pcs_prod || 0) : Number(z.avg_prod || 0);
+      const secUnit = prod > 0 ? Math.round((3600 / prod) * 10) / 10 : 0;
+      const pcsProd = Number(z.avg_pcs_prod || z.pcs || 0);
+      const secPc = pcsProd > 0 ? Math.round((3600 / pcsProd) * 10) / 10 : 0;
+
+      let speedBadge = '<span class="badge-status fail">🐢 ช้ากว่าเป้า</span>';
+      if (secUnit > 0 && secUnit <= targetCycleTime * 0.85) {
+        speedBadge = '<span class="badge-status pass" style="background:#ecfeff;color:#0891b2;border-color:#a5f3fc;">⚡ เร็วมาก</span>';
+      } else if (secUnit > 0 && secUnit <= targetCycleTime) {
+        speedBadge = '<span class="badge-status pass">✅ ตามเกณฑ์</span>';
+      }
+
+      return `<tr>
+        <td>${index + 1}</td>
+        <td><b>${escapeZoneHtml(z.name || z.zone || '-')}</b></td>
+        <td><span class="pill" style="font-size:11.5px;padding:2px 8px;">${escapeZoneHtml(z.typePick || '-')}</span></td>
+        <td class="num">${fmt(z.pcs || 0)}</td>
+        <td class="num">${fmt(z.qty || 0)}</td>
+        <td class="num" style="font-weight:700;color:#0891b2;">${fmtDecimal1(prod)}</td>
+        <td class="num" style="font-weight:800;color:#0f172a;">${secUnit > 0 ? secUnit + ' s' : '-'}</td>
+        <td class="num" style="color:#64748b;">${secPc > 0 ? secPc + ' s' : '-'}</td>
+        <td style="text-align:center;">${speedBadge}</td>
+      </tr>`;
+    }).join('');
+
+    zoneTable.innerHTML = `
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>โซน (Zone)</th>
+          <th>รูปแบบการจัดเก็บ</th>
+          <th class="num">จำนวนชิ้น</th>
+          <th class="num">หน่วยหยิบ</th>
+          <th class="num">Prod (${uTxt}/ชม.)</th>
+          <th class="num">Cycle Time ต่อหน่วย</th>
+          <th class="num">Cycle Time ต่อชิ้น</th>
+          <th style="text-align:center;">การประเมินความเร็ว</th>
+        </tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="9" class="empty-cell">ไม่พบข้อมูลโซน</td></tr>'}</tbody>
+    `;
+  }
+
+  const pickerTable = document.getElementById('cycleTimePickerTable');
+  if (pickerTable) {
+    const pickers = (A.by_picker || [])
+      .filter(p => (isPcs ? p.avg_pcs_prod : p.avg_prod) > 0 && (p.hours >= 3 || p.qty > 50))
+      .map(p => {
+        const prod = isPcs ? Number(p.avg_pcs_prod || 0) : Number(p.avg_prod || 0);
+        const sec = prod > 0 ? Math.round((3600 / prod) * 10) / 10 : 9999;
+        return { ...p, prod, sec };
+      })
+      .sort((a, b) => a.sec - b.sec)
+      .slice(0, 10);
+
+    const rows = pickers.map((p, index) => {
+      const medal = index === 0 ? '🥇' : (index === 1 ? '🥈' : (index === 2 ? '🥉' : `${index + 1}`));
+      return `<tr>
+        <td style="text-align:center;font-weight:700;">${medal}</td>
+        <td><b>${escapeZoneHtml(p.picker)}</b></td>
+        <td>${escapeZoneHtml(p.name)}</td>
+        <td>${escapeZoneHtml(p.affiliation || '-')}</td>
+        <td>${escapeZoneHtml(p.zone || '-')}</td>
+        <td class="num">${fmt(p.pcs || 0)}</td>
+        <td class="num">${fmt(p.qty || 0)}</td>
+        <td class="num" style="font-weight:700;color:#0891b2;">${fmtDecimal1(p.prod)}</td>
+        <td class="num" style="font-weight:800;color:#059669;">⚡ ${p.sec} วินาที/หน่วย</td>
+      </tr>`;
+    }).join('');
+
+    pickerTable.innerHTML = `
+      <thead>
+        <tr>
+          <th style="text-align:center;">อันดับ</th>
+          <th>รหัส Picker</th>
+          <th>ชื่อพนักงาน</th>
+          <th>สังกัด</th>
+          <th>โซนหลัก</th>
+          <th class="num">จำนวนชิ้น</th>
+          <th class="num">หน่วยหยิบ</th>
+          <th class="num">Productivity</th>
+          <th class="num">Cycle Time ต่อหน่วย</th>
+        </tr>
+      </thead>
+      <tbody>${rows || '<tr><td colspan="9" class="empty-cell">ไม่พบข้อมูลพนักงาน</td></tr>'}</tbody>
+    `;
+  }
+}
+
+// ===== 💰 Incentive Page Renderer =====
+function renderIncentivePage() {
+  const host = document.getElementById('incentivePage');
+  if (!host || !A) return;
+
+  const isPcs = unitMode === 'pcs';
+  const uTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+  const target = prodTarget > 0 ? prodTarget : 170;
+
+  if (!window._incentiveConfig) {
+    window._incentiveConfig = {
+      minHours: 3,
+      calcMode: 'tier_fixed',
+      tier1Rate: 50,
+      tier2Rate: 100,
+      tier3Rate: 160,
+      tier4Rate: 250,
+      unitRate: 0.80
+    };
+  }
+  const cfg = window._incentiveConfig;
+
+  const pickers = (A.by_picker || []).map(p => {
+    const prod = isPcs ? Number(p.avg_pcs_prod || 0) : Number(p.avg_prod || 0);
+    const hours = Number(p.hours || 0);
+    const qty = Number(p.qty || 0);
+    const pcs = Number(p.pcs || 0);
+    const vol = isPcs ? pcs : qty;
+    const ach = target > 0 ? (prod / target * 100) : 0;
+    const isEligible = hours >= cfg.minHours && prod >= target;
+
+    let tier = 'NO_BONUS';
+    let tierName = 'ไม่ผ่านเกณฑ์';
+    let tierBadge = '<span class="badge-status fail">ต่ำกว่าเป้า</span>';
+    let reward = 0;
+
+    if (hours < cfg.minHours) {
+      tierName = 'ชม.ไม่ถึงเกณฑ์';
+      tierBadge = '<span class="badge-status fail">ชม. < ' + cfg.minHours + '</span>';
+    } else if (prod >= target) {
+      if (ach >= 150) {
+        tier = 'PLATINUM';
+        tierName = 'Platinum (≥150%)';
+        tierBadge = '<span class="badge-status platinum">💎 Platinum</span>';
+        reward = cfg.calcMode === 'tier_fixed' ? cfg.tier4Rate : Math.round(Math.max(0, vol - (hours * target)) * cfg.unitRate);
+      } else if (ach >= 130) {
+        tier = 'GOLD';
+        tierName = 'Gold (130–149%)';
+        tierBadge = '<span class="badge-status gold">🥇 Gold</span>';
+        reward = cfg.calcMode === 'tier_fixed' ? cfg.tier3Rate : Math.round(Math.max(0, vol - (hours * target)) * cfg.unitRate);
+      } else if (ach >= 115) {
+        tier = 'SILVER';
+        tierName = 'Silver (115–129%)';
+        tierBadge = '<span class="badge-status silver">🥈 Silver</span>';
+        reward = cfg.calcMode === 'tier_fixed' ? cfg.tier2Rate : Math.round(Math.max(0, vol - (hours * target)) * cfg.unitRate);
+      } else {
+        tier = 'BRONZE';
+        tierName = 'Bronze (100–114%)';
+        tierBadge = '<span class="badge-status bronze">🥉 Bronze</span>';
+        reward = cfg.calcMode === 'tier_fixed' ? cfg.tier1Rate : Math.round(Math.max(0, vol - (hours * target)) * cfg.unitRate);
+      }
+    }
+
+    return {
+      ...p,
+      prod,
+      hours,
+      vol,
+      ach: Math.round(ach * 10) / 10,
+      isEligible,
+      tier,
+      tierName,
+      tierBadge,
+      reward
+    };
+  });
+
+  const eligibleList = pickers.filter(p => p.reward > 0);
+  const totalIncentive = eligibleList.reduce((sum, p) => sum + p.reward, 0);
+  const eligibleCount = eligibleList.length;
+  const eligiblePct = pickers.length > 0 ? Math.round(eligibleCount / pickers.length * 100) : 0;
+  const maxRewardPicker = eligibleList.slice().sort((a, b) => b.reward - a.reward)[0] || null;
+  const avgReward = eligibleCount > 0 ? Math.round(totalIncentive / eligibleCount) : 0;
+
+  const cards = [
+    { label: '💰 ประมาณการ Incentive รวม', val: `฿${fmt(totalIncentive)}`, unit: 'บาท', sub: `คำนวณจากช่วงวันที่เลือก`, color: '#059669' },
+    { label: '👥 พนักงานที่ผ่านเกณฑ์รับสิทธิ์', val: `${eligibleCount} / ${pickers.length}`, unit: 'คน', sub: `${eligiblePct}% ของพนักงานทั้งหมด`, color: '#2563eb' },
+    { label: '🏆 เงินรางวัลสูงสุดรายบุคคล', val: maxRewardPicker ? `฿${fmt(maxRewardPicker.reward)}` : '฿0', unit: 'บาท', sub: maxRewardPicker ? `${escapeZoneHtml(maxRewardPicker.name)} (${maxRewardPicker.picker})` : '-', color: '#7c3aed' },
+    { label: '📊 เฉลี่ยต่อผู้ได้รับสิทธิ์', val: `฿${fmt(avgReward)}`, unit: 'บาท/คน', sub: `เฉลี่ย ${eligibleCount} คน`, color: '#0891b2' }
+  ];
+
+  const cardsHtml = cards.map(c => `
+    <div class="zone-stat" style="border-top:3px solid ${c.color};background:#fff;border-radius:14px;padding:16px 20px;box-shadow:0 4px 14px rgba(15,23,42,0.05);">
+      <div class="zone-stat-label" style="font-size:12.5px;color:#64748b;font-weight:600;">${c.label}</div>
+      <div class="zone-stat-value" style="color:${c.color};font-size:24px;font-weight:800;margin:4px 0 2px 0;">${c.val} <span style="font-size:13px;color:#64748b;font-weight:500;">${c.unit}</span></div>
+      <div style="font-size:11.5px;color:#94a3b8;">${c.sub}</div>
+    </div>`).join('');
+
+  host.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:18px;">
+      <div>
+        <h2 style="margin:0;font-size:20px;font-weight:700;color:#0f172a;display:flex;align-items:center;gap:8px;">
+          <span>💰 คำนวณเบี้ยขยัน &amp; เงินรางวัลจูงใจ (Picking Incentive Scheme)</span>
+        </h2>
+        <div class="sub" style="margin-top:3px;">ผลตอบแทนตามผลงานหยิบสินค้าเกินเป้าหมาย (${target} ${uTxt}) และเกณฑ์ชั่วโมงทำงาน (≥ ${cfg.minHours} ชม.)</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <button onclick="exportIncentiveCsv()" style="display:inline-flex;align-items:center;gap:6px;border:1px solid #cbd5e1;background:#fff;color:#334155;padding:8px 16px;border-radius:10px;font-size:12.5px;font-weight:600;cursor:pointer;transition:.2s;box-shadow:0 2px 6px rgba(15,23,42,0.06);">
+          📥 Export CSV
+        </button>
+      </div>
+    </div>
+
+    <div class="card wide" style="margin-bottom:20px;background:linear-gradient(135deg,#f8fafc,#eff6ff);border:1px solid #dbeafe;padding:16px 20px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+        <div style="font-size:14px;font-weight:700;color:#1e3a8a;display:flex;align-items:center;gap:8px;">
+          <span>⚙️ กำหนดเกณฑ์และอัตราเงินรางวัล (Incentive Tiers Configuration)</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="font-size:12px;color:#475569;font-weight:600;">รูปแบบ:</span>
+          <select id="incentiveCalcModeSelect" onchange="updateIncentiveCalcMode(this.value)" style="padding:5px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;font-family:inherit;background:#fff;font-weight:600;">
+            <option value="tier_fixed" ${cfg.calcMode === 'tier_fixed' ? 'selected' : ''}>อัตราคงที่ตามระดับ Tier (บาท/วัน)</option>
+            <option value="over_unit" ${cfg.calcMode === 'over_unit' ? 'selected' : ''}>จ่ายตามหน่วยหยิบเกินเป้า (บาท/หน่วย)</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;">
+        <div style="background:#fff;border:1px solid #fed7aa;border-radius:10px;padding:10px 14px;">
+          <div style="font-size:11.5px;font-weight:700;color:#c2410c;">🥉 Bronze (100% – 114%)</div>
+          <div style="font-size:16px;font-weight:800;color:#9a3412;margin-top:3px;">${cfg.calcMode === 'tier_fixed' ? '฿' + cfg.tier1Rate + ' / วัน' : '฿' + cfg.unitRate + ' / หน่วย'}</div>
+        </div>
+        <div style="background:#fff;border:1px solid #cbd5e1;border-radius:10px;padding:10px 14px;">
+          <div style="font-size:11.5px;font-weight:700;color:#475569;">🥈 Silver (115% – 129%)</div>
+          <div style="font-size:16px;font-weight:800;color:#1e293b;margin-top:3px;">${cfg.calcMode === 'tier_fixed' ? '฿' + cfg.tier2Rate + ' / วัน' : '฿' + cfg.unitRate + ' / หน่วย'}</div>
+        </div>
+        <div style="background:#fff;border:1px solid #fef08a;border-radius:10px;padding:10px 14px;">
+          <div style="font-size:11.5px;font-weight:700;color:#ca8a04;">🥇 Gold (130% – 149%)</div>
+          <div style="font-size:16px;font-weight:800;color:#854d0e;margin-top:3px;">${cfg.calcMode === 'tier_fixed' ? '฿' + cfg.tier3Rate + ' / วัน' : '฿' + cfg.unitRate + ' / หน่วย'}</div>
+        </div>
+        <div style="background:#fff;border:1px solid #ddd6fe;border-radius:10px;padding:10px 14px;">
+          <div style="font-size:11.5px;font-weight:700;color:#7c3aed;">💎 Platinum (≥ 150%)</div>
+          <div style="font-size:16px;font-weight:800;color:#5b21b6;margin-top:3px;">${cfg.calcMode === 'tier_fixed' ? '฿' + cfg.tier4Rate + ' / วัน' : '฿' + cfg.unitRate + ' / หน่วย'}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="zone-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:20px;">
+      ${cardsHtml}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:18px;margin-bottom:20px;">
+      <div class="card wide" style="margin:0;padding:20px 22px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin:0;">🎖️ สัดส่วนพนักงานตามระดับ Tier</h3>
+          <span class="pill" style="background:#f5f3ff;color:#7c3aed;font-weight:700;font-size:12px;padding:3px 10px;">Tier Breakdown</span>
+        </div>
+        <div class="sub" style="margin-bottom:14px;">การกระจายตัวของพนักงานในระดับ Bronze, Silver, Gold, Platinum และไม่ได้สิทธิ์</div>
+        <div class="chartbox" style="height:320px;position:relative;"><canvas id="incentiveTierChart"></canvas></div>
+      </div>
+
+      <div class="card wide" style="margin:0;padding:20px 22px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin:0;">🏢 งบประมาณ Incentive แยกตามสังกัด</h3>
+          <span class="pill" style="background:#f0fdf4;color:#15803d;font-weight:700;font-size:12px;padding:3px 10px;">Affiliation Share</span>
+        </div>
+        <div class="sub" style="margin-bottom:14px;">สัดส่วนเงินรางวัลระหว่างพนักงานประจำ และ Outsource</div>
+        <div class="chartbox" style="height:320px;position:relative;"><canvas id="incentiveAffiliationChart"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card wide">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
+        <div>
+          <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin:0;">🥇 ตารางสรุปเงินรางวัล Incentive รายบุคคล</h3>
+          <div class="sub" style="margin-top:2px;">เรียงลำดับตามยอดเงินรางวัลและประสิทธิภาพการหยิบสินค้า</div>
+        </div>
+        <input type="text" id="incentiveSearchInput" oninput="filterIncentiveTable(this.value)" placeholder="🔍 ค้นหารหัส / ชื่อ / สังกัด..." style="padding:7px 14px;border:1px solid #cbd5e1;border-radius:10px;font-size:12.5px;outline:none;font-family:inherit;">
+      </div>
+      <div style="overflow-x:auto;">
+        <table id="incentiveTable" class="affiliation-table"></table>
+      </div>
+    </div>
+  `;
+
+  drawIncentiveCharts(pickers);
+  drawIncentiveTable(pickers);
+}
+
+function drawIncentiveCharts(pickers) {
+  const c1 = Chart.getChart('incentiveTierChart'); if (c1) c1.destroy();
+  const c2 = Chart.getChart('incentiveAffiliationChart'); if (c2) c2.destroy();
+
+  const el1 = document.getElementById('incentiveTierChart');
+  if (el1) {
+    const tiers = [
+      { name: 'ไม่ได้รับสิทธิ์', count: pickers.filter(p => p.reward <= 0).length, color: '#cbd5e1' },
+      { name: '🥉 Bronze (100–114%)', count: pickers.filter(p => p.tier === 'BRONZE').length, color: '#fb923c' },
+      { name: '🥈 Silver (115–129%)', count: pickers.filter(p => p.tier === 'SILVER').length, color: '#94a3b8' },
+      { name: '🥇 Gold (130–149%)', count: pickers.filter(p => p.tier === 'GOLD').length, color: '#facc15' },
+      { name: '💎 Platinum (≥150%)', count: pickers.filter(p => p.tier === 'PLATINUM').length, color: '#a855f7' }
+    ];
+
+    new Chart(el1, {
+      type: 'doughnut',
+      data: {
+        labels: tiers.map(t => t.name),
+        datasets: [
+          {
+            data: tiers.map(t => t.count),
+            backgroundColor: tiers.map(t => t.color),
+            borderWidth: 2,
+            borderColor: '#fff'
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom' },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ${ctx.label}: ${ctx.parsed} คน (${Math.round(ctx.parsed / (pickers.length || 1) * 100)}%)`
+            }
+          }
+        },
+        cutout: '62%'
+      }
+    });
+  }
+
+  const el2 = document.getElementById('incentiveAffiliationChart');
+  if (el2) {
+    const affMap = {};
+    pickers.forEach(p => {
+      const aff = String(p.affiliation || 'ไม่พบสังกัด').trim() || 'ไม่พบสังกัด';
+      affMap[aff] = (affMap[aff] || 0) + Number(p.reward || 0);
+    });
+
+    const labels = Object.keys(affMap).sort((a, b) => affMap[b] - affMap[a]);
+    const amounts = labels.map(l => affMap[l]);
+
+    new Chart(el2, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'งบประมาณ Incentive (บาท)',
+            data: amounts,
+            backgroundColor: ['rgba(37,99,235,0.85)', 'rgba(16,185,129,0.85)', 'rgba(245,158,11,0.85)', 'rgba(124,58,237,0.85)'],
+            borderRadius: 7,
+            datalabels: {
+              display: true,
+              formatter: val => val > 0 ? `฿${fmt(val)}` : '',
+              color: '#0f172a',
+              anchor: 'end',
+              align: 'top',
+              font: { weight: '700', size: 10.5 }
+            }
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` เงินรางวัลรวม: ฿${fmt(ctx.parsed.y)} บาท`
+            }
+          }
+        },
+        scales: {
+          y: {
+            beginAtZero: true,
+            suggestedMax: Math.max(...amounts, 1000) * 1.25,
+            ticks: { callback: v => `฿${fmt(v)}` }
+          }
+        }
+      }
+    });
+  }
+}
+
+window._incentiveCachedPickers = [];
+
+function drawIncentiveTable(pickers) {
+  window._incentiveCachedPickers = pickers;
+  const table = document.getElementById('incentiveTable');
+  if (!table) return;
+
+  const sorted = [...pickers].sort((a, b) => (b.reward - a.reward) || (b.prod - a.prod));
+
+  const rows = sorted.map((p, index) => {
+    return `<tr>
+      <td>${index + 1}</td>
+      <td><b>${escapeZoneHtml(p.picker)}</b></td>
+      <td>${escapeZoneHtml(p.name)}</td>
+      <td>${escapeZoneHtml(p.affiliation || '-')}</td>
+      <td>${escapeZoneHtml(p.zone || '-')}</td>
+      <td class="num">${fmtDecimal1(p.hours || 0)}</td>
+      <td class="num">${fmt(p.vol || 0)}</td>
+      <td class="num" style="font-weight:700;color:#2563eb;">${fmtDecimal1(p.prod)}</td>
+      <td class="num" style="font-weight:700;color:${p.ach >= 100 ? '#059669' : '#d97706'};">${p.ach}%</td>
+      <td style="text-align:center;">${p.tierBadge}</td>
+      <td class="num" style="font-size:14px;font-weight:800;color:${p.reward > 0 ? '#059669' : '#94a3b8'};">
+        ${p.reward > 0 ? '฿' + fmt(p.reward) : '-'}
+      </td>
+    </tr>`;
+  }).join('');
+
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>รหัส Picker</th>
+        <th>ชื่อพนักงาน</th>
+        <th>สังกัด</th>
+        <th>โซนหลัก</th>
+        <th class="num">ชม. ทำงาน</th>
+        <th class="num">หน่วยหยิบรวม</th>
+        <th class="num">Productivity</th>
+        <th class="num">% เทียบเป้า</th>
+        <th style="text-align:center;">ระดับ Tier</th>
+        <th class="num">เงินรางวัล (บาท)</th>
+      </tr>
+    </thead>
+    <tbody>${rows || '<tr><td colspan="11" class="empty-cell">ไม่พบข้อมูล</td></tr>'}</tbody>
+  `;
+}
+
+window.updateIncentiveCalcMode = function(mode) {
+  if (!window._incentiveConfig) window._incentiveConfig = {};
+  window._incentiveConfig.calcMode = mode;
+  renderIncentivePage();
+};
+
+window.filterIncentiveTable = function(query) {
+  const q = (query || '').trim().toLowerCase();
+  const table = document.getElementById('incentiveTable');
+  if (!table || !window._incentiveCachedPickers) return;
+
+  const pickers = window._incentiveCachedPickers.filter(p => {
+    if (!q) return true;
+    return String(p.picker || '').toLowerCase().includes(q) ||
+           String(p.name || '').toLowerCase().includes(q) ||
+           String(p.affiliation || '').toLowerCase().includes(q) ||
+           String(p.zone || '').toLowerCase().includes(q);
+  });
+
+  const sorted = [...pickers].sort((a, b) => (b.reward - a.reward) || (b.prod - a.prod));
+
+  const rows = sorted.map((p, index) => {
+    return `<tr>
+      <td>${index + 1}</td>
+      <td><b>${escapeZoneHtml(p.picker)}</b></td>
+      <td>${escapeZoneHtml(p.name)}</td>
+      <td>${escapeZoneHtml(p.affiliation || '-')}</td>
+      <td>${escapeZoneHtml(p.zone || '-')}</td>
+      <td class="num">${fmtDecimal1(p.hours || 0)}</td>
+      <td class="num">${fmt(p.vol || 0)}</td>
+      <td class="num" style="font-weight:700;color:#2563eb;">${fmtDecimal1(p.prod)}</td>
+      <td class="num" style="font-weight:700;color:${p.ach >= 100 ? '#059669' : '#d97706'};">${p.ach}%</td>
+      <td style="text-align:center;">${p.tierBadge}</td>
+      <td class="num" style="font-size:14px;font-weight:800;color:${p.reward > 0 ? '#059669' : '#94a3b8'};">
+        ${p.reward > 0 ? '฿' + fmt(p.reward) : '-'}
+      </td>
+    </tr>`;
+  }).join('');
+
+  const tbody = table.querySelector('tbody');
+  if (tbody) tbody.innerHTML = rows || '<tr><td colspan="11" class="empty-cell">ไม่พบผลการค้นหา</td></tr>';
+};
+
+window.exportIncentiveCsv = function() {
+  const pickers = window._incentiveCachedPickers || [];
+  if (!pickers.length) {
+    alert('ไม่พบข้อมูลสำหรับส่งออก');
+    return;
+  }
+  const headers = ['อันดับ', 'รหัส Picker', 'ชื่อพนักงาน', 'สังกัด', 'โซนหลัก', 'ชม. ทำงาน', 'หน่วยหยิบรวม', 'Productivity', '% เทียบเป้า', 'ระดับ Tier', 'เงินรางวัล (บาท)'];
+  const sorted = [...pickers].sort((a, b) => (b.reward - a.reward) || (b.prod - a.prod));
+  const rows = sorted.map((p, idx) => [
+    idx + 1,
+    `"${(p.picker || '').replace(/"/g, '""')}"`,
+    `"${(p.name || '').replace(/"/g, '""')}"`,
+    `"${(p.affiliation || '').replace(/"/g, '""')}"`,
+    `"${(p.zone || '').replace(/"/g, '""')}"`,
+    p.hours || 0,
+    p.vol || 0,
+    p.prod || 0,
+    `${p.ach || 0}%`,
+    `"${(p.tierName || '').replace(/"/g, '""')}"`,
+    p.reward || 0
+  ]);
+
+  const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Pick_Productivity_Incentive_${dfrom || 'all'}_to_${dto || 'all'}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 };
 
 
@@ -7555,7 +8643,7 @@ function renderExcludedBadges() {
   badgeContainer.innerHTML = h;
 }
 
-function destroyCharts() { ['trend', 'cat', 'picker', 'zone', 'slot', 'item', 'typepickRadar', 'historyTrend'].forEach(id => { const c = Chart.getChart(id); if (c) c.destroy(); }); }
+function destroyCharts() { ['trend', 'cat', 'picker', 'zone', 'slot', 'item', 'typepickRadar', 'historyTrend', 'efficiencyTrendChart', 'efficiencyShiftChart', 'cycleTimeTrendChart', 'cycleTimeByZoneChart', 'incentiveTierChart', 'incentiveAffiliationChart'].forEach(id => { const c = Chart.getChart(id); if (c) c.destroy(); }); }
 
 function show(page) {
   if (!hasLiveData) return;

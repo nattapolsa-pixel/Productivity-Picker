@@ -624,6 +624,26 @@
       color: #dc2626;
       border: 1px solid #fecaca;
     }
+    .badge-status.bronze {
+      background: #fff7ed;
+      color: #c2410c;
+      border: 1px solid #fed7aa;
+    }
+    .badge-status.silver {
+      background: #f8fafc;
+      color: #475569;
+      border: 1px solid #cbd5e1;
+    }
+    .badge-status.gold {
+      background: #fefce8;
+      color: #ca8a04;
+      border: 1px solid #fef08a;
+    }
+    .badge-status.platinum {
+      background: #f5f3ff;
+      color: #7c3aed;
+      border: 1px solid #ddd6fe;
+    }
     .rank-medal {
       display: inline-flex;
       align-items: center;
@@ -1807,6 +1827,18 @@
       <button class="nav" data-page="prod"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
         </svg> Productivity</button>
+      <button class="nav" data-page="efficiency"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+          <polyline points="22 4 12 14.01 9 11.01" />
+        </svg> Efficiency</button>
+      <button class="nav" data-page="cycletime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10" />
+          <polyline points="12 6 12 12 16 14" />
+        </svg> Cycle Time</button>
+      <button class="nav" data-page="incentive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="8" r="6" />
+          <path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11" />
+        </svg> Incentive</button>
       <button class="nav" data-page="zones"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21" />
           <line x1="8" y1="3" x2="8" y2="18" />
@@ -2452,6 +2484,18 @@
       <section class="page" data-page="simulator">
         <div id="simulatorPage"></div>
       </section>
+
+      <section class="page" data-page="efficiency">
+        <div id="efficiencyPage"></div>
+      </section>
+
+      <section class="page" data-page="cycletime">
+        <div id="cycletimePage"></div>
+      </section>
+
+      <section class="page" data-page="incentive">
+        <div id="incentivePage"></div>
+      </section>
     </main>
   </div>
   <!-- Modal สำหรับอัปโหลดไฟล์ CSV/Excel ตรงเข้า BigQuery -->
@@ -2710,7 +2754,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260905-sheet-analysis-v91"></script>
+  <script src="app.js?v=20260905-efficiency-cycle-incentive-v92"></script>
 </body>
 
 </html>
