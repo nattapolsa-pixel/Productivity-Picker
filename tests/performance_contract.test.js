@@ -8,9 +8,11 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260905-efficiency-cycle-incentive-v92'), 'HTML must cache-bust the latest release');
+assert(html.includes('app.js?v=20260905-efficiency-cycle-incentive-v93'), 'HTML must cache-bust the latest release');
 assert(html.includes('data-page="efficiency"') && html.includes('id="efficiencyPage"') && app.includes('function renderEfficiencyPage()'),
   'Efficiency page must be reachable and have a renderer');
+assert(app.includes('function getTargetForZoneOrType') && (app.includes('const getTargetForType = getTargetForZoneOrType;') || app.includes('getTargetForZoneOrType(')),
+  'Zone target lookup must support getTargetForZoneOrType and getTargetForType alias');
 assert(html.includes('data-page="cycletime"') && html.includes('id="cycletimePage"') && app.includes('function renderCycleTimePage()'),
   'Cycle Time page must be reachable and have a renderer');
 assert(html.includes('data-page="incentive"') && html.includes('id="incentivePage"') && app.includes('function renderIncentivePage()'),

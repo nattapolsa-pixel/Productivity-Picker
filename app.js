@@ -388,6 +388,7 @@ function getTargetForZoneOrType(typePick, zone) {
   if (tStr.includes('training') || tStr.includes('train')) return prodTargets.training;
   return prodTargets.overall || prodTarget;
 }
+const getTargetForType = getTargetForZoneOrType;
 
 // ===== Excluded Zones State & Functions =====
 let excludedZones = new Set();
@@ -6888,7 +6889,7 @@ function drawEfficiencyTables(daily, target, isPcs, uTxt) {
 
     const rows = zones.map((z, index) => {
       const prod = isPcs ? Number(z.avg_pcs_prod || 0) : Number(z.avg_prod || 0);
-      const zoneTarget = getTargetForType(z.typePick || z.zone || '');
+      const zoneTarget = getTargetForZoneOrType(z.typePick, z.zone);
       const eff = zoneTarget > 0 ? Math.round(prod / zoneTarget * 1000) / 10 : 0;
       const isPass = prod >= zoneTarget;
       const statusBadge = isPass ? '<span class="badge-status pass">✅ Hit</span>' : '<span class="badge-status fail">⚠️ Miss</span>';
@@ -7584,13 +7585,14 @@ function drawIncentiveTable(pickers) {
   `;
 }
 
-window.updateIncentiveCalcMode = function(mode) {
+function updateIncentiveCalcMode(mode) {
   if (!window._incentiveConfig) window._incentiveConfig = {};
   window._incentiveConfig.calcMode = mode;
   renderIncentivePage();
-};
+}
+window.updateIncentiveCalcMode = updateIncentiveCalcMode;
 
-window.filterIncentiveTable = function(query) {
+function filterIncentiveTable(query) {
   const q = (query || '').trim().toLowerCase();
   const table = document.getElementById('incentiveTable');
   if (!table || !window._incentiveCachedPickers) return;
@@ -7625,9 +7627,10 @@ window.filterIncentiveTable = function(query) {
 
   const tbody = table.querySelector('tbody');
   if (tbody) tbody.innerHTML = rows || '<tr><td colspan="11" class="empty-cell">ไม่พบผลการค้นหา</td></tr>';
-};
+}
+window.filterIncentiveTable = filterIncentiveTable;
 
-window.exportIncentiveCsv = function() {
+function exportIncentiveCsv() {
   const pickers = window._incentiveCachedPickers || [];
   if (!pickers.length) {
     alert('ไม่พบข้อมูลสำหรับส่งออก');
@@ -7659,7 +7662,8 @@ window.exportIncentiveCsv = function() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-};
+}
+window.exportIncentiveCsv = exportIncentiveCsv;
 
 
 
