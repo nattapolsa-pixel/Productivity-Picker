@@ -8,7 +8,12 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260904-shift-cutoff-v90'), 'HTML must cache-bust the latest release');
+assert(html.includes('app.js?v=20260905-sheet-analysis-v91'), 'HTML must cache-bust the latest release');
+assert(html.includes('data-prodtab="sheet-analysis"') && app.includes('function renderSheetAnalysisView()'),
+  'Google Sheet analysis panel must expose PTT, BPS, combined Productivity and Not Found coverage');
+assert(app.includes("aggregate('PTT', dfrom, dto, shiftF)") && app.includes("aggregate('BPS', dfrom, dto, shiftF)") &&
+  app.includes("aggregate('ALL', dfrom, dto, shiftF)"),
+  'Sheet analysis must reconcile PTT, BPS and the combined active-hour calculation');
 assert(app.includes('ดูรหัสพนักงานและสาเหตุ') && app.includes('ค่า Team ที่พบ') && app.includes('สาเหตุที่เป็น Not Found'),
   'Not Found banner must expose picker codes, raw teams and reasons');
 assert(app.includes("action: 'set_dashboard_exclusions'") && app.includes("mode=dashboard_exclusions") &&

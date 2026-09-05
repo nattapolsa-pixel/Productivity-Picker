@@ -2081,6 +2081,10 @@
               <span>🏢</span>
               <span>แยกตามสังกัด (Affiliation)</span>
             </button>
+            <button class="prod-tab-btn" data-prodtab="sheet-analysis">
+              <span>🧮</span>
+              <span>วิเคราะห์ตาม Google Sheet</span>
+            </button>
           </div>
         </div>
 
@@ -2169,6 +2173,20 @@
             <h3>🏢 สรุปผล Productivity และ OT แยกตามสังกัด</h3>
             <div class="sub">จับรหัสพนักงานจาก Sheet “บันทึกเวลาทำงาน” · สรุปจำนวนชิ้น หน่วยหยิบ Productivity และ OT รายวัน</div>
             <div id="affiliationBreakdown"></div>
+          </div>
+        </div>
+
+        <div class="prod-tab-panel" id="prodTabPanel-sheet-analysis" style="display:none;">
+          <div class="zone-summary" id="sheetAnalysisStats" style="margin-bottom:18px;"></div>
+          <div class="card wide" style="margin-bottom:18px;">
+            <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:4px;">🧮 สรุป PTT, BPS และ Productivity รวม</h3>
+            <div class="sub" style="margin-bottom:12px;">คงสูตรหน่วยหยิบและเวลาเดิม · Productivity รวมใช้หน่วยหยิบรวมและชั่วโมง Active ที่ไม่ซ้ำต่อ Picker/วัน</div>
+            <div style="overflow-x:auto;"><table id="sheetAnalysisSystemTable" class="affiliation-table"></table></div>
+          </div>
+          <div class="card wide">
+            <h3 style="font-size:15.5px;font-weight:700;color:#0f172a;margin-bottom:4px;">⚠️ Master Coverage และข้อมูล Not Found</h3>
+            <div class="sub" style="margin-bottom:12px;">ข้อมูลที่เชื่อม Master ไม่ได้ยังคงอยู่ในยอดหน่วยหยิบและ Productivity แต่ KPI ที่ต้องใช้ Master จะแสดง Not Found</div>
+            <div style="overflow-x:auto;"><table id="sheetAnalysisNotFoundTable" class="affiliation-table"></table></div>
           </div>
         </div>
       </section>
@@ -2692,7 +2710,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260904-shift-cutoff-v90"></script>
+  <script src="app.js?v=20260905-sheet-analysis-v91"></script>
 </body>
 
 </html>

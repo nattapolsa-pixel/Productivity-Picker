@@ -145,10 +145,10 @@ try {
   const savedCalc = localStorage.getItem('pickProductivityCalcMode');
   if (savedCalc === 'raw' || savedCalc === 'weighted') prodCalcMode = savedCalc;
 } catch (_) {}
-let prodActiveSubTab = 'target'; // 'target' | 'weighted' | 'pickers' | 'affiliation'
+let prodActiveSubTab = 'target'; // 'target' | 'weighted' | 'pickers' | 'affiliation' | 'sheet-analysis'
 try {
   const savedSubTab = localStorage.getItem('pickProductivitySubTab');
-  if (['target', 'weighted', 'pickers', 'affiliation'].includes(savedSubTab)) {
+  if (['target', 'weighted', 'pickers', 'affiliation', 'sheet-analysis'].includes(savedSubTab)) {
     prodActiveSubTab = savedSubTab;
   }
 } catch (_) {}
@@ -6598,7 +6598,8 @@ function updateProdSubtabPanels() {
     target: document.getElementById('prodTabPanel-target'),
     weighted: document.getElementById('prodTabPanel-weighted'),
     pickers: document.getElementById('prodTabPanel-pickers'),
-    affiliation: document.getElementById('prodTabPanel-affiliation')
+    affiliation: document.getElementById('prodTabPanel-affiliation'),
+    'sheet-analysis': document.getElementById('prodTabPanel-sheet-analysis')
   };
   Object.keys(panels).forEach(k => {
     if (panels[k]) {
@@ -6615,6 +6616,77 @@ function updateProdSubtabPanels() {
     renderTopPickersView();
   } else if (prodActiveSubTab === 'affiliation') {
     renderAffiliationBreakdown();
+  } else if (prodActiveSubTab === 'sheet-analysis') {
+    renderSheetAnalysisView();
+  }
+}
+
+function renderSheetAnalysisView() {
+  const systemRows = [
+    { key: 'PTT', label: 'PTT', data: aggregate('PTT', dfrom, dto, shiftF) },
+    { key: 'BPS', label: 'BPS', data: aggregate('BPS', dfrom, dto, shiftF) },
+    { key: 'ALL', label: 'รวม PTT + BPS', data: aggregate('ALL', dfrom, dto, shiftF) }
+  ];
+  const combined = systemRows[2].data;
+  const combinedProd = Number(combined?.kpis?.avg_prod || 0);
+  const totalUnits = Number(combined?.kpis?.qty || 0);
+  const totalPcs = Number(combined?.kpis?.pcs || 0);
+  const achievement = prodTarget > 0 ? combinedProd / prodTarget * 100 : 0;
+
+  const missingShift = aggregate('ALL', dfrom, dto, 'not_found');
+  const unknownPickerMap = new Map();
+  (missingShift?.by_picker || []).forEach(row => unknownPickerMap.set(String(row.picker || ''), { ...row, missingTeam: true }));
+  (combined?.by_picker || []).filter(row => {
+    const affiliation = String(row.affiliation || '').trim();
+    const zone = String(row.zone || '').trim();
+    return !affiliation || affiliation === 'ไม่พบสังกัด' || !zone || zone === '-' || zone === '??';
+  }).forEach(row => {
+    const key = String(row.picker || '');
+    unknownPickerMap.set(key, { ...(unknownPickerMap.get(key) || {}), ...row,
+      missingTeam: !!(unknownPickerMap.get(key) && unknownPickerMap.get(key).missingTeam) });
+  });
+  const unknownPickerRows = [...unknownPickerMap.values()].sort((a, b) => Number(b.qty || 0) - Number(a.qty || 0));
+  const unknownZoneRows = (combined?.by_zone || []).filter(row => !row.known || !row.zone || row.zone === '-' || row.zone === '??');
+  const unknownUnits = unknownPickerRows.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+
+  const stats = document.getElementById('sheetAnalysisStats');
+  if (stats) {
+    const cards = [
+      ['หน่วยหยิบรวม', fmt(totalUnits), 'หน่วยหยิบ', '#2563eb'],
+      ['จำนวนชิ้นรวม', fmt(totalPcs), 'ชิ้น', '#0891b2'],
+      ['Productivity รวม', fmtDecimal1(combinedProd), 'หยิบ/ชม.', '#7c3aed'],
+      ['ประสิทธิภาพเทียบเป้า', fmtDecimal1(achievement), '%', achievement >= 100 ? '#059669' : '#d97706'],
+      ['Not Found', fmt(unknownPickerRows.length), 'พนักงาน', unknownPickerRows.length ? '#dc2626' : '#059669']
+    ];
+    stats.innerHTML = cards.map(card => `<div class="zone-stat" style="border-top:3px solid ${card[3]};"><div class="zone-stat-label">${card[0]}</div><div class="zone-stat-value" style="color:${card[3]};font-size:22px;">${card[1]} <span style="font-size:12.5px;color:#64748b;">${card[2]}</span></div></div>`).join('');
+  }
+
+  const systemTable = document.getElementById('sheetAnalysisSystemTable');
+  if (systemTable) {
+    const body = systemRows.map((row, index) => {
+      const k = row.data?.kpis || {};
+      const productivity = Number(k.avg_prod || 0);
+      const efficiency = prodTarget > 0 ? productivity / prodTarget * 100 : 0;
+      const status = productivity >= prodTarget ? '<span class="badge-status pass">✅ Hit</span>' : '<span class="badge-status fail">⚠️ Miss</span>';
+      return `<tr><td>${index + 1}</td><td><b>${row.label}</b></td><td class="num">${fmt(k.pcs || 0)}</td><td class="num">${fmt(k.qty || 0)}</td><td class="num">${fmtDecimal1(productivity)}</td><td class="num">${fmtDecimal1(efficiency)}%</td><td class="num">${prodTarget}</td><td style="text-align:center">${status}</td></tr>`;
+    }).join('');
+    systemTable.innerHTML = `<thead><tr><th>#</th><th>ระบบ</th><th class="num">จำนวนชิ้น</th><th class="num">หน่วยหยิบ</th><th class="num">Productivity</th><th class="num">Efficiency เทียบเป้า</th><th class="num">Target</th><th>Hit/Miss</th></tr></thead><tbody>${body}</tbody>`;
+  }
+
+  const nfTable = document.getElementById('sheetAnalysisNotFoundTable');
+  if (nfTable) {
+    const pickerDetails = unknownPickerRows.map((row, index) => {
+      const reasons = [];
+      if (!row.affiliation || row.affiliation === 'ไม่พบสังกัด') reasons.push('ไม่พบสังกัด');
+      if (row.missingTeam) {
+        const rawTeam = getPickerRosterRawTeam(row.picker);
+        reasons.push(rawTeam ? `ค่า Team “${rawTeam}” ไม่ใช่ A/B` : 'ไม่พบกะ A/B');
+      }
+      if (!row.zone || row.zone === '-' || row.zone === '??') reasons.push('ไม่พบ Zone');
+      return `<tr><td>${index + 1}</td><td><b>${escapeZoneHtml(row.picker || '-')}</b></td><td>${escapeZoneHtml(row.name || '-')}</td><td>${escapeZoneHtml(reasons.join(', ') || 'Master ไม่ครบ')}</td><td class="num">${fmt(row.pcs || 0)}</td><td class="num">${fmt(row.qty || 0)}</td><td class="num">${fmtDecimal1(row.avg_prod || 0)}</td><td><span class="badge-status fail">Not Found</span></td></tr>`;
+    }).join('');
+    const zoneSummary = unknownZoneRows.length ? ` · Zone ไม่พบ Master ${fmt(unknownZoneRows.length)} Zone` : '';
+    nfTable.innerHTML = `<caption style="caption-side:top;text-align:left;padding:0 0 10px;color:#64748b;">Not Found ${fmt(unknownPickerRows.length)} พนักงาน · ${fmt(unknownUnits)} หน่วยหยิบ${zoneSummary} — ยอดยังถูกนับ แต่ Target/Hit/Miss ราย Master แสดง Not Found</caption><thead><tr><th>#</th><th>รหัสพนักงาน</th><th>ชื่อ</th><th>สาเหตุ</th><th class="num">ชิ้น</th><th class="num">หน่วยหยิบ</th><th class="num">Productivity</th><th>สถานะ Master</th></tr></thead><tbody>${pickerDetails || '<tr><td colspan="8" class="empty-cell">ไม่พบข้อมูล Not Found ในช่วงที่เลือก</td></tr>'}</tbody>`;
   }
 }
 
