@@ -8,9 +8,49 @@
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
 const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbyby7nOGMZe-w8pph0IZ7jz9WqQ17pwFhfW4TdWgoi1PJlkvXhYuNzHav48WBNsOkcGjg/exec';
+const SHEET_DATA_STORAGE_KEY = 'pick_productivity_sheet_master_cache_v2';
 let CURRENT_SHEET_DATA = null;
 const SHEET_DATA_CACHE = new Map();
 let isSheetDataLoading = false;
+
+function saveSheetDataToStorage(data, from, to) {
+  try {
+    if (typeof localStorage === 'undefined' || !data || !data.ok) return;
+    const cacheKey = (from || 'all') + '|' + (to || 'all');
+    const clone = { ...data, _from: from || '', _to: to || '', _savedAt: Date.now() };
+    const serialized = JSON.stringify(clone);
+    localStorage.setItem(SHEET_DATA_STORAGE_KEY, serialized);
+    localStorage.setItem(SHEET_DATA_STORAGE_KEY + '_' + cacheKey, serialized);
+  } catch (err) {
+    console.warn('บันทึกแคช Google Sheet ลงเครื่องไม่สำเร็จ:', err);
+  }
+}
+
+function restoreSheetDataFromStorage(from, to) {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const cacheKey = (from || 'all') + '|' + (to || 'all');
+    let raw = localStorage.getItem(SHEET_DATA_STORAGE_KEY + '_' + cacheKey);
+    if (!raw) {
+      raw = localStorage.getItem(SHEET_DATA_STORAGE_KEY);
+    }
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (data && data.ok) {
+      CURRENT_SHEET_DATA = data;
+      SHEET_DATA_CACHE.set(cacheKey, data);
+      const savedKey = (data._from || 'all') + '|' + (data._to || 'all');
+      SHEET_DATA_CACHE.set(savedKey, data);
+      SHEET_DATA_CACHE.set('all|all', data);
+      return data;
+    }
+  } catch (err) {
+    console.warn('โหลดแคช Google Sheet จากเครื่องไม่สำเร็จ:', err);
+  }
+  return null;
+}
+
+restoreSheetDataFromStorage();
 
 async function fetchSheetData(from, to, force = false) {
   const cacheKey = (from || 'all') + '|' + (to || 'all');
@@ -36,9 +76,21 @@ async function fetchSheetData(from, to, force = false) {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     if (data && data.ok) {
-      await enrichSheetDataWith2NDTrainees(data);
+      if (typeof enrichSheetDataWith2NDTrainees === 'function') {
+        await enrichSheetDataWith2NDTrainees(data);
+      }
       SHEET_DATA_CACHE.set(cacheKey, data);
       CURRENT_SHEET_DATA = data;
+      saveSheetDataToStorage(data, from, to);
+      if (typeof computeBounds === 'function') {
+        computeBounds();
+      }
+      if (typeof invalidateAggregationCache === 'function') {
+        invalidateAggregationCache();
+      }
+      if (typeof hasLiveData !== 'undefined' && hasLiveData && typeof render === 'function') {
+        render();
+      }
       return data;
     }
   } catch (err) {
@@ -1314,6 +1366,11 @@ function computeBounds() {
   prepShifts();
   const set = new Set();
   ['PTT', 'BPS'].forEach(n => { const S = DATA[n]; if (S && S._sh) for (const si of S._sh) set.add(si.sd); });
+  if (CURRENT_SHEET_DATA && CURRENT_SHEET_DATA.monthlyTrend && Array.isArray(CURRENT_SHEET_DATA.monthlyTrend.days)) {
+    CURRENT_SHEET_DATA.monthlyTrend.days.forEach(d => {
+      if (d && d.hasData && d.date) set.add(d.date);
+    });
+  }
   ALL_DATES = [...set].sort();
   DMIN = ALL_DATES[0] || ''; DMAX = ALL_DATES[ALL_DATES.length - 1] || '';
 }
@@ -3223,23 +3280,40 @@ function aggregate(system, from, to, sf) {
 
     // Sync Sheet daily trend onto result.daily (so charts & daily trends match Results Master 100%)
     if (s.monthlyTrend && Array.isArray(s.monthlyTrend.days)) {
-      const sheetDayMap = new Map();
+      const dailyMap = new Map();
+      result.daily.forEach(d => dailyMap.set(d.date, d));
+
       s.monthlyTrend.days.forEach(d => {
         if (d.hasData && d.date) {
-          sheetDayMap.set(d.date, d);
-        }
-      });
-      result.daily.forEach(d => {
-        const sd = sheetDayMap.get(d.date);
-        if (sd) {
-          if (sd.totalPick != null && Number(sd.totalPick) > 0) d.qty = Math.round(Number(sd.totalPick));
-          if (sd.productivity != null && Number(sd.productivity) > 0) {
-            d.avg_prod = Math.round(Number(sd.productivity));
-            d.raw_avg_prod = Math.round(Number(sd.productivity));
+          if (from && d.date < from) return;
+          if (to && d.date > to) return;
+
+          let targetDay = dailyMap.get(d.date);
+          if (!targetDay) {
+            targetDay = {
+              date: d.date,
+              lines: 0,
+              pcs: Number(d.totalPick) || 0,
+              qty: Math.round(Number(d.totalPick) || 0),
+              pickers: Number(d.count) || 0,
+              hours: 0,
+              avg_prod: Math.round(Number(d.productivity) || 0),
+              avg_pcs_prod: Math.round(Number(d.productivity) || 0),
+              raw_avg_prod: Math.round(Number(d.productivity) || 0)
+            };
+            result.daily.push(targetDay);
+            dailyMap.set(d.date, targetDay);
+          } else {
+            if (d.totalPick != null && Number(d.totalPick) > 0) targetDay.qty = Math.round(Number(d.totalPick));
+            if (d.productivity != null && Number(d.productivity) > 0) {
+              targetDay.avg_prod = Math.round(Number(d.productivity));
+              targetDay.raw_avg_prod = Math.round(Number(d.productivity));
+            }
+            if (d.count != null && Number(d.count) > 0) targetDay.pickers = Number(d.count);
           }
-          if (sd.count != null && Number(sd.count) > 0) d.pickers = Number(sd.count);
         }
       });
+      result.daily.sort((a, b) => a.date.localeCompare(b.date));
     }
     if (from && to && from === to) {
       let targetDay = result.daily.find(d => d.date === from);
@@ -3737,7 +3811,7 @@ function renderKPIs() {
       unit: 'หยิบ/ชม.',
       grad: 'linear-gradient(90deg,#6366f1,#8b5cf6)'
     },
-    { lbl: 'พนักงานหยิบที่นับ', val: k.pickers, unit: 'คน', grad: 'linear-gradient(90deg,#f59e0b,#f97316)' },
+    { lbl: hasSheet ? 'พนักงานหยิบที่นับ (Google Sheet) 👥' : 'พนักงานหยิบที่นับ', val: k.pickers, unit: 'คน', grad: 'linear-gradient(90deg,#f59e0b,#f97316)' },
     { lbl: 'OT รวม', val: k.ot, unit: 'ชม.', grad: 'linear-gradient(90deg,#f43f5e,#ec4899)' }
   ];
   const kw = document.getElementById('kpis'); kw.innerHTML = '';
@@ -3760,12 +3834,8 @@ function renderWeightedProductivityBanner() {
     const anchor = document.getElementById('kpis');
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor.nextSibling);
   }
-  if (prodCalcMode !== 'weighted') {
-    box.style.display = 'none';
-    return;
-  }
-  const w = A && A.productivity_weighting;
-  if (!w || !Array.isArray(w.groups)) {
+  const w = A.productivity_weighting;
+  if (!w || prodCalcMode !== 'weighted') {
     box.style.display = 'none';
     return;
   }
@@ -3857,11 +3927,12 @@ function renderTargetAlertBanner() {
 
   const isPcs = unitMode === 'pcs';
   const currentProd = Math.round(isPcs ? (A.kpis.avg_pcs_prod || 0) : (A.kpis.avg_prod || 0));
+  const targetToUse = (A.sheet_data && A.sheet_data.overall && A.sheet_data.overall.target) ? A.sheet_data.overall.target : prodTarget;
   const unitTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
-  const isBelow = currentProd < prodTarget;
+  const isBelow = currentProd < targetToUse;
 
   if (isBelow) {
-    const diff = Math.round(prodTarget - currentProd);
+    const diff = Math.round(targetToUse - currentProd);
     alertBox.className = 'card wide';
     alertBox.style.cssText = 'margin-top:14px; margin-bottom:18px; background:#fff5f5; border:1px solid #fecaca; border-left:6px solid #ef4444; padding:14px 18px; box-shadow:0 4px 14px rgba(239,68,68,0.12); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;';
     alertBox.innerHTML = `
@@ -3873,7 +3944,7 @@ function renderTargetAlertBanner() {
             <span style="background:#ef4444; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; font-weight:700;">ต่ำกว่าเป้า ${diff} ${unitTxt}</span>
           </div>
           <div style="font-size:12.5px; color:#b91c1c; margin-top:3px;">
-            ค่าปัจจุบัน: <b style="font-size:14px;">${currentProd}</b> ${unitTxt} · เป้าหมายที่ตั้งไว้: <b>${prodTarget}</b> ${unitTxt}
+            ค่าปัจจุบัน: <b style="font-size:14px;">${currentProd}</b> ${unitTxt} · เป้าหมายที่ตั้งไว้: <b>${targetToUse}</b> ${unitTxt}
           </div>
         </div>
       </div>
@@ -3892,7 +3963,7 @@ function renderTargetAlertBanner() {
             <span style="background:#16a34a; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; font-weight:700;">ผ่านเกณฑ์</span>
           </div>
           <div style="font-size:12px; color:#166534; margin-top:2px;">
-            ค่าปัจจุบัน: <b style="font-size:13.5px;">${currentProd}</b> ${unitTxt} · เป้าหมายที่ตั้งไว้: <b>${prodTarget}</b> ${unitTxt}
+            ค่าปัจจุบัน: <b style="font-size:13.5px;">${currentProd}</b> ${unitTxt} · เป้าหมายที่ตั้งไว้: <b>${targetToUse}</b> ${unitTxt}
           </div>
         </div>
       </div>
@@ -5820,12 +5891,22 @@ const builders = {
       };
     }
     function drawTrend(mode) {
+      const hasSheet = Boolean(CURRENT_SHEET_DATA && CURRENT_SHEET_DATA.ok);
       const b = bucket(mode);
       const mainQty = isPcs ? b.pcs : b.qty;
-      const mainLabel = isPcs ? 'จำนวนชิ้น' : 'หน่วยหยิบ';
+      const mainLabel = isPcs ? 'จำนวนชิ้น' : (hasSheet ? 'หน่วยหยิบ (Google Sheet)' : 'หน่วยหยิบ (BigQuery)');
       const prodData = isPcs ? b.pcsProd : b.prod;
-      const prodLabel = (isPcs ? 'Productivity (ชิ้น/ชม.)' : 'Productivity (หยิบ/ชม.)') + (prodCalcMode === 'weighted' ? ' ⚖️ ถ่วงน้ำหนัก' : ' ⚡ หยิบจริง');
+      const prodLabel = (isPcs ? 'Productivity (ชิ้น/ชม.)' : (hasSheet ? 'Productivity Col AF (หยิบ/ชม.) ⚡' : 'Productivity (หยิบ/ชม.)')) + (prodCalcMode === 'weighted' ? ' ⚖️ ถ่วงน้ำหนัก' : ' ⚡ หยิบจริง');
       const isManyBars = b.labels.length > 14;
+
+      const trendSub = document.querySelector('#trend')?.closest('.card')?.querySelector('.sub');
+      if (trendSub) {
+        if (hasSheet && !isPcs) {
+          trendSub.innerHTML = 'แท่ง = หน่วยหยิบทางการ (Google Sheet Results Master) · เส้น = Productivity หลัก Col AF (ขวา)';
+        } else {
+          trendSub.innerHTML = 'แท่ง = ปริมาณของระบบที่เลือก (ซ้าย) · เส้น = Productivity V2 เฉลี่ยราย Picker/วันของระบบที่เลือก (ขวา) · หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ';
+        }
+      }
 
       const maxMainQty = Math.max(1, ...mainQty);
       const validProds = prodData.filter(v => Number(v) > 0);
@@ -10502,6 +10583,9 @@ async function loadDataOnce(force, transientAttempt = 0, options = {}) {
             if (!silent) showLoading(true, 'กำลังเตรียมข้อมูลพนักงาน สินค้า และช่วงเวลาให้พร้อมกัน…');
           }
           await ensureDashboardBundleReady(false, currentRows, 'live');
+          if (dfrom && dto) {
+            void fetchSheetData(dfrom, dto, false);
+          }
           return { ok: true, rows: currentRows, unchanged: true };
         }
         if (/^\d{4}-\d{2}-\d{2}$/.test(probe.minDate) &&
@@ -10566,7 +10650,7 @@ async function loadDataOnce(force, transientAttempt = 0, options = {}) {
       return { ok: true, rows: 0 };
     }
 
-    if (!CURRENT_SHEET_DATA && dfrom && dto) {
+    if (dfrom && dto) {
       try { await Promise.all([fetchSheetData(dfrom, dto, force), fetchResignedMap(force)]); } catch (_) {}
     }
     if (j && j.meta) {
@@ -10617,9 +10701,12 @@ bindDataStateActions();
 updateExcludedZonesBar();
 document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
 async function bootstrapDashboard() {
+  restoreSheetDataFromStorage();
   try { await fetchSharedExclusions(false); } catch (err) { console.warn('Shared exclusions initial load failed:', err); }
   await restoreDashboardFromCache();
+  const sheetPromise = (dfrom && dto) ? fetchSheetData(dfrom, dto, false).catch(() => null) : Promise.resolve(null);
   const result = await loadData(false);
+  await sheetPromise;
   startSharedExclusionsPolling();
   return result;
 }
