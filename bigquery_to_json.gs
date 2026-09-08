@@ -45,6 +45,7 @@ const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว�
 const CACHE_CODEC = 'gzip-base64-v1';
 const PICKER_NAME_SHEET_ID = '1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI';
 const PICKER_NAME_TAB = 'บันทึกเวลาทำงาน';
+const PICKER_RESIGNED_TAB = 'Resigned';
 const PICKER_NAME_START_ROW = 26;
 const ZONE_MASTER_SHEET_ID = '1PMnlyYHswnV0nE73Alxh-ocIFtTipB9LMzACdNM9GFs';
 const ZONE_MASTER_TAB = 'Zone_V2';
@@ -2125,17 +2126,58 @@ function loadPickerDirectory_(forceRefresh) {
     clearPickerDirectoryCache_();
   }
 
-  const empty = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{}, loadedAt:'' };
+  const empty = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{}, resigned:{}, loadedAt:'' };
   try {
     const ss = SpreadsheetApp.openById(PICKER_NAME_SHEET_ID);
+    const directory = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{}, resigned:{}, loadedAt:new Date().toISOString() };
+
+    // 1. โหลดข้อมูลพนักงานลาออก (Resigned)
+    try {
+      const resTab = ss.getSheetByName(PICKER_RESIGNED_TAB);
+      if (resTab) {
+        const resLastRow = resTab.getLastRow();
+        if (resLastRow >= 2) {
+          const resValues = resTab.getRange(2, 1, resLastRow - 1, 8).getDisplayValues();
+          resValues.forEach(row => {
+            const rId = String(row[0] || '').trim();
+            if (!rId) return;
+            const rName = String(row[1] || '').trim();
+            const rNick = String(row[2] || '').trim();
+            const rAff = String(row[3] || '').trim();
+            const rResp = String(row[4] || '').trim();
+            const rZone = String(row[5] || '').trim();
+            const rTeam = String(row[6] || '').trim();
+            const rDate = String(row[7] || '').trim();
+            directory.resigned[rId] = {
+              id: rId,
+              name: rName,
+              nickname: rNick,
+              affiliation: rAff,
+              role: rResp,
+              zone: rZone,
+              team: rTeam,
+              date: rDate
+            };
+          });
+        }
+      }
+    } catch (resErr) {
+      console.warn('loadPickerDirectory_ resigned tab failed: ' + resErr);
+    }
+
     const sh = ss.getSheetByName(PICKER_NAME_TAB);
-    if (!sh) return empty;
+    if (!sh) {
+      writePickerDirectoryCache_(directory);
+      return directory;
+    }
     const lastRow = sh.getLastRow();
-    if (lastRow < PICKER_NAME_START_ROW) return empty;
+    if (lastRow < PICKER_NAME_START_ROW) {
+      writePickerDirectoryCache_(directory);
+      return directory;
+    }
 
     // B:I = รหัสพนักงาน, ชื่อ, ชื่อเล่น, สังกัด, หน้าที่รับผิดชอบ, โซน, Start Date, Team
     const values = sh.getRange(PICKER_NAME_START_ROW, 2, lastRow - PICKER_NAME_START_ROW + 1, 8).getDisplayValues();
-    const directory = { names:{}, affiliations:{}, shiftTeams:{}, rosterTeams:{}, responsibilities:{}, rosterZones:{}, loadedAt:new Date().toISOString() };
     values.forEach(row => {
       const id = String(row[0] || '').trim();
       if (!id) return;
@@ -2183,6 +2225,7 @@ function buildPickerRosterPayload_(forceRefresh) {
     picker_roster_teams: directory.rosterTeams || {},
     picker_responsibilities: directory.responsibilities || {},
     picker_roster_zones: directory.rosterZones || {},
+    picker_resigned: directory.resigned || {},
     summary: { total:total, countA:countA, countB:countB, countFlex:countFlex }
   };
 }
@@ -2947,6 +2990,8 @@ function buildDashboardData_(useQueryCache, requestScope) {
             picker_sunday_ot: loadPickerSundayOtCalendar_(false),
             picker_shift_source: PICKER_NAME_SHEET_ID + '/' + PICKER_NAME_TAB + '!I:I',
             picker_role_source: PICKER_NAME_SHEET_ID + '/' + PICKER_NAME_TAB + '!F:F',
+            picker_resigned: pickerDirectory.resigned || {},
+            picker_resigned_source: PICKER_NAME_SHEET_ID + '/' + PICKER_RESIGNED_TAB + '!A:H',
             zone_master: zoneMaster,
             zone_master_source: ZONE_MASTER_SHEET_ID + '/' + ZONE_MASTER_TAB,
             excluded_items: scope.excludedItems,

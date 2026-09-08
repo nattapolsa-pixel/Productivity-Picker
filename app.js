@@ -7,6 +7,380 @@
 
 // ====== ตั้งค่า: วาง URL ของ Apps Script Web App (ลงท้าย /exec) ตรงนี้ ======
 const DATA_URL = 'https://script.google.com/macros/s/AKfycbyM0IVjD6Eo867rWbR_WjLlJJPSXLCqCqEpPZkfFGnlkqVOr8yY-LR7f6Bl4HRwzBy0/exec';
+const SHEET_API_URL = 'https://script.google.com/macros/s/AKfycbyby7nOGMZe-w8pph0IZ7jz9WqQ17pwFhfW4TdWgoi1PJlkvXhYuNzHav48WBNsOkcGjg/exec';
+let CURRENT_SHEET_DATA = null;
+const SHEET_DATA_CACHE = new Map();
+let isSheetDataLoading = false;
+
+async function fetchSheetData(from, to, force = false) {
+  const cacheKey = (from || 'all') + '|' + (to || 'all');
+  if (!force && SHEET_DATA_CACHE.has(cacheKey)) {
+    CURRENT_SHEET_DATA = SHEET_DATA_CACHE.get(cacheKey);
+    return CURRENT_SHEET_DATA;
+  }
+  isSheetDataLoading = true;
+  try {
+    const url = new URL(SHEET_API_URL);
+    url.searchParams.set('dashboard', 'true');
+    url.searchParams.set('_t', Date.now().toString());
+    if (from) {
+      url.searchParams.set('startDate', from);
+    }
+    if (to) {
+      url.searchParams.set('endDate', to);
+    }
+    if (force) {
+      url.searchParams.set('refresh', 'true');
+    }
+    const res = await fetch(url.toString(), { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (data && data.ok) {
+      await enrichSheetDataWith2NDTrainees(data);
+      SHEET_DATA_CACHE.set(cacheKey, data);
+      CURRENT_SHEET_DATA = data;
+      return data;
+    }
+  } catch (err) {
+    console.warn('โหลดข้อมูลจาก Google Sheet Results Master ไม่สำเร็จ:', err);
+  } finally {
+    isSheetDataLoading = false;
+  }
+  return null;
+}
+
+function parseSheetCsv(text) {
+  const lines = [];
+  let row = [];
+  let inQuotes = false;
+  let cur = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (c === '"') {
+      if (inQuotes && next === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (c === ',' && !inQuotes) {
+      row.push(cur);
+      cur = '';
+    } else if ((c === '\r' || c === '\n') && !inQuotes) {
+      if (c === '\r' && next === '\n') i++;
+      row.push(cur);
+      cur = '';
+      if (row.length > 1 || (row.length === 1 && row[0] !== '')) {
+        lines.push(row);
+      }
+      row = [];
+    } else {
+      cur += c;
+    }
+  }
+  if (cur || row.length) {
+    row.push(cur);
+    lines.push(row);
+  }
+  return lines;
+}
+
+function normalizePersonName(name) {
+  return String(name || '')
+    .replace(/^(นาย|นางสาว|นาง|น\.ส\.|ด\.ช\.|ด\.ญ\.|mr\.|ms\.|mrs\.)\s*/i, '')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+// ====== ข้อมูลพนักงานลาออก (Resigned) ======
+// เชื่อมโยงกับ Google Sheet แท็บ "Resigned"
+// พนักงานที่ลาออกแต่ยังมีสถิติการหยิบในระบบ จะยังคงแสดงยอดปกติทุกอย่าง แต่แสดง Badge '⛔ ลาออก (พ้นสภาพ: วันที่)'
+const RESIGNED_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1AWOeqhCqmBlSfGI5FWJVU4F77lDGNWBUH-TYpJeiYnI/gviz/tq?tqx=out:csv&sheet=Resigned';
+let RESIGNED_MAP = null;
+let isFetchingResigned = false;
+
+async function fetchResignedMap(force = false) {
+  if (typeof fetch === 'undefined') return RESIGNED_MAP;
+  if (RESIGNED_MAP && !force) return RESIGNED_MAP;
+  if (isFetchingResigned) return RESIGNED_MAP;
+  isFetchingResigned = true;
+  try {
+    const res = await fetch(RESIGNED_SHEET_URL, { cache: force ? 'no-store' : 'default' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const csvText = await res.text();
+    const rows = parseSheetCsv(csvText);
+    if (!rows || rows.length < 2) return RESIGNED_MAP;
+
+    const idMap = new Map();
+    const numIdMap = new Map();
+    const nameMap = new Map();
+    const list = [];
+
+    // Header: "รหัสพนักงาน","ชื่อ-นามสกุล (ไทย)","ชื่อเล่น","สังกัด","หน้าที่รับผิดชอบ","โซน","Team","พ้นสภาพ"
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const rawId = String(r[0] || '').trim();
+      const rawName = String(r[1] || '').trim();
+      const nickname = String(r[2] || '').trim();
+      const affiliation = String(r[3] || '').trim();
+      const role = String(r[4] || '').trim();
+      const zone = String(r[5] || '').trim();
+      const team = String(r[6] || '').trim();
+      const dischargeDate = String(r[7] || '').trim();
+
+      if (!rawId && !rawName) continue;
+
+      const info = {
+        id: rawId,
+        name: rawName,
+        nickname,
+        affiliation,
+        role,
+        zone,
+        team,
+        date: dischargeDate
+      };
+      list.push(info);
+
+      if (rawId) {
+        const upId = rawId.toUpperCase();
+        idMap.set(upId, info);
+        const numOnly = upId.replace(/^0+/, '');
+        if (numOnly) numIdMap.set(numOnly, info);
+      }
+      const normName = normalizePersonName(rawName);
+      if (normName) {
+        nameMap.set(normName, info);
+      }
+    }
+
+    RESIGNED_MAP = { idMap, numIdMap, nameMap, list };
+    return RESIGNED_MAP;
+  } catch (err) {
+    console.warn('โหลดข้อมูลพนักงานลาออกจากชีต Resigned ไม่สำเร็จ:', err);
+  } finally {
+    isFetchingResigned = false;
+  }
+  return RESIGNED_MAP;
+}
+
+function getPickerResignedInfo(pickerId, pickerName) {
+  if (!RESIGNED_MAP) return null;
+  const pId = String(pickerId || '').trim().toUpperCase();
+  if (pId) {
+    if (RESIGNED_MAP.idMap.has(pId)) return RESIGNED_MAP.idMap.get(pId);
+    const numOnly = pId.replace(/^0+/, '');
+    if (numOnly && RESIGNED_MAP.numIdMap.has(numOnly)) return RESIGNED_MAP.numIdMap.get(numOnly);
+  }
+  const name = pickerName || getPickerName(pickerId);
+  const normName = normalizePersonName(name);
+  if (normName && RESIGNED_MAP.nameMap.has(normName)) {
+    return RESIGNED_MAP.nameMap.get(normName);
+  }
+  return null;
+}
+
+function syncResignedFromBackendMeta(meta) {
+  if (!meta || !meta.picker_resigned) return;
+  if (!RESIGNED_MAP) {
+    RESIGNED_MAP = { idMap: new Map(), numIdMap: new Map(), nameMap: new Map(), list: [] };
+  }
+  const resMap = meta.picker_resigned;
+  Object.keys(resMap).forEach(id => {
+    const item = resMap[id];
+    const upId = String(id).trim().toUpperCase();
+    const info = {
+      id: upId,
+      name: item.name || '',
+      nickname: item.nickname || '',
+      affiliation: item.affiliation || '',
+      role: item.role || '',
+      zone: item.zone || '',
+      team: item.team || '',
+      date: item.date || ''
+    };
+    if (!RESIGNED_MAP.idMap.has(upId)) {
+      RESIGNED_MAP.idMap.set(upId, info);
+      const numOnly = upId.replace(/^0+/, '');
+      if (numOnly) RESIGNED_MAP.numIdMap.set(numOnly, info);
+      const normName = normalizePersonName(info.name);
+      if (normName && !RESIGNED_MAP.nameMap.has(normName)) {
+        RESIGNED_MAP.nameMap.set(normName, info);
+      }
+      RESIGNED_MAP.list.push(info);
+    }
+  });
+}
+
+// เรียกดึงข้อมูล Resigned ล่วงหน้าทันทีเพื่อความรวดเร็ว
+if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
+  setTimeout(() => { fetchResignedMap().catch(() => {}); }, 100);
+}
+
+let isEnriching2ND = false;
+async function enrichSheetDataWith2NDTrainees(sheetData) {
+  if (!sheetData || isEnriching2ND) return;
+  if (sheetData.trainingSource && sheetData.trainingSource.includes('2ND') && (sheetData.training || []).length >= 5) {
+    return;
+  }
+  isEnriching2ND = true;
+  try {
+    const url = 'https://docs.google.com/spreadsheets/d/1PMnlyYHswnV0nE73Alxh-ocIFtTipB9LMzACdNM9GFs/gviz/tq?tqx=out:csv&sheet=2ND';
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) return;
+    const csvText = await res.text();
+    const rows = parseSheetCsv(csvText);
+    if (!rows || rows.length < 2) return;
+
+    const thaiMonths = {
+      'ม.ค.': 1, 'ก.พ.': 2, 'มี.ค.': 3, 'เม.ย.': 4, 'พ.ค.': 5, 'มิ.ย.': 6,
+      'ก.ค.': 7, 'ส.ค.': 8, 'ก.ย.': 9, 'ต.ค.': 10, 'พ.ย.': 11, 'ธ.ค.': 12
+    };
+    function parseThaiDate(str) {
+      const text = String(str || '').trim();
+      const m = text.match(/^(\d{1,2})[-/]([^\d\s]+)[-/](\d{2,4})$/);
+      if (m) {
+        const d = parseInt(m[1], 10);
+        const mo = thaiMonths[m[2]];
+        let y = parseInt(m[3], 10);
+        if (y < 100) y += 2000;
+        if (y > 2500) y -= 543;
+        if (d && mo && y) return new Date(y, mo - 1, d);
+      }
+      const m2 = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+      if (m2) {
+        const d = parseInt(m2[1], 10);
+        const mo = parseInt(m2[2], 10);
+        let y = parseInt(m2[3], 10);
+        if (y < 100) y += 2000;
+        if (y > 2500) y -= 543;
+        if (d && mo && y) return new Date(y, mo - 1, d);
+      }
+      return null;
+    }
+    function formatDMY(date) {
+      if (!date || isNaN(date.getTime())) return '-';
+      const d = String(date.getDate()).padStart(2, '0');
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const y = date.getFullYear();
+      return `${d}/${m}/${y}`;
+    }
+    function normalizePersonName(name) {
+      return String(name || '')
+        .replace(/^(นาย|นางสาว|นาง|น\.ส\.|ด\.ช\.|ด\.ญ\.|mr\.|ms\.|mrs\.)\s*/i, '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\s+/g, '')
+        .trim()
+        .toLowerCase();
+    }
+
+    const trainees = [];
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.length > 8 && /train/i.test(r[8])) {
+        const uid = (r[1] || '').trim();
+        const name = (r[2] || '').trim();
+        const startDate = parseThaiDate(r[6]);
+        const endDate = startDate ? new Date(startDate.getFullYear(), startDate.getMonth() + 2, startDate.getDate()) : null;
+        trainees.push({
+          userId: uid || '-',
+          name: name,
+          normName: normalizePersonName(name),
+          nickname: (r[3] || '').trim(),
+          affiliation: (r[4] || '').trim(),
+          zone: (r[9] || '').trim(),
+          startDate: startDate,
+          endDate: endDate,
+          dailyRecords: []
+        });
+      }
+    }
+
+    if (!trainees.length) return;
+
+    let rmRecords = [];
+    if (sheetData.dates) {
+      Object.keys(sheetData.dates).forEach(dateKey => {
+        const dayPickers = sheetData.dates[dateKey].pickers || {};
+        Object.keys(dayPickers).forEach(pId => {
+          const p = dayPickers[pId];
+          const avg = p.count > 0 ? (p.sum / p.count) : 0;
+          const pDate = new Date(dateKey + 'T00:00:00');
+          rmRecords.push({
+            date: pDate,
+            id: pId,
+            name: p.name || '',
+            normName: normalizePersonName(p.name || ''),
+            prod: avg
+          });
+        });
+      });
+    }
+
+    trainees.forEach(t => {
+      rmRecords.forEach(r => {
+        const idMatch = t.userId !== '-' && r.id && t.userId.toUpperCase() === r.id.toUpperCase();
+        const nameMatch = t.normName && r.normName && t.normName === r.normName;
+        if (idMatch || nameMatch) {
+          t.dailyRecords.push(r);
+        }
+      });
+    });
+
+    const finalized = trainees.map(t => {
+      const records = t.dailyRecords;
+      const count = records.length;
+      const totalProd = records.reduce((s, r) => s + r.prod, 0);
+      const avg = count > 0 ? Math.round((totalProd / count) * 10) / 10 : 0;
+
+      let first30Sum = 0, first30Count = 0;
+      let second30Sum = 0, second30Count = 0;
+      if (t.startDate) {
+        const day30 = new Date(t.startDate.getTime() + 30 * 86400000);
+        records.forEach(r => {
+          if (r.date <= day30) {
+            first30Sum += r.prod;
+            first30Count++;
+          } else {
+            second30Sum += r.prod;
+            second30Count++;
+          }
+        });
+      }
+      const first30Avg = first30Count > 0 ? Math.round((first30Sum / first30Count) * 10) / 10 : 0;
+      const second30Avg = second30Count > 0 ? Math.round((second30Sum / second30Count) * 10) / 10 : 0;
+      const improvement = (second30Count > 0 && first30Count > 0) ? Math.round((second30Avg - first30Avg) * 10) / 10 : 0;
+
+      return {
+        userId: t.userId,
+        name: t.name,
+        startDate: formatDMY(t.startDate),
+        trainingEndDate: formatDMY(t.endDate),
+        activeDays: count,
+        count: count,
+        first30Count: first30Count,
+        first30Average: first30Avg,
+        second30Count: second30Count,
+        second30Average: second30Avg,
+        improvement: improvement,
+        average: avg,
+        target: 100,
+        targetStatus: avg >= 100 ? 'ผ่าน Target Training' : (count > 0 ? 'ต่ำกว่า Target Training' : 'ไม่มีข้อมูลในช่วง Training')
+      };
+    });
+
+    sheetData.training = finalized;
+    sheetData.trainingSource = '2ND!B/G/I + Training row';
+    sheetData.trainingUserCount = finalized.length;
+  } catch (err) {
+    console.warn('enrichSheetDataWith2NDTrainees failed:', err);
+  } finally {
+    isEnriching2ND = false;
+  }
+}
 // ส่ง compact work cube ก่อน แล้ว lazy-load item/time detail เป็นรายวัน
 // pick_qty ต้องมาจาก BigQuery Master_Item + Master_Pack เท่านั้น
 const DASHBOARD_SCHEMA_VERSION = 'pick-units-v24-sheet-master-all-items';
@@ -95,7 +469,7 @@ const PRODUCTIVITY_WEIGHT_CONFIG = Object.freeze([
   })
 ]);
 // ==============================================
-const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', efficiency: '🎯 Efficiency (ประสิทธิภาพการหยิบ)', cycletime: '⏱️ Cycle Time (รอบเวลาการทำงาน)', incentive: '💰 Incentive (เบี้ยขยัน & ผลตอบแทนตามเป้า)', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
+const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', training: '🎓 พนักงานฝึกสอน (Training)', efficiency: '🎯 Efficiency (ประสิทธิภาพการหยิบ)', cycletime: '⏱️ Cycle Time (รอบเวลาการทำงาน)', incentive: '💰 Incentive (เบี้ยขยัน & ผลตอบแทนตามเป้า)', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
 const HISTORICAL_V1 = Object.freeze({
   source: 'Results Master!E (Total pick)',
   startDate: '2026-01-02',
@@ -1277,6 +1651,34 @@ function getTypePickForZone(zoneName, zObj) {
   return '-';
 }
 
+function formatMinutesToTime(min) {
+  if (min == null || !Number.isFinite(Number(min)) || min < 0) return '-';
+  const m = Math.floor(Number(min));
+  const hrs = Math.floor(m / 60) % 24;
+  const mins = m % 60;
+  return String(hrs).padStart(2, '0') + ':' + String(mins).padStart(2, '0');
+}
+
+function isZoneMatch(assignedZone, actualZone) {
+  if (!assignedZone || !actualZone) return false;
+  const az = String(assignedZone).trim().toUpperCase();
+  const act = String(actualZone).trim().toUpperCase();
+  if (!az || !act || az === '-' || act === '-' || az === '??' || act === '??') return false;
+  if (az === act) return true;
+  const azParts = az.split(/[-_\s,]+/).map(x => x.trim()).filter(Boolean);
+  const actParts = act.split(/[-_\s,]+/).map(x => x.trim()).filter(Boolean);
+  if (azParts.some(p => actParts.includes(p)) || actParts.some(p => azParts.includes(p))) return true;
+  const actInfo = getZoneInfo(act);
+  if (actInfo && actInfo.zone && actInfo.zone.toUpperCase() !== act) {
+    if (isZoneMatch(az, actInfo.zone)) return true;
+  }
+  const azInfo = getZoneInfo(az);
+  if (azInfo && azInfo.zone && azInfo.zone.toUpperCase() !== az) {
+    if (isZoneMatch(azInfo.zone, act)) return true;
+  }
+  return false;
+}
+
 function getZoneMasterEntries() {
   return Object.entries(ZONE_MASTER).map(([location, info]) => ({
     location,
@@ -1305,7 +1707,7 @@ function formatRankBadge(index) {
 }
 
 function formatMapValue(value) {
-  const n = Number(value) || 0;
+  const n = Math.ceil(Number(value) || 0);
   if (n < 100000) return fmt(n);
   return new Intl.NumberFormat('en-US', {
     notation: 'compact',
@@ -1383,35 +1785,73 @@ function renderWarehouseMap(activeLocations, isPcs) {
   }
 
   function card(code, extraClass) {
-    const row = activeLocations.get(code) || { location: code, pcs: 0, qty: 0, lines: 0, pickers: 0 };
+    let row = activeLocations.get(code) || { location: code, pcs: 0, qty: 0, lines: 0, pickers: 0 };
     const info = metadata(code);
+
+    let isLinked = false;
+    let linkedSibling = '';
+    if (Number(row.lines || 0) === 0 && (code === 'CA' || code === 'DF')) {
+      linkedSibling = code === 'CA' ? 'AN' : 'CF';
+      const sibRow = activeLocations.get(linkedSibling);
+      if (sibRow && Number(sibRow.lines || 0) > 0) {
+        row = { ...sibRow, location: code };
+        isLinked = true;
+      }
+    }
+
     const primary = mainValue(row);
     const secondary = isPcs ? Number(row.qty || 0) : Number(row.pcs || 0);
     const color = zoneMapColor(primary, maxValue, isPcs, info);
     const active = Number(row.lines || 0) > 0;
 
     const zProdMap = A && A.zone_prod_map;
-    const zProd = zProdMap ? (zProdMap[info.zone] || zProdMap[code]) : null;
+    const zProd = zProdMap ? (zProdMap[info.zone] || zProdMap[code] || (isLinked ? zProdMap[linkedSibling] : null)) : null;
     const prodVal = zProd ? (isPcs ? Number(zProd.avg_pcs_prod || 0) : Number(zProd.avg_prod || 0)) : 0;
-    const prodText = prodVal > 0 ? (prodVal >= 10000 ? formatMapValue(prodVal) : fmt(Math.ceil(prodVal))) : '-';
+    const prodText = (active && prodVal > 0) ? (prodVal >= 10000 ? formatMapValue(prodVal) : fmt(Math.ceil(prodVal))) : '-';
+
+    let extraNote = '';
+    if (isLinked) {
+      extraNote = `\n(หมายเหตุ: แร็คร่วม ${info.zone} · สแกนบาร์โค้ดบันทึกที่จุด ${linkedSibling})`;
+    } else if (code === 'AN' || code === 'CF') {
+      const sib = code === 'AN' ? 'CA' : 'DF';
+      extraNote = `\n(หมายเหตุ: จุดสแกนหลักของแร็คร่วม ${info.zone} ซึ่งรวม ${code} และ ${sib})`;
+    } else if (!active && (code === 'DF' || code === 'CA')) {
+      const sibling = code === 'DF' ? 'CF' : 'AN';
+      extraNote = `\n(หมายเหตุ: อยู่ในกลุ่ม ${info.zone} ซึ่งหน้างานบันทึกรวมที่ ${sibling})`;
+    }
 
     const title = [
       `Location: ${code}`,
       `Zone: ${info.zone}`,
       `Type Pick: ${info.typePick}`,
       `Owner: ${info.owner}`,
-      `จำนวนชิ้น: ${fmt(row.pcs || 0)} ชิ้น`,
-      `หน่วยหยิบ: ${fmt(row.qty || 0)} หน่วย`,
-      `Productivity: ${fmt(prodVal > 0 ? Math.ceil(prodVal) : 0)} ${isPcs ? 'ชิ้น/ชม.' : 'หน่วย/ชม.'}`,
-      `Picker: ${fmt(row.pickers || 0)} คน`
+      `จำนวนชิ้น: ${fmt(row.pcs || 0)} ชิ้น${isLinked ? ` (ยอดรวมแร็ค ${info.zone})` : ''}`,
+      `หน่วยหยิบ: ${fmt(row.qty || 0)} หน่วย${isLinked ? ` (ยอดรวมแร็ค ${info.zone})` : ''}`,
+      `Productivity: ${active && prodVal > 0 ? fmt(Math.ceil(prodVal)) : '-'} ${active && prodVal > 0 ? (isPcs ? 'ชิ้น/ชม.' : 'หน่วย/ชม.') : ''}`,
+      `Picker: ${fmt(row.pickers || 0)} คน${extraNote}`
     ].join('\n');
+
+    let subBadge = '';
+    if (info.zone === 'AN-CA') {
+      subBadge = `<span style="display:block;font-size:7.5px;font-weight:700;color:#0369a1;margin-top:1px;">(รวม AN-CA)</span>`;
+    } else if (info.zone === 'CF-DF') {
+      subBadge = `<span style="display:block;font-size:7.5px;font-weight:700;color:#0369a1;margin-top:1px;">(รวม CF-DF)</span>`;
+    }
+
+    let pickerLine = `👤 ${fmt(row.pickers || 0)} คน`;
+    if (isLinked) {
+      pickerLine = `👤 ${fmt(row.pickers || 0)} คน<span style="display:block;font-size:7px;color:#0284c7;font-weight:700;">(ยิงที่ ${linkedSibling})</span>`;
+    } else if (active && (code === 'AN' || code === 'CF')) {
+      pickerLine = `👤 ${fmt(row.pickers || 0)} คน<span style="display:block;font-size:7px;color:#059669;font-weight:700;">(จุดสแกนหลัก)</span>`;
+    }
+
     return `<div class="floor-loc ${extraClass || ''} ${active ? 'active' : 'inactive'}" data-location="${escapeZoneHtml(code)}"` +
       ` onclick="openZoneDetailModal('${escapeZoneHtml(code)}')" style="cursor:pointer;--floor-bg:${color.background};--floor-border:${color.border};--floor-accent:${color.accent || color.border};--floor-fg:${color.color}" data-owner="${escapeZoneHtml(info.owner)}" data-type-pick="${escapeZoneHtml(info.typePick)}" title="${escapeZoneHtml(title)}">` +
-      `<div class="floor-loc-code">${escapeZoneHtml(code)}</div>` +
+      `<div class="floor-loc-code">${escapeZoneHtml(code)}${subBadge}</div>` +
       `<div class="floor-loc-metric"><strong>${formatMapValue(primary)}</strong><span>${escapeZoneHtml(mainUnit)}</span></div>` +
       `<div class="floor-loc-secondary">${formatMapValue(secondary)} ${escapeZoneHtml(secondaryUnit)}</div>` +
       `<div class="floor-loc-prod">⚡ ${escapeZoneHtml(prodText)}</div>` +
-      `<div class="floor-loc-pickers">👤 ${fmt(row.pickers || 0)} คน</div>` +
+      `<div class="floor-loc-pickers">${pickerLine}</div>` +
       `</div>`;
   }
 
@@ -1464,6 +1904,7 @@ function openZoneDetailModal(zoneCode) {
     if (!S || !Array.isArray(S.rows)) return;
     const count = packedRowCount(S);
     const zoneInfo = getZoneInfo(zoneCode);
+    const targetZone = zoneInfo.zone;
 
     let totalQty = 0, totalPcs = 0, totalLines = 0;
     const uniqueSkus = new Map();
@@ -1478,7 +1919,7 @@ function openZoneDetailModal(zoneCode) {
       const zInfo = getZoneInfo(rawLoc);
       const zCode = zInfo.zone || zInfo.location || String(rawLoc || '-').trim().toUpperCase();
       const rawLocStr = String(rawLoc || '-').trim().toUpperCase();
-      if (zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode) continue;
+      if (zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode && (!targetZone || zInfo.zone !== targetZone)) continue;
 
       const qty = row.pickQty;
       const pcs = row.pcs;
@@ -1517,7 +1958,7 @@ function openZoneDetailModal(zoneCode) {
       const zInfo = getZoneInfo(row.zone);
       const zCode = zInfo.zone || zInfo.location || String(row.zone || '-').trim().toUpperCase();
       const rawLocStr = String(row.zone || '-').trim().toUpperCase();
-      if (zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode) return;
+      if (zCode !== zoneCode && zInfo.location !== zoneCode && rawLocStr !== zoneCode && (!targetZone || zInfo.zone !== targetZone)) return;
       const sku = row.sku;
       const owner = normalizeOwnerKey(row.owner);
       if (isSkuExcluded(sku, owner)) return;
@@ -1573,17 +2014,31 @@ function openZoneDetailModal(zoneCode) {
 
     const titleEl = document.getElementById('zoneModalTitle');
     const subEl = document.getElementById('zoneModalSub');
+    let subNote = '';
+    let bannerNote = '';
+    if (zoneCode === 'CA' || zoneCode === 'DF') {
+      const sib = zoneCode === 'CA' ? 'AN' : 'CF';
+      subNote = ` · <span style="color:#0284c7;font-weight:700;">(แร็คร่วม ${escapeZoneHtml(targetZone || zoneCode)} · สแกนบาร์โค้ดบันทึกที่จุด ${sib})</span>`;
+      bannerNote = `<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:9px 13px;font-size:12px;color:#0369a1;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:16px;">ℹ️</span>
+        <div><strong>หมายเหตุการบันทึกหน้างาน:</strong> กล่องนี้คือแร็คร่วม <strong>${escapeZoneHtml(targetZone || zoneCode)}</strong> ซึ่งระบบสแกนบาร์โค้ดหน้างานบันทึกรวมไว้ที่จุด <strong>${sib}</strong> ข้อมูลในหน้านี้จึงแสดงยอดและรายการปฏิบัติงานจริงของแร็คนี้ทั้งหมดอย่างครบถ้วน</div>
+      </div>`;
+    } else if (zoneCode === 'AN' || zoneCode === 'CF') {
+      subNote = ` · <span style="color:#059669;font-weight:700;">(จุดสแกนหลัก แร็คร่วม ${escapeZoneHtml(targetZone || zoneCode)})</span>`;
+    }
+
     if (titleEl) {
       titleEl.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center; width:100%; flex-wrap:wrap; gap:10px;">
         <span>📍 รายละเอียดและผลงานใน Zone: <span style="color:#fbbf24; font-weight:800; font-size:20px; text-decoration:underline;">${escapeZoneHtml(zoneCode)}</span> ${isEx ? '<span style="background:#ef4444; color:#fff; font-size:11px; padding:2px 8px; border-radius:6px; margin-left:6px; font-weight:700;">[ถูกตัดออกจากการคำนวณ]</span>' : ''}</span>
         <button onclick="toggleZoneExclusion('${escapeZoneHtml(zoneCode)}'); openZoneDetailModal('${escapeZoneHtml(zoneCode)}');" style="${exBtnStyle}">${exBtnText}</button>
       </div>`;
     }
-    if (subEl) subEl.textContent = `ชนิดการจัดเก็บ: ${zoneInfo.typePick || '-'} · เจ้าของสินค้า: ${zoneInfo.owner || '-'} · ช่วงวันที่: ${dfrom} ถึง ${dto}`;
+    if (subEl) subEl.innerHTML = `ชนิดการจัดเก็บ: ${escapeZoneHtml(zoneInfo.typePick || '-')} · เจ้าของสินค้า: ${escapeZoneHtml(zoneInfo.owner || '-')} · ช่วงวันที่: ${escapeZoneHtml(dfrom)} ถึง ${escapeZoneHtml(dto)}${subNote}`;
 
     const bodyEl = document.getElementById('zoneModalBody');
     if (bodyEl) {
       let bodyHtml = `
+        ${bannerNote}
         <!-- 4 Strategic KPI Cards -->
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px;">
           <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #4338ca; padding:12px 14px; border-radius:10px;">
@@ -1758,6 +2213,97 @@ function renderZoneProductivityBreakdown() {
     `<th class="num">Productivity หยิบ/ชม.</th><th class="num">Productivity ชิ้น/ชม.</th><th class="num">Picker ที่นับ / ทั้งหมด</th>` +
     `</tr></thead><tbody>${body}</tbody></table></div>` +
     `<div class="zone-breakdown-foot">Productivity แบบ V2 = ROUND(Total Pick ÷ Active Hours, 0) · Active Hours คือจำนวนชั่วโมงที่มี Pick > 0 · Count เมื่อ Active Hours > 3 และ Productivity < 1000 · ไม่หัก Break</div>`;
+
+  if (A.mobilitySummary && Array.isArray(A.mobilitySummary.zoneExchange) && A.mobilitySummary.zoneExchange.length > 0) {
+    const mob = A.mobilitySummary;
+    let mobHtml = `
+    <div style="margin-top:24px; padding-top:20px; border-top:1px dashed #cbd5e1;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+        <div>
+          <h4 style="font-size:15px; font-weight:700; color:#0f172a; margin:0; display:flex; align-items:center; gap:8px;">
+            <span>🔄</span> การเคลื่อนย้ายและถ่ายโอนกำลังคนข้ามโซน (Cross-Zone Labor Exchange)
+          </h4>
+          <div style="font-size:12px; color:#64748b; margin-top:3px;">
+            เปรียบเทียบโควต้าคนตาม Google Sheet (Results Master) vs คนที่สแกนปฏิบัติงานจริงใน BigQuery
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <span style="background:#e0e7ff; color:#3730a3; font-size:11.5px; font-weight:700; padding:4px 10px; border-radius:8px;">
+            ช่วยข้ามโซน ${mob.crossZonePickerCount} คน (${mob.crossZonePickerPct}%)
+          </span>
+          <span style="background:#fef3c7; color:#92400e; font-size:11.5px; font-weight:700; padding:4px 10px; border-radius:8px;">
+            งานข้ามโซน ${fmt(mob.crossZoneUnits)} หน่วย (${mob.crossZoneUnitsPct}%)
+          </span>
+        </div>
+      </div>
+
+      <!-- Mobility Stat Cards -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-bottom:16px;">
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
+          <div style="font-size:11px; color:#64748b; font-weight:600;">ตรงโซนประจำ (100%)</div>
+          <div style="font-size:18px; font-weight:800; color:#16a34a; margin-top:2px;">${fmt(mob.dedicatedCount)} <span style="font-size:11px; font-weight:500;">คน</span></div>
+        </div>
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
+          <div style="font-size:11px; color:#64748b; font-weight:600;">ช่วยงานข้ามโซน</div>
+          <div style="font-size:18px; font-weight:800; color:#0284c7; margin-top:2px;">${fmt(mob.helperCount)} <span style="font-size:11px; font-weight:500;">คน</span></div>
+        </div>
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
+          <div style="font-size:11px; color:#64748b; font-weight:600;">ย้ายโซนหลัก</div>
+          <div style="font-size:18px; font-weight:800; color:#ea580c; margin-top:2px;">${fmt(mob.reassignedCount)} <span style="font-size:11px; font-weight:500;">คน</span></div>
+        </div>
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:10px;">
+          <div style="font-size:11px; color:#64748b; font-weight:600;">ลอยตัวหลายโซน</div>
+          <div style="font-size:18px; font-weight:800; color:#9333ea; margin-top:2px;">${fmt(mob.floaterCount)} <span style="font-size:11px; font-weight:500;">คน</span></div>
+        </div>
+      </div>
+
+      <!-- Exchange Matrix Table -->
+      <div style="overflow-x:auto; background:#ffffff; border:1px solid #e2e8f0; border-radius:12px;">
+        <table class="zone-breakdown-table" style="width:100%; font-size:12px; margin:0;">
+          <thead>
+            <tr style="background:#f8fafc; text-align:left; font-size:11px; color:#64748b;">
+              <th>Zone</th>
+              <th>ประเภท Rack</th>
+              <th class="num">คนตามชีต</th>
+              <th class="num">คนหยิบจริง</th>
+              <th class="num">เจ้าถิ่นที่อยู่</th>
+              <th class="num" style="color:#0284c7;">กำลังเสริมที่รับมา</th>
+              <th class="num" style="color:#d97706;">คนที่ส่งออกไปช่วย</th>
+              <th class="num">Net กำลังคน</th>
+              <th style="text-align:center;">สถานะโซน</th>
+            </tr>
+          </thead>
+          <tbody>`;
+
+    mob.zoneExchange.forEach(z => {
+      mobHtml += `
+            <tr style="border-bottom:1px solid #f1f5f9;">
+              <td style="font-weight:700;"><span class="pill">${escapeZoneHtml(z.zone)}</span></td>
+              <td style="color:#475569;">${escapeZoneHtml(z.typePick)}</td>
+              <td class="num" style="font-weight:600;">${fmt(z.rostered)}</td>
+              <td class="num" style="font-weight:700; color:#0f172a;">${fmt(z.actual)}</td>
+              <td class="num" style="color:#16a34a; font-weight:600;">${fmt(z.homeCount)}</td>
+              <td class="num" style="color:#0284c7; font-weight:700;">${z.guestCount > 0 ? ('+' + fmt(z.guestCount)) : '-'}</td>
+              <td class="num" style="color:#ea580c; font-weight:700;">${z.outflowCount > 0 ? ('-' + fmt(z.outflowCount)) : '-'}</td>
+              <td class="num" style="font-weight:800; color:${z.statusBadgeColor};">${z.netHelper > 0 ? ('+' + z.netHelper) : z.netHelper}</td>
+              <td style="text-align:center;">
+                <span style="font-size:11px; font-weight:700; padding:3px 8px; border-radius:6px; background:${z.statusBadgeColor}15; color:${z.statusBadgeColor};">
+                  ${escapeZoneHtml(z.netStatus)}
+                </span>
+              </td>
+            </tr>`;
+    });
+
+    mobHtml += `
+          </tbody>
+        </table>
+      </div>
+      <div style="font-size:11px; color:#94a3b8; margin-top:8px;">
+        * Net กำลังคน = กำลังเสริมที่รับมา - คนที่ออกไปช่วยโซนอื่น · ค่าบวกแปลว่าโซนนั้นต้องการคนเพิ่ม (Net Importer) · ค่าลบแปลว่าโซนนั้นมีกำลังคนเหลือส่งไปช่วย (Net Exporter)
+      </div>
+    </div>`;
+    root.innerHTML += mobHtml;
+  }
   if (switchRoot) {
     switchRoot.querySelectorAll('button').forEach(button => {
       const bMode = button.dataset.breakdown;
@@ -2596,6 +3142,344 @@ function aggregate(system, from, to, sf) {
     productivity_weighting: overallWeighted,
     daily, by_zone, by_location, by_picker, by_zone_prod, zone_prod_map, by_owner, by_type_pick, by_affiliation, affiliation_daily, by_timeslot, by_item, by_item_all, picker_drilldown: pickerDrilldownMap
   };
+
+  // ====== MAP V1 GOOGLE SHEET (RESULTS MASTER) AS PRIMARY SOURCE OF TRUTH ======
+  if (CURRENT_SHEET_DATA && CURRENT_SHEET_DATA.ok) {
+    const s = CURRENT_SHEET_DATA;
+    result.sheet_data = s;
+    result.sheet_categories = s.categories || {};
+    result.sheet_zones = s.zones || [];
+    result.sheet_shifts = s.shifts || [];
+    result.sheet_bu = s.bu || [];
+    result.sheet_training = s.training || [];
+    result.sheet_monthlyTrend = s.monthlyTrend || {};
+
+    if (s.totalPick != null && Number(s.totalPick) > 0) {
+      result.kpis.sheet_qty = Number(s.totalPick) || 0;
+      result.kpis.qty = result.kpis.sheet_qty;
+    }
+    if (s.overall && s.overall.average != null && Number(s.overall.average) > 0) {
+      result.kpis.sheet_avg_prod = Math.round(Number(s.overall.average));
+      result.kpis.avg_prod = result.kpis.sheet_avg_prod;
+      result.kpis.raw_avg_prod = result.kpis.sheet_avg_prod;
+      result.kpis.target = s.overall.target || 170;
+      result.kpis.gap = Math.round(result.kpis.avg_prod - result.kpis.target);
+      result.kpis.status = s.overall.status || '';
+    }
+    if (s.pickers && Array.isArray(s.pickers.all)) {
+      result.kpis.sheet_pickers = s.pickers.all.length;
+      result.kpis.pickers = result.kpis.sheet_pickers;
+
+      // Sync Sheet pickers onto result.by_picker
+      const pickerMap = new Map();
+      result.by_picker.forEach(p => pickerMap.set(p.picker, p));
+
+      s.pickers.all.forEach(sp => {
+        const pid = String(sp.userId || '').trim();
+        let bp = pickerMap.get(pid);
+        if (!bp) {
+          bp = {
+            picker: pid,
+            name: sp.name || getPickerName(pid),
+            affiliation: sp.mainAffiliation || getPickerAffiliation(pid),
+            pcs: sp.totalPick || 0,
+            qty: sp.totalPick || 0,
+            lines: 0,
+            ot: 0,
+            hours: sp.count || 0,
+            shift: sp.mainShift === 'A' ? 'morning' : (sp.mainShift === 'B' ? 'night' : sp.mainShift),
+            avg_prod: sp.average || 0,
+            avg_pcs_prod: sp.average || 0,
+            zone: sp.mainZone || '-',
+            location: sp.mainZone || '-',
+            typePick: sp.mainPickType || '-'
+          };
+          result.by_picker.push(bp);
+          pickerMap.set(pid, bp);
+        }
+        bp.name = sp.name || bp.name;
+        bp.sheetAverage = sp.average || 0;
+        bp.sheetTotalPick = sp.totalPick || 0;
+        bp.sheetCount = sp.count || 0;
+        bp.sheetTarget = sp.target || 170;
+        bp.sheetGap = sp.gap || 0;
+        bp.sheetStatus = sp.status || '-';
+        bp.sheetShift = sp.mainShift || '-';
+        bp.sheetAffiliation = sp.mainAffiliation || '-';
+        bp.sheetBu = sp.mainBu || '-';
+        bp.sheetPickType = sp.mainPickType || '-';
+        bp.sheetZone = sp.mainZone || '-';
+        if (sp.totalPick != null && Number(sp.totalPick) >= 0) {
+          bp.rawBqQty = bp.qty;
+          bp.qty = Number(sp.totalPick);
+        }
+        if (sp.average > 0) {
+          bp.rawBqProd = bp.avg_prod;
+          bp.avg_prod = sp.average;
+        }
+      });
+      result.by_picker.sort((a, b) => (b.qty - a.qty) || (b.pcs - a.pcs));
+    }
+
+    // Sync Sheet daily trend onto result.daily (so charts & daily trends match Results Master 100%)
+    if (s.monthlyTrend && Array.isArray(s.monthlyTrend.days)) {
+      const sheetDayMap = new Map();
+      s.monthlyTrend.days.forEach(d => {
+        if (d.hasData && d.date) {
+          sheetDayMap.set(d.date, d);
+        }
+      });
+      result.daily.forEach(d => {
+        const sd = sheetDayMap.get(d.date);
+        if (sd) {
+          if (sd.totalPick != null && Number(sd.totalPick) > 0) d.qty = Math.round(Number(sd.totalPick));
+          if (sd.productivity != null && Number(sd.productivity) > 0) {
+            d.avg_prod = Math.round(Number(sd.productivity));
+            d.raw_avg_prod = Math.round(Number(sd.productivity));
+          }
+          if (sd.count != null && Number(sd.count) > 0) d.pickers = Number(sd.count);
+        }
+      });
+    }
+    if (from && to && from === to) {
+      let targetDay = result.daily.find(d => d.date === from);
+      if (!targetDay) {
+        targetDay = { date: from, lines: 0, pcs: 0, qty: 0, pickers: 0, hours: 0, avg_prod: 0, avg_pcs_prod: 0 };
+        result.daily.push(targetDay);
+      }
+      if (s.totalPick != null && Number(s.totalPick) > 0) targetDay.qty = Math.round(Number(s.totalPick));
+      if (s.overall && s.overall.average != null && Number(s.overall.average) > 0) {
+        targetDay.avg_prod = Math.round(Number(s.overall.average));
+        targetDay.raw_avg_prod = Math.round(Number(s.overall.average));
+      }
+      if (s.pickers && Array.isArray(s.pickers.all)) targetDay.pickers = s.pickers.all.length;
+    }
+
+    // ====== COMPUTE CROSS-ZONE MOBILITY & FAIR BLENDED TARGET FOR ALL PICKERS ======
+    const mobilityCounts = { dedicated: 0, helper: 0, reassigned: 0, floater: 0, unassigned: 0 };
+    let warehouseTotalQty = 0;
+    let warehouseCrossQty = 0;
+    const zoneExchangeMap = {};
+
+    function getZoneExchangeRecord(zoneName) {
+      const zKey = String(zoneName || '-').trim().toUpperCase();
+      if (!zoneExchangeMap[zKey]) {
+        const tp = getTypePickForZone(zKey);
+        zoneExchangeMap[zKey] = {
+          zone: zKey,
+          typePick: tp,
+          target: getTargetForZoneOrType(tp, zKey),
+          rostered: 0,
+          actual: 0,
+          homeCount: 0,
+          guestCount: 0,
+          outflowCount: 0,
+          guestQty: 0,
+          homeQty: 0,
+          totalQty: 0
+        };
+      }
+      return zoneExchangeMap[zKey];
+    }
+
+    // Count rostered per assigned zone from Sheet
+    result.by_picker.forEach(bp => {
+      const assigned = String(bp.sheetZone || '-').trim();
+      if (assigned && assigned !== '-' && assigned !== '??') {
+        getZoneExchangeRecord(assigned).rostered++;
+      }
+    });
+
+    result.by_picker.forEach(bp => {
+      const pDrill = pickerDrilldownMap[bp.picker];
+      const actualZonesMap = {};
+      let totalActualQty = 0;
+      let totalActualPcs = 0;
+      let totalActualLines = 0;
+
+      if (pDrill && pDrill.byDate) {
+        Object.entries(pDrill.byDate).forEach(([dKey, dRec]) => {
+          Object.entries(dRec.zones || {}).forEach(([z, v]) => {
+            const zKey = String(z).trim().toUpperCase();
+            if (!actualZonesMap[zKey]) {
+              actualZonesMap[zKey] = { zone: zKey, qty: 0, pcs: 0, lines: 0, mn: 999999, mx: -1 };
+            }
+            actualZonesMap[zKey].qty += v.qty;
+            actualZonesMap[zKey].pcs += v.pcs;
+            actualZonesMap[zKey].lines += v.lines;
+            totalActualQty += v.qty;
+            totalActualPcs += v.pcs;
+            totalActualLines += v.lines;
+
+            const zg = zoneGrp[bp.picker + '|' + dKey + '|' + z];
+            if (zg) {
+              if (zg.mn < actualZonesMap[zKey].mn) actualZonesMap[zKey].mn = zg.mn;
+              if (zg.mx > actualZonesMap[zKey].mx) actualZonesMap[zKey].mx = zg.mx;
+            }
+          });
+        });
+      }
+
+      const assignedZone = String(bp.sheetZone || '-').trim();
+      const actualZonesList = Object.values(actualZonesMap).map(z => {
+        const tp = getTypePickForZone(z.zone);
+        const tgt = getTargetForZoneOrType(tp, z.zone);
+        const isAssigned = isZoneMatch(assignedZone, z.zone);
+        const sharePct = totalActualQty > 0 ? (z.qty / totalActualQty) * 100 : 0;
+        const timeSpan = (z.mn < 999999 && z.mx >= 0) ? (formatMinutesToTime(z.mn) + ' - ' + formatMinutesToTime(z.mx)) : '-';
+        return {
+          zone: z.zone,
+          typePick: tp,
+          target: tgt,
+          qty: z.qty,
+          pcs: z.pcs,
+          lines: z.lines,
+          sharePct,
+          isAssigned,
+          timeSpan
+        };
+      }).sort((a, b) => b.qty - a.qty);
+
+      bp.actualZones = actualZonesList;
+      bp.actualTotalQty = totalActualQty;
+      bp.actualTotalPcs = totalActualPcs;
+
+      let assignedQty = 0;
+      let crossZoneQty = 0;
+      actualZonesList.forEach(z => {
+        if (z.isAssigned) {
+          assignedQty += z.qty;
+        } else {
+          crossZoneQty += z.qty;
+        }
+
+        const zm = getZoneExchangeRecord(z.zone);
+        zm.actual++;
+        zm.totalQty += z.qty;
+        if (z.isAssigned) {
+          zm.homeCount++;
+          zm.homeQty += z.qty;
+        } else {
+          zm.guestCount++;
+          zm.guestQty += z.qty;
+        }
+      });
+
+      const assignedPct = totalActualQty > 0 ? (assignedQty / totalActualQty) * 100 : (assignedZone !== '-' ? 100 : 0);
+      const crossZonePct = 100 - assignedPct;
+      bp.assignedQty = assignedQty;
+      bp.assignedPct = r1(assignedPct);
+      bp.crossZoneQty = crossZoneQty;
+      bp.crossZonePct = r1(crossZonePct);
+      bp.primaryActualZone = actualZonesList[0] ? actualZonesList[0].zone : (assignedZone !== '-' ? assignedZone : '-');
+
+      if (assignedZone && assignedZone !== '-' && crossZoneQty > 0) {
+        getZoneExchangeRecord(assignedZone).outflowCount++;
+      }
+
+      warehouseTotalQty += totalActualQty;
+      warehouseCrossQty += crossZoneQty;
+
+      // Classify Mobility Status
+      if (!assignedZone || assignedZone === '-' || assignedZone === '??') {
+        bp.mobilityStatus = 'UNASSIGNED';
+        bp.mobilityLabel = 'ไม่ได้ระบุในชีต';
+        bp.mobilityColor = '#64748b';
+        mobilityCounts.unassigned++;
+      } else if (assignedPct >= 95) {
+        bp.mobilityStatus = 'DEDICATED';
+        bp.mobilityLabel = 'ตรงโซนประจำ 100%';
+        bp.mobilityColor = '#16a34a';
+        mobilityCounts.dedicated++;
+      } else if (assignedPct >= 40) {
+        bp.mobilityStatus = 'PRIMARY_HELPER';
+        bp.mobilityLabel = 'ช่วยงานข้ามโซน (' + r1(crossZonePct) + '%)';
+        bp.mobilityColor = '#0284c7';
+        mobilityCounts.helper++;
+      } else if (actualZonesList.length >= 3 && (!actualZonesList[0] || actualZonesList[0].sharePct < 50)) {
+        bp.mobilityStatus = 'FLOATER';
+        bp.mobilityLabel = 'ลอยตัวหลายโซน (' + actualZonesList.length + ' โซน)';
+        bp.mobilityColor = '#9333ea';
+        mobilityCounts.floater++;
+      } else {
+        bp.mobilityStatus = 'REASSIGNED';
+        bp.mobilityLabel = 'ย้ายไป ' + bp.primaryActualZone + ' (' + (actualZonesList[0] ? r1(actualZonesList[0].sharePct) : 0) + '%)';
+        bp.mobilityColor = '#ea580c';
+        mobilityCounts.reassigned++;
+      }
+
+      // Compute Fair Blended Target
+      if (totalActualQty > 0 && actualZonesList.length > 0) {
+        const weightedTgt = actualZonesList.reduce((sum, z) => sum + (z.target * (z.qty / totalActualQty)), 0);
+        bp.blendedTarget = Math.round(weightedTgt);
+      } else {
+        bp.blendedTarget = bp.sheetTarget || 170;
+      }
+      bp.blendedGap = r1((bp.avg_prod || 0) - bp.blendedTarget);
+      bp.blendedStatus = bp.blendedGap >= 0 ? 'ผ่าน Target ตามจริง' : 'ต่ำกว่า Target ตามจริง';
+    });
+
+    // Finalize Zone Workforce Exchange
+    const zoneExchangeList = Object.values(zoneExchangeMap)
+      .filter(z => z.totalQty > 0 || z.rostered > 0)
+      .map(z => {
+        const netHelper = z.guestCount - z.outflowCount;
+        let netStatus = '⚖️ กำลังคนสมดุล';
+        let statusBadgeColor = '#64748b';
+        if (netHelper > 0) {
+          netStatus = '🚨 ขอยืมคน +' + netHelper;
+          statusBadgeColor = '#e11d48';
+        } else if (netHelper < 0) {
+          netStatus = '⚡ ส่งคนช่วย ' + Math.abs(netHelper);
+          statusBadgeColor = '#0284c7';
+        }
+        return {
+          ...z,
+          netHelper,
+          netStatus,
+          statusBadgeColor,
+          guestSharePct: z.totalQty > 0 ? r1((z.guestQty / z.totalQty) * 100) : 0
+        };
+      })
+      .sort((a, b) => b.totalQty - a.totalQty);
+
+    const crossZonePickerCount = mobilityCounts.helper + mobilityCounts.reassigned + mobilityCounts.floater;
+    result.mobilitySummary = {
+      totalPickers: result.by_picker.length,
+      dedicatedCount: mobilityCounts.dedicated,
+      helperCount: mobilityCounts.helper,
+      reassignedCount: mobilityCounts.reassigned,
+      floaterCount: mobilityCounts.floater,
+      unassignedCount: mobilityCounts.unassigned,
+      crossZonePickerCount,
+      crossZonePickerPct: result.by_picker.length > 0 ? r1((crossZonePickerCount / result.by_picker.length) * 100) : 0,
+      totalUnits: warehouseTotalQty,
+      crossZoneUnits: warehouseCrossQty,
+      crossZoneUnitsPct: warehouseTotalQty > 0 ? r1((warehouseCrossQty / warehouseTotalQty) * 100) : 0,
+      zoneExchange: zoneExchangeList
+    };
+
+    const sZoneMap = {};
+    (s.zones || []).forEach(grp => {
+      (grp.zones || []).forEach(z => {
+        if (z.label) {
+          sZoneMap[z.label.toUpperCase()] = { ...z, groupKey: grp.key, groupTarget: grp.target };
+        }
+      });
+    });
+    result.by_zone_prod.forEach(zp => {
+      const sz = sZoneMap[zp.name.toUpperCase()];
+      if (sz) {
+        zp.sheetAverage = sz.average;
+        zp.sheetTarget = sz.target;
+        zp.sheetTotalPick = sz.totalPick;
+        zp.sheetCount = sz.count;
+        if (sz.average > 0) zp.avg_prod = sz.average;
+      }
+    });
+  }
+  // =========================================================================
+
   aggregateCache.set(cacheKey, result);
   return result;
 }
@@ -2770,9 +3654,24 @@ function buildControls() {
       if (r) r.classList.add('active');
     }
   }
-  function applyDates() { if (dfrom > dto) { const t = dfrom; dfrom = dto; dto = t; fromEl.value = dfrom; toEl.value = dto; } setPresetActive(); render(); }
-  fromEl.onchange = () => { datePresetMode = 'custom'; dfrom = fromEl.value || DMIN; applyDates(); };
-  toEl.onchange = () => { datePresetMode = 'custom'; dto = toEl.value || DMAX; applyDates(); };
+  async function applyDates() {
+    if (dfrom > dto) { const t = dfrom; dfrom = dto; dto = t; fromEl.value = dfrom; toEl.value = dto; }
+    setPresetActive();
+    const cacheKey = (dfrom || 'all') + '|' + (dto || 'all');
+    if (!SHEET_DATA_CACHE.has(cacheKey)) {
+      if (typeof showLoading === 'function') showLoading(true, 'กำลังดึงข้อมูลจาก Google Sheet Results Master…');
+      try {
+        await fetchSheetData(dfrom, dto, false);
+      } finally {
+        if (typeof showLoading === 'function') showLoading(false);
+      }
+    } else {
+      CURRENT_SHEET_DATA = SHEET_DATA_CACHE.get(cacheKey);
+    }
+    render();
+  }
+  fromEl.onchange = () => { datePresetMode = 'custom'; dfrom = fromEl.value || DMIN; void applyDates(); };
+  toEl.onchange = () => { datePresetMode = 'custom'; dto = toEl.value || DMAX; void applyDates(); };
   bar.querySelectorAll('.preset-range-group button').forEach(b => b.onclick = () => {
     if (b.dataset.all) {
       datePresetMode = 'all';
@@ -2787,7 +3686,7 @@ function buildControls() {
       trendMode = 'day';
       dfrom = b.dataset.d; dto = b.dataset.d;
     }
-    fromEl.value = dfrom; toEl.value = dto; setPresetActive(); render();
+    fromEl.value = dfrom; toEl.value = dto; setPresetActive(); void applyDates();
   });
   setPresetActive();
   bar.querySelector('#refreshBtn').onclick = () => loadData(true);
@@ -2818,27 +3717,28 @@ function updateDateHeader() {
 function renderKPIs() {
   const k = A.kpis;
   const isPcs = unitMode === 'pcs';
+  const hasSheet = Boolean(CURRENT_SHEET_DATA && CURRENT_SHEET_DATA.ok);
   const defs = [
     {
-      lbl: isPcs ? 'ปริมาณชิ้นรวม (QTY เดิม) ★' : 'จำนวนชิ้นรวม (QTY เดิม)',
-      val: k.pcs,
-      unit: 'ชิ้น',
-      grad: isPcs ? 'linear-gradient(90deg,#14b8a6,#0ea5e9)' : 'linear-gradient(90deg,#94a3b8,#cbd5e1)'
-    },
-    {
-      lbl: !isPcs ? 'หน่วยหยิบรวม (BigQuery) ★' : 'หน่วยหยิบรวม (BigQuery)',
+      lbl: hasSheet ? 'ยอดหยิบรวม (Google Sheet Master) 📋' : (isPcs ? 'ปริมาณชิ้นรวม (QTY เดิม) ★' : 'หน่วยหยิบรวม (BigQuery) ★'),
       val: k.qty,
       unit: 'หน่วยหยิบ',
-      grad: !isPcs ? 'linear-gradient(90deg,#3b82f6,#6366f1)' : 'linear-gradient(90deg,#94a3b8,#cbd5e1)'
+      grad: 'linear-gradient(90deg,#3b82f6,#6366f1)'
     },
-    { lbl: 'พนักงานหยิบ', val: k.pickers, unit: 'คน', grad: 'linear-gradient(90deg,#f59e0b,#f97316)' },
     {
-      lbl: (isPcs ? 'Productivity V2 (ชิ้น/ชม.)' : 'Productivity V2 (หยิบ/ชม.)') + (prodCalcMode === 'weighted' ? ' ⚖️ ถ่วงน้ำหนัก' : ' ⚡ หยิบจริง'),
-      val: isPcs ? k.avg_pcs_prod : k.avg_prod,
-      unit: isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.',
-      grad: prodCalcMode === 'weighted' ? 'linear-gradient(90deg,#059669,#0d9488)' : 'linear-gradient(90deg,#f43f5e,#ec4899)'
+      lbl: hasSheet ? 'Productivity หลัก (Col AF) ⚡' : ((isPcs ? 'Productivity V2 (ชิ้น/ชม.)' : 'Productivity V2 (หยิบ/ชม.)') + (prodCalcMode === 'weighted' ? ' ⚖️ ถ่วงน้ำหนัก' : ' ⚡ หยิบจริง')),
+      val: k.avg_prod,
+      unit: 'หยิบ/ชม.',
+      grad: 'linear-gradient(90deg,#10b981,#059669)'
     },
-    { lbl: 'OT รวม', val: k.ot, unit: 'ชม.', grad: 'linear-gradient(90deg,#10b981,#22c55e)' }
+    {
+      lbl: hasSheet ? 'เป้าหมาย KPI (Target)' : 'เป้าหมายภาพรวม',
+      val: (A.sheet_data && A.sheet_data.overall) ? (A.sheet_data.overall.target || 170) : 170,
+      unit: 'หยิบ/ชม.',
+      grad: 'linear-gradient(90deg,#6366f1,#8b5cf6)'
+    },
+    { lbl: 'พนักงานหยิบที่นับ', val: k.pickers, unit: 'คน', grad: 'linear-gradient(90deg,#f59e0b,#f97316)' },
+    { lbl: 'OT รวม', val: k.ot, unit: 'ชม.', grad: 'linear-gradient(90deg,#f43f5e,#ec4899)' }
   ];
   const kw = document.getElementById('kpis'); kw.innerHTML = '';
   defs.forEach(d => {
@@ -2927,7 +3827,7 @@ function renderUnmappedTeamBanner() {
   }).join('');
   box.innerHTML = '<div style="width:100%;"><b>⚠️ Not Found:</b> ไม่พบ Team A/B ของพนักงาน ' + fmt(Number(k.pickers || 0)) +
     ' คน · ' + fmt(Math.ceil(Number(k.qty || 0))) + ' หน่วยหยิบ · ' + fmt(Math.ceil(Number(k.pcs || 0))) +
-    ' ชิ้น · Productivity ' + fmtDecimal1(Number(k.raw_avg_prod || k.avg_prod || 0)) + ' หยิบ/ชม.' +
+    ' ชิ้น · Productivity ' + fmt(Math.round(Number(k.raw_avg_prod || k.avg_prod || 0))) + ' หยิบ/ชม.' +
     '<details style="margin-top:8px;">' +
     '<summary style="cursor:pointer;font-weight:800;color:#c2410c;user-select:none;">ดูรหัสพนักงานและสาเหตุ (' + fmt(missingPickers.length) + ' รายการ)</summary>' +
     '<div style="overflow:auto;max-height:320px;margin-top:8px;border:1px solid #fed7aa;border-radius:10px;background:#fff;">' +
@@ -2956,12 +3856,12 @@ function renderTargetAlertBanner() {
   }
 
   const isPcs = unitMode === 'pcs';
-  const currentProd = isPcs ? (A.kpis.avg_pcs_prod || 0) : (A.kpis.avg_prod || 0);
+  const currentProd = Math.round(isPcs ? (A.kpis.avg_pcs_prod || 0) : (A.kpis.avg_prod || 0));
   const unitTxt = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
   const isBelow = currentProd < prodTarget;
 
   if (isBelow) {
-    const diff = (prodTarget - currentProd).toFixed(1);
+    const diff = Math.round(prodTarget - currentProd);
     alertBox.className = 'card wide';
     alertBox.style.cssText = 'margin-top:14px; margin-bottom:18px; background:#fff5f5; border:1px solid #fecaca; border-left:6px solid #ef4444; padding:14px 18px; box-shadow:0 4px 14px rgba(239,68,68,0.12); display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;';
     alertBox.innerHTML = `
@@ -3028,6 +3928,12 @@ function countUp() {
 // ===== Individual Picker Drill-down Renderer =====
 let selectedPickerId = '';
 let selectedPickerDate = 'all';
+let pickerMobilityFilter = 'all';
+
+function setPickerMobilityFilter(f) {
+  pickerMobilityFilter = f;
+  if (builders.pickers) builders.pickers();
+}
 const pickerItemPayloadCache = new Map();
 const pickerItemLoadState = new Map();
 const itemMasterPayloadCache = new Map();
@@ -4362,7 +5268,9 @@ function renderPickerDrilldown() {
   let optionsHtml = `<option value="">-- เลือกพนักงาน (${filteredList.length}) --</option>`;
   filteredList.forEach(p => {
     const isPcs = unitMode === 'pcs';
-    const label = `${p.id} - ${p.name !== '-' ? p.name : ''} (${p.affiliation}) [${fmt(isPcs ? p.pcs : p.qty)} ${isPcs ? 'ชิ้น' : 'หน่วย'}]`;
+    const isRes = getPickerResignedInfo(p.id, p.name);
+    const resTag = isRes ? ` [⛔ ลาออก ${isRes.date}]` : '';
+    const label = `${p.id} - ${p.name !== '-' ? p.name : ''}${resTag} (${p.affiliation}) [${fmt(isPcs ? p.pcs : p.qty)} ${isPcs ? 'ชิ้น' : 'หน่วย'}]`;
     optionsHtml += `<option value="${escapeZoneHtml(p.id)}"${p.id === selectedPickerId ? ' selected' : ''}>${escapeZoneHtml(label)}</option>`;
   });
   selectEl.innerHTML = optionsHtml;
@@ -4491,13 +5399,50 @@ function renderPickerDrilldown() {
   const prod = totalWorkHours > 0 ? (displayMainVal / totalWorkHours) : 0;
 
   const pickerName = pData.name !== '-' ? pData.name : pData.picker;
+  const resigned = getPickerResignedInfo(pData.picker, pickerName);
+  let resignedBanner = '';
+  if (resigned) {
+    resignedBanner = `
+    <div style="background:#fee2e2; border:1px solid #fecaca; border-radius:12px; padding:12px 16px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="font-size:22px;">⛔</span>
+        <div>
+          <div style="font-weight:700; color:#991b1b; font-size:13.5px;">สถานะพนักงาน: ลาออก (Resigned)</div>
+          <div style="font-size:12px; color:#b91c1c; margin-top:2px;">
+            📅 พ้นสภาพเมื่อ: <b>${escapeZoneHtml(resigned.date || '-')}</b> &nbsp;|&nbsp; 
+            หน้าที่: <b>${escapeZoneHtml(resigned.role || '-')}</b> &nbsp;|&nbsp; 
+            สังกัดชีตลาออก: <b>${escapeZoneHtml(resigned.affiliation || '-')}</b> ${resigned.team ? `(ทีม ${escapeZoneHtml(resigned.team)})` : ''}
+          </div>
+        </div>
+      </div>
+      <span style="font-size:11.5px; background:#fff; color:#991b1b; padding:4px 10px; border-radius:6px; font-weight:700; border:1px solid #fecaca; box-shadow:0 1px 2px rgba(0,0,0,0.05);">
+        ✓ มีสถิติการหยิบในระบบ บันทึกยอดตามปกติ
+      </span>
+    </div>`;
+  }
+
   const activeZonesList = Object.keys(activeZonesMap).sort((a, b) => (activeZonesMap[b].qty - activeZonesMap[a].qty) || (activeZonesMap[b].pcs - activeZonesMap[a].pcs));
   const activeSkusList = Object.keys(activeSkusMap).sort((a, b) => (activeSkusMap[b].qty - activeSkusMap[a].qty) || (activeSkusMap[b].pcs - activeSkusMap[a].pcs));
   const activeSlotsList = Object.keys(activeSlotsMap).map(Number).sort((a, b) => a - b);
 
+  const bpRecord = (A.by_picker || []).find(p => p.picker === selectedPickerId);
+  const assignedZoneStr = bpRecord ? (bpRecord.sheetZone || '-') : '-';
+  const assignedTypeStr = bpRecord ? (bpRecord.sheetPickType || '-') : '-';
+  const assignedTargetVal = bpRecord ? (bpRecord.sheetTarget || 170) : 170;
+  const blendedTgtVal = bpRecord ? (bpRecord.blendedTarget || assignedTargetVal) : assignedTargetVal;
+  const sheetOfficialProd = bpRecord && bpRecord.sheetAverage ? bpRecord.sheetAverage : Math.round(prod);
+  const fairGap = sheetOfficialProd - blendedTgtVal;
+  const fairPassed = sheetOfficialProd >= blendedTgtVal;
+  const fairGapSign = fairGap > 0 ? '+' : '';
+  const assignedPct = bpRecord && bpRecord.assignedPct != null ? bpRecord.assignedPct : 100;
+  const crossPct = bpRecord && bpRecord.crossZonePct != null ? bpRecord.crossZonePct : 0;
+  const statusColor = bpRecord ? (bpRecord.mobilityColor || '#0284c7') : '#0284c7';
+  const statusLabel = bpRecord ? (bpRecord.mobilityLabel || 'ตรงโซนประจำ') : 'ตรงโซนประจำ';
+
   // Render Header KPIs & Details
   let html = `
   <div style="background:linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%); border:1px solid #e2e8f0; border-radius:16px; padding:18px; margin-bottom:18px;">
+    ${resignedBanner}
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
       <div>
         <div style="font-size:18px; font-weight:700; color:#1e293b; display:flex; align-items:center; gap:8px;">
@@ -4511,47 +5456,119 @@ function renderPickerDrilldown() {
       </div>
     </div>
 
-    <!-- Mini KPIs -->
+    <!-- Mini KPIs: Sheet Official vs BigQuery Actual Scans -->
     <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:10px;">
-      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
-        <div style="font-size:11px; color:#64748b; font-weight:600;">ปริมาณชิ้น (QTY)</div>
-        <div style="font-size:18px; font-weight:700; color:#0284c7; margin-top:2px;">${fmt(totalPcs)} <span style="font-size:11px; font-weight:400;">ชิ้น</span></div>
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; border-top:3px solid #2563eb; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:700;">📋 หน่วยหยิบ (Sheet)</div>
+        <div style="font-size:18px; font-weight:800; color:#1d4ed8; margin-top:2px;">${fmt(bpRecord && bpRecord.sheetTotalPick != null ? bpRecord.sheetTotalPick : totalQty)} <span style="font-size:11px; font-weight:400; color:#64748b;">หน่วย</span></div>
+        <div style="font-size:10px; color:#64748b; margin-top:2px;">ยอดหลักทางการ</div>
       </div>
-      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
-        <div style="font-size:11px; color:#64748b; font-weight:600;">หน่วยหยิบ (BigQuery)</div>
-        <div style="font-size:18px; font-weight:700; color:#4338ca; margin-top:2px;">${fmt(totalQty)} <span style="font-size:11px; font-weight:400;">หน่วย</span></div>
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; border-top:3px solid #7c3aed; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:700;">⚡ Productivity (Sheet)</div>
+        <div style="font-size:18px; font-weight:800; color:#6d28d9; margin-top:2px;">${fmt(sheetOfficialProd)} <span style="font-size:11px; font-weight:400; color:#64748b;">${isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.'}</span></div>
+        <div style="font-size:10px; color:#64748b; margin-top:2px;">เป้าหมาย ${fmt(assignedTargetVal)} (${fairGapSign}${fmt(fairGap)})</div>
       </div>
-      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
-        <div style="font-size:11px; color:#64748b; font-weight:600;">จำนวนบรรทัด</div>
-        <div style="font-size:18px; font-weight:700; color:#0f766e; margin-top:2px;">${fmt(totalLines)} <span style="font-size:11px; font-weight:400;">lines</span></div>
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; border-top:3px solid #0891b2; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:700;">📦 สแกนหน้างาน (BQ)</div>
+        <div style="font-size:18px; font-weight:800; color:#0e7490; margin-top:2px;">${fmt(totalQty)} <span style="font-size:11px; font-weight:400; color:#64748b;">หน่วย</span></div>
+        <div style="font-size:10px; color:#64748b; margin-top:2px;">${fmt(totalPcs)} ชิ้น (${fmt(totalLines)} lines)</div>
       </div>
-      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
-        <div style="font-size:11px; color:#64748b; font-weight:600;">ชั่วโมงหยิบจริง</div>
-        <div style="font-size:18px; font-weight:700; color:#d97706; margin-top:2px;">${fmt(Math.round(totalWorkHours * 10) / 10)} <span style="font-size:11px; font-weight:400;">ชม.</span></div>
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; border-top:3px solid #d97706; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:700;">⏱️ ชั่วโมงสแกนหน้างาน</div>
+        <div style="font-size:18px; font-weight:800; color:#b45309; margin-top:2px;">${fmt(Math.round(totalWorkHours * 10) / 10)} <span style="font-size:11px; font-weight:400; color:#64748b;">ชม.</span></div>
+        <div style="font-size:10px; color:#64748b; margin-top:2px;">ช่วงเวลาที่มีการยิงงานจริง</div>
       </div>
-      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
-        <div style="font-size:11px; color:#64748b; font-weight:600;">Productivity</div>
-        <div style="font-size:18px; font-weight:700; color:#e11d48; margin-top:2px;">${fmt(Math.round(prod))} <span style="font-size:11px; font-weight:400;">${isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.'}</span></div>
+      <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; border-top:3px solid ${fairPassed ? '#16a34a' : '#dc2626'}; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
+        <div style="font-size:11px; color:#64748b; font-weight:700;">🎯 สถานะประเมินผล</div>
+        <div style="font-size:15px; font-weight:800; color:${fairPassed ? '#15803d' : '#b91c1c'}; margin-top:3px;">${fairPassed ? '✓ ผ่าน Target' : '⚠️ ต่ำกว่า Target'}</div>
+        <div style="font-size:10px; color:#64748b; margin-top:2px;">${bpRecord ? escapeZoneHtml(bpRecord.sheetStatus || '-') : '-'}</div>
       </div>
     </div>
-  </div>
+  </div>`;
 
+  if (bpRecord) {
+    html += `
+    <!-- Zone Mobility & Fair Blended Target Card -->
+    <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:16px; padding:18px; margin-bottom:18px; box-shadow:0 4px 12px rgba(0,0,0,0.03);">
+      <div style="font-size:14px; font-weight:700; color:#1e293b; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+        <span style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:18px;">🔄</span>
+          <span>วิเคราะห์โซนที่มอบหมาย (Google Sheet) vs โซนที่ปฏิบัติงานจริง (BigQuery)</span>
+        </span>
+        <span style="background:${statusColor}15; color:${statusColor}; border:1px solid ${statusColor}40; font-size:12px; font-weight:700; padding:4px 10px; border-radius:8px;">
+          ${escapeZoneHtml(statusLabel)}
+        </span>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:14px;">
+        <!-- Col 1: Assigned in Sheet -->
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:12px;">
+          <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">📋 ทะเบียนที่มอบหมาย (Sheet)</div>
+          <div style="font-size:15px; font-weight:700; color:#0f172a; display:flex; align-items:center; gap:6px;">
+            <span class="pill" style="font-size:12px; background:#e0e7ff; color:#3730a3;">${escapeZoneHtml(assignedZoneStr)}</span>
+            <span style="font-size:12px; color:#64748b;">(${escapeZoneHtml(assignedTypeStr)})</span>
+          </div>
+          <div style="font-size:12px; color:#475569; margin-top:6px;">
+            Target มาตรฐาน: <b style="color:#0f172a;">${fmt(assignedTargetVal)}</b> หยิบ/ชม.
+          </div>
+          <div style="font-size:11.5px; color:#64748b; margin-top:3px;">
+            กะ ${escapeZoneHtml(bpRecord.sheetShift || '-')} · สังกัด ${escapeZoneHtml(bpRecord.sheetAffiliation || '-')} · ${escapeZoneHtml(bpRecord.sheetBu || '-')}
+          </div>
+        </div>
+
+        <!-- Col 2: Real-time Work Distribution -->
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:12px;">
+          <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">📊 สัดส่วนการปฏิบัติงานจริง</div>
+          <div style="display:flex; justify-content:space-between; font-size:12px; font-weight:600; margin-bottom:4px;">
+            <span style="color:#15803d;">โซนประจำ: ${assignedPct.toFixed(1)}%</span>
+            <span style="color:#0284c7;">ช่วยข้ามโซน: ${crossPct.toFixed(1)}%</span>
+          </div>
+          <div style="width:100%; height:8px; background:#e2e8f0; border-radius:4px; overflow:hidden; display:flex;">
+            <div style="width:${assignedPct}%; height:100%; background:#16a34a;" title="โซนประจำ ${assignedPct.toFixed(1)}%"></div>
+            <div style="width:${crossPct}%; height:100%; background:#0284c7;" title="ช่วยข้ามโซน ${crossPct.toFixed(1)}%"></div>
+          </div>
+          <div style="font-size:11.5px; color:#64748b; margin-top:8px;">
+            หยิบจริง ${activeZonesList.length} โซน · โซนหลักที่ทำจริง: <b style="color:#0f172a;">${escapeZoneHtml(bpRecord.primaryActualZone || '-')}</b>
+          </div>
+        </div>
+
+        <!-- Col 3: Fair Blended Target -->
+        <div style="background:${fairPassed ? '#f0fdf4' : '#fff7ed'}; border:1px solid ${fairPassed ? '#bbf7d0' : '#fed7aa'}; border-radius:12px; padding:12px;">
+          <div style="font-size:11px; font-weight:700; color:${fairPassed ? '#166534' : '#9a3412'}; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">🎯 Target ถ่วงน้ำหนักตามจริง (Fair Target)</div>
+          <div style="display:flex; align-items:baseline; gap:8px;">
+            <span style="font-size:20px; font-weight:800; color:${fairPassed ? '#15803d' : '#c2410c'};">${fmt(blendedTgtVal)}</span>
+            <span style="font-size:12px; color:#64748b;">หยิบ/ชม.</span>
+            <span style="font-size:11px; font-weight:700; padding:2px 6px; border-radius:4px; margin-left:auto; background:${fairPassed ? '#dcfce7' : '#fee2e2'}; color:${fairPassed ? '#15803d' : '#b91c1c'};">
+              ${fairPassed ? '✓ ผ่านเกณฑ์จริง' : '⚠️ ต่ำกว่าเกณฑ์จริง'} (${fairGapSign}${fmt(fairGap)})
+            </span>
+          </div>
+          <div style="font-size:11px; color:#64748b; margin-top:4px;">
+            *คำนวณถ่วงน้ำหนักตามประเภท Rack ที่ไปหยิบจริง เพื่อความเป็นธรรมกับพนักงาน
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  html += `
   <!-- Section Grid: Zone Breakdown & Time Slot -->
   <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px;">
     <!-- Zone Breakdown -->
     <div style="background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:16px;">
-      <h4 style="font-size:14px; font-weight:700; color:#1e293b; margin:0 0 10px; display:flex; justify-content:space-between;">
-        <span>📍 โซนที่เข้าทำงาน (${activeZonesList.length} Zone)</span>
-        <span style="font-size:11px; color:#64748b; font-weight:400;">เรียงตามปริมาณ</span>
+      <h4 style="font-size:14px; font-weight:700; color:#1e293b; margin:0 0 10px; display:flex; justify-content:space-between; align-items:center;">
+        <span>📍 โซนที่เข้าทำงานจริง (${activeZonesList.length} Zone จาก BigQuery)</span>
+        <span style="font-size:11px; color:#0284c7; font-weight:600;">สแกนจริงหน้างาน</span>
       </h4>
       <div style="max-height:220px; overflow-y:auto;">
-        <table style="width:100%; font-size:12.5px; border-collapse:collapse;">
+        <table style="width:100%; font-size:12px; border-collapse:collapse;">
           <thead>
-            <tr style="background:#f8fafc; text-align:left; color:#64748b; font-size:11px;">
+            <tr style="background:#f8fafc; text-align:left; color:#64748b; font-size:10.5px;">
               <th style="padding:6px 8px;">Zone</th>
+              <th style="padding:6px 8px;">ประเภท Rack</th>
               <th style="padding:6px 8px;" class="num">ชิ้น (QTY)</th>
               <th style="padding:6px 8px;" class="num">หน่วยหยิบ</th>
               <th style="padding:6px 8px;" class="num">สัดส่วน</th>
+              <th style="padding:6px 8px; text-align:center;">สถานะ</th>
             </tr>
           </thead>
           <tbody>`;
@@ -4559,12 +5576,20 @@ function renderPickerDrilldown() {
   activeZonesList.forEach(z => {
     const zv = activeZonesMap[z];
     const share = displayMainVal > 0 ? (isPcs ? (zv.pcs / displayMainVal) * 100 : (zv.qty / displayMainVal) * 100) : 0;
+    const typePick = getTypePickForZone(z);
+    const isAssigned = isZoneMatch(bpRecord ? bpRecord.sheetZone : '', z);
+    const statusTag = isAssigned
+      ? `<span style="background:#dcfce7; color:#15803d; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700;">🏠 ประจำ</span>`
+      : `<span style="background:#e0f2fe; color:#0369a1; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700;">🤝 ช่วยข้าม</span>`;
+
     html += `
             <tr style="border-bottom:1px solid #f1f5f9;">
               <td style="padding:7px 8px; font-weight:600;"><span class="pill">${escapeZoneHtml(z)}</span></td>
+              <td style="padding:7px 8px; font-size:11px; color:#475569;">${escapeZoneHtml(typePick)}</td>
               <td style="padding:7px 8px;" class="num">${fmt(zv.pcs)}</td>
               <td style="padding:7px 8px;" class="num">${fmt(zv.qty)}</td>
               <td style="padding:7px 8px;" class="num"><span style="font-size:11px; font-weight:700; color:#6366f1;">${share.toFixed(1)}%</span></td>
+              <td style="padding:7px 8px; text-align:center;">${statusTag}</td>
             </tr>`;
   });
 
@@ -4790,8 +5815,8 @@ const builders = {
         labels: ks,
         pcs: ks.map(k => map[k].pcs),
         qty: ks.map(k => map[k].qty),
-        prod: ks.map(k => map[k].ps.length ? Math.round(map[k].ps.reduce((a, b) => a + b, 0) / map[k].ps.length * 10) / 10 : 0),
-        pcsProd: ks.map(k => map[k].psPcs.length ? Math.round(map[k].psPcs.reduce((a, b) => a + b, 0) / map[k].psPcs.length * 10) / 10 : 0)
+        prod: ks.map(k => map[k].ps.length ? Math.round(map[k].ps.reduce((a, b) => a + b, 0) / map[k].ps.length) : 0),
+        pcsProd: ks.map(k => map[k].psPcs.length ? Math.round(map[k].psPcs.reduce((a, b) => a + b, 0) / map[k].psPcs.length) : 0)
       };
     }
     function drawTrend(mode) {
@@ -4863,7 +5888,7 @@ const builders = {
                 padding: { top: 2, right: 5, bottom: 2, left: 5 },
                 formatter: (val) => {
                   const n = Number(val) || 0;
-                  return n % 1 === 0 ? n.toFixed(0) : n.toFixed(1);
+                  return Math.round(n).toLocaleString('en-US');
                 },
                 font: { weight: '700', size: isManyBars ? 9.5 : 11 }
               }
@@ -4898,7 +5923,7 @@ const builders = {
                   if (ctx.datasetIndex === 0) {
                     return ` ${ctx.dataset.label}: ${Math.round(val).toLocaleString('en-US')} ${mainLabel}`;
                   }
-                  return ` ${ctx.dataset.label}: ${val.toFixed(1)}`;
+                  return ` ${ctx.dataset.label}: ${Math.round(val).toLocaleString('en-US')}`;
                 }
               }
             },
@@ -5420,7 +6445,19 @@ const builders = {
         `<th class="num">Picker</th><th>สถานะช่วงที่เลือก</th></tr></thead><tbody>`;
       locationRows.forEach((row, i) => {
         const active = Number(row.lines || 0) > 0;
-        h += `<tr class="${active ? '' : 'zone-inactive'}">` +
+        let noteStatus = active ? 'มีรายการ' : 'ไม่มีรายการ';
+        let statusClass = active ? 'active' : '';
+        let extraStyle = '';
+        if (!active && (row.location === 'CA' || row.location === 'DF')) {
+          const sib = row.location === 'CA' ? 'AN' : 'CF';
+          const sibRow = activeLocations.get(sib);
+          if (sibRow && Number(sibRow.lines || 0) > 0) {
+            noteStatus = `สแกนรวมที่ ${sib}`;
+            statusClass = 'active';
+            extraStyle = 'background:#e0f2fe;color:#0284c7;border:1px solid #bae6fd;font-weight:700;';
+          }
+        }
+        h += `<tr class="${active || extraStyle ? '' : 'zone-inactive'}">` +
           `<td><span class="rank">${i + 1}</span></td>` +
           `<td><b>${escapeZoneHtml(row.location)}</b></td>` +
           `<td><span class="pill">${escapeZoneHtml(row.zone)}</span></td>` +
@@ -5429,7 +6466,7 @@ const builders = {
           `<td class="num" style="${pcsHeaderStyle}">${fmt(row.pcs || 0)}</td>` +
           `<td class="num" style="${qtyHeaderStyle}">${fmt(row.qty || 0)}</td>` +
           `<td class="num">${fmt(row.pickers || 0)}</td>` +
-          `<td><span class="zone-status ${active ? 'active' : ''}">${active ? 'มีรายการ' : 'ไม่มีรายการ'}</span></td></tr>`;
+          `<td><span class="zone-status ${statusClass}" style="${extraStyle}">${escapeZoneHtml(noteStatus)}</span></td></tr>`;
       });
       h += '</tbody>';
       table.innerHTML = h;
@@ -5441,40 +6478,139 @@ const builders = {
   pickers() {
     renderPickerDrilldown();
 
-    const isPcs = unitMode === 'pcs';
-    const list = [...A.by_picker];
-    list.sort((a, b) => (b.qty - a.qty) || (b.pcs - a.pcs));
+    if (!RESIGNED_MAP && !isFetchingResigned) {
+      fetchResignedMap().then(() => {
+        if (currentPage === 'pickers' && builders.pickers) {
+          builders.pickers();
+        }
+      }).catch(() => {});
+    }
 
+    const isPcs = unitMode === 'pcs';
+    const allList = [...A.by_picker];
+    allList.sort((a, b) => (b.qty - a.qty) || (b.pcs - a.pcs));
+
+    // ตรวจสอบสถานะลาออกจากชีต Resigned (หากมียอดหยิบ ยังคงแสดงและคำนวณตามปกติ 100%)
+    allList.forEach(p => {
+      const pName = p.name || getPickerName(p.picker);
+      p.resignedInfo = getPickerResignedInfo(p.picker, pName);
+      p.isResigned = Boolean(p.resignedInfo);
+    });
+    const resignedCount = allList.filter(p => p.isResigned).length;
+
+    // Render Mobility Filter Bar
+    const filterBar = document.getElementById('pickerMobilityFilterBar');
+    if (filterBar) {
+      const mob = A.mobilitySummary || { dedicatedCount: 0, helperCount: 0, reassignedCount: 0, floaterCount: 0 };
+      const filters = [
+        { key: 'all', label: `ทั้งหมด (${allList.length})` },
+        { key: 'DEDICATED', label: `✅ ตรงโซน (${mob.dedicatedCount})` },
+        { key: 'PRIMARY_HELPER', label: `🔄 ช่วยข้ามโซน (${mob.helperCount})` },
+        { key: 'REASSIGNED', label: `⚠️ ย้ายโซนหลัก (${mob.reassignedCount})` },
+        { key: 'FLOATER', label: `🔀 ลอยตัว (${mob.floaterCount})` },
+        { key: 'RESIGNED', label: `⛔ ลาออก (${resignedCount})`, isAlert: true }
+      ];
+      filterBar.innerHTML = filters.map(f => {
+        const active = pickerMobilityFilter === f.key ? 'active' : '';
+        let bg = active ? 'background:#4338ca; color:#fff; border-color:#4338ca;' : 'background:#f8fafc; color:#475569; border-color:#cbd5e1;';
+        if (f.isAlert) {
+          bg = active ? 'background:#dc2626; color:#fff; border-color:#dc2626;' : (f.key === 'RESIGNED' && resignedCount > 0 ? 'background:#fef2f2; color:#b91c1c; border-color:#fecaca;' : 'background:#f8fafc; color:#94a3b8; border-color:#e2e8f0;');
+        }
+        return `<button type="button" onclick="setPickerMobilityFilter('${f.key}')" style="${bg} border:1px solid; border-radius:8px; font-size:11px; font-weight:600; padding:4px 10px; cursor:pointer; transition:all 0.15s;">${f.label}</button>`;
+      }).join('');
+    }
+
+    let list = allList;
+    if (pickerMobilityFilter === 'RESIGNED') {
+      list = allList.filter(p => p.isResigned);
+    } else if (pickerMobilityFilter !== 'all') {
+      list = allList.filter(p => p.mobilityStatus === pickerMobilityFilter);
+    }
+
+    const hasSheetData = Boolean(CURRENT_SHEET_DATA && CURRENT_SHEET_DATA.ok);
+    const qtyHeaderTitle = hasSheetData ? 'หน่วยหยิบ (Google Sheet)' : 'หน่วยหยิบ (BigQuery)';
     const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
     const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
     const prodHeaderLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
 
-    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>ชื่อพนักงาน</th><th>สังกัด</th><th>กะ</th><th>โซนหลัก</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (BigQuery) ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th><th style="text-align:center;">เจาะลึก</th></tr></thead><tbody>`;
-    if (!list.length) h += '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลในช่วงที่เลือก</td></tr>';
+    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>ชื่อพนักงาน</th><th>สังกัด</th><th>กะ</th><th>โซนตามชีต vs หน้างานจริง (BQ)</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">${qtyHeaderTitle} ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th><th style="text-align:center;">เจาะลึก</th></tr></thead><tbody>`;
+    if (!list.length) h += '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลพนักงานตามเงื่อนไขที่เลือก</td></tr>';
     list.forEach((p, i) => {
       const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
       const qtyCellStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : 'color:#4338ca;font-weight:600;';
       const prodValue = isPcs ? (p.avg_pcs_prod || 0) : (p.avg_prod || 0);
       const pickerName = p.name || getPickerName(p.picker);
       const pickerNameText = pickerName && pickerName !== p.picker ? pickerName : '-';
-      const itemTarget = getTargetForZoneOrType(p.typePick, p.location);
-      const isLow = prodValue < itemTarget;
+      const assignedTarget = p.sheetTarget || getTargetForZoneOrType(p.typePick, p.location);
+      const blendedTarget = p.blendedTarget || assignedTarget;
+      const isLow = prodValue < assignedTarget;
+      const isBlendedPassed = prodValue >= blendedTarget;
       const prodBadge = isLow
-        ? `<span style="background:#fee2e2; color:#991b1b; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;" title="เป้าหมายโซนนี้: ${itemTarget}">⚠️ ต่ำกว่าเป้า (${itemTarget})</span>`
-        : `<span style="background:#dcfce7; color:#15803d; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;" title="เป้าหมายโซนนี้: ${itemTarget}">✓ ผ่าน (${itemTarget})</span>`;
+        ? `<span style="background:#fee2e2; color:#991b1b; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;" title="เป้าหมายโซนนี้: ${assignedTarget}">⚠️ ต่ำกว่าเป้า (${assignedTarget})</span>`
+        : `<span style="background:#dcfce7; color:#15803d; font-size:10px; padding:2px 6px; border-radius:4px; font-weight:700; margin-left:4px; white-space:nowrap;" title="เป้าหมายโซนนี้: ${assignedTarget}">✓ ผ่าน (${assignedTarget})</span>`;
       const prodColor = isLow ? '#dc2626' : '#16a34a';
+
+      // Mobility Badge in Zone Cell
+      let mobilityPill = '';
+      if (p.mobilityStatus === 'DEDICATED') {
+        mobilityPill = `<div style="margin-top:3px;"><span class="pill" style="background:#dcfce7; color:#15803d; font-size:10px; font-weight:700;">✅ ตรงโซน 100%</span></div>`;
+      } else if (p.mobilityStatus === 'PRIMARY_HELPER') {
+        mobilityPill = `<div style="margin-top:3px;"><span class="pill" style="background:#e0f2fe; color:#0369a1; font-size:10px; font-weight:700;" title="ช่วยข้ามโซน ${p.crossZonePct}%">🔄 ช่วยข้าม (${p.crossZonePct}%)</span></div>`;
+      } else if (p.mobilityStatus === 'REASSIGNED') {
+        mobilityPill = `<div style="margin-top:3px;"><span class="pill" style="background:#ffedd5; color:#c2410c; font-size:10px; font-weight:700;" title="ย้ายไปหยิบ ${escapeZoneHtml(p.primaryActualZone)} เป็นหลัก">⚠️ ไป ${escapeZoneHtml(p.primaryActualZone || '-')}</span></div>`;
+      } else if (p.mobilityStatus === 'FLOATER') {
+        mobilityPill = `<div style="margin-top:3px;"><span class="pill" style="background:#f3e8ff; color:#7e22ce; font-size:10px; font-weight:700;">🔀 ลอยตัว ${p.actualZones ? p.actualZones.length : 0} โซน</span></div>`;
+      }
+
+      // Actual zones summary from BigQuery
+      let actualZoneSummary = '';
+      if (p.actualZones && p.actualZones.length > 0) {
+        const topActual = p.actualZones.slice(0, 2).map(z => `${z.zone} (${z.sharePct.toFixed(0)}%)`).join(', ');
+        const moreCount = p.actualZones.length > 2 ? ` +${p.actualZones.length - 2}` : '';
+        actualZoneSummary = `<div style="font-size:9.5px; color:#0369a1; margin-top:3px; line-height:1.3;" title="สแกนเนอร์หน้างานยิงจริงที่: ${p.actualZones.map(z => `${z.zone} ${z.sharePct.toFixed(0)}%`).join(', ')}">📍 BQ: <b>${escapeZoneHtml(topActual)}${moreCount}</b></div>`;
+      }
+
+      // Resigned Badge
+      const resInfo = p.resignedInfo;
+      let resignedBadge = '';
+      if (resInfo) {
+        resignedBadge = `<div style="margin-top:3px;"><span class="pill" style="background:#fee2e2; color:#b91c1c; border:1px solid #fecaca; font-size:10px; font-weight:700; display:inline-flex; align-items:center; gap:3px;" title="พ้นสภาพ: ${escapeZoneHtml(resInfo.date || '-')} · แผนก: ${escapeZoneHtml(resInfo.role || '-')} · สังกัด: ${escapeZoneHtml(resInfo.affiliation || '-')}">⛔ ลาออก (${escapeZoneHtml(resInfo.date || '-')})</span></div>`;
+      }
+
+      const displayZone = p.sheetZone || p.zone || '-';
+      const displayType = p.sheetPickType || p.typePick || '-';
+
+      const bqDiffSubtitle = (p.rawBqQty != null && p.rawBqQty !== p.qty)
+        ? `<div style="font-size:9.5px; color:#64748b; font-weight:400;" title="ยอดสแกนจริงใน BigQuery">BQ: ${fmt(p.rawBqQty)}</div>`
+        : '';
+      const bqProdSubtitle = (p.rawBqProd != null && p.rawBqProd !== prodValue)
+        ? `<div style="font-size:9.5px; color:#64748b; font-weight:400;" title="Productivity คำนวณจาก BigQuery">BQ: ${fmt(p.rawBqProd)}</div>`
+        : '';
 
       h += `<tr style="cursor:pointer; ${isLow ? 'background:#fff5f5;' : ''}" onclick="selectPickerDrilldown('${p.picker}')" title="คลิกเพื่อดูรายงานเจาะลึกของ ${escapeZoneHtml(p.picker)}">
         <td><span class="rank">${i + 1}</span></td>
         <td><b>${p.picker}</b></td>
-        <td style="line-height:1.35;"><div style="font-weight:600;">${pickerNameText}</div>${pickerNameText !== '-' ? `<div style="font-size:11px;color:#94a3b8;">${p.picker}</div>` : ''}</td>
-        <td><span class="pill">${escapeZoneHtml(p.affiliation || getPickerAffiliation(p.picker))}</span></td>
+        <td style="line-height:1.35;">
+          <div style="font-weight:600;">${pickerNameText}</div>
+          ${pickerNameText !== '-' ? `<div style="font-size:11px;color:#94a3b8;">${p.picker}</div>` : ''}
+          ${resignedBadge}
+        </td>
+        <td><span class="pill">${escapeZoneHtml(p.sheetAffiliation || p.affiliation || getPickerAffiliation(p.picker))}</span></td>
         <td>${SHIFT_LABEL[p.shift] || p.shift}</td>
-        <td><span class="pill">${p.zone}</span><div style="font-size:11px;color:#94a3b8;margin-top:3px;">Location ${p.location}</div></td>
+        <td>
+          <span class="pill" style="background:#eef2ff; color:#3730a3; font-weight:600;">${displayZone}</span>
+          <div style="font-size:10.5px; color:#64748b; margin-top:2px;">${displayType}</div>
+          ${mobilityPill}
+          ${actualZoneSummary}
+        </td>
         <td class="num" style="${pcsCellStyle}">${fmt(p.pcs)}</td>
-        <td class="num" style="${qtyCellStyle}">${fmt(p.qty)}</td>
+        <td class="num" style="${qtyCellStyle}">${fmt(p.qty)}${bqDiffSubtitle}</td>
         <td class="num">${p.ot > 0 ? fmt(p.ot) : '-'}</td>
-        <td class="num" style="font-weight:700;color:${prodColor};">${fmt(prodValue)} ${prodBadge}</td>
+        <td class="num">
+          <div style="font-weight:700; color:${prodColor}; font-size:13.5px;">${fmt(prodValue)} ${prodBadge}</div>
+          ${blendedTarget !== assignedTarget ? `<div style="font-size:10.5px; margin-top:3px; color:${isBlendedPassed ? '#15803d' : '#b45309'}; font-weight:600;">Fair Target: ${fmt(blendedTarget)} (${p.blendedGap > 0 ? '+' : ''}${fmt(p.blendedGap)})</div>` : ''}
+          ${bqProdSubtitle}
+        </td>
         <td style="text-align:center;"><button style="border:0; background:#e0e7ff; color:#4338ca; padding:4px 10px; border-radius:6px; font-size:11.5px; font-weight:600; cursor:pointer;">🔍 ดูเจาะลึก</button></td>
       </tr>`;
     });
@@ -6651,8 +7787,103 @@ const builders = {
   },
   incentive() {
     renderIncentivePage();
+  },
+  training() {
+    renderTrainingPage();
   }
 };
+
+// ===== 🎓 Training Page Renderer =====
+function renderTrainingPage() {
+  if (CURRENT_SHEET_DATA && (!CURRENT_SHEET_DATA.trainingSource || !CURRENT_SHEET_DATA.trainingSource.includes('2ND') || (CURRENT_SHEET_DATA.training || []).length < 5)) {
+    enrichSheetDataWith2NDTrainees(CURRENT_SHEET_DATA).then(() => {
+      if (currentPage === 'training') renderTrainingPage();
+    }).catch(() => {});
+  }
+  const trainingList = (CURRENT_SHEET_DATA && CURRENT_SHEET_DATA.training) ? CURRENT_SHEET_DATA.training : [];
+  const kpiRow = document.getElementById('trainingKpiRow');
+  const table = document.getElementById('trainingTable');
+  if (!table) return;
+
+  const totalTraining = trainingList.length;
+  const passedCount = trainingList.filter(t => (t.average || 0) >= (t.target || 100)).length;
+  const avgProd = totalTraining > 0
+    ? (trainingList.reduce((sum, t) => sum + (Number(t.average) || 0), 0) / totalTraining).toFixed(1)
+    : '0.0';
+
+  if (kpiRow) {
+    kpiRow.innerHTML = `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;box-shadow:0 4px 12px rgba(15,23,42,0.05);border-left:4px solid #0891b2;">
+        <div style="font-size:12px;color:#64748b;font-weight:600;">พนักงานฝึกสอนทั้งหมด</div>
+        <div style="font-size:26px;font-weight:800;color:#0f172a;margin-top:4px;">${fmt(totalTraining)} <span style="font-size:13px;font-weight:500;color:#64748b;">คน</span></div>
+        <div style="font-size:11.5px;color:#0891b2;margin-top:4px;">จากชีต 2ND</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;box-shadow:0 4px 12px rgba(15,23,42,0.05);border-left:4px solid #10b981;">
+        <div style="font-size:12px;color:#64748b;font-weight:600;">ผ่านเกณฑ์ Target (100)</div>
+        <div style="font-size:26px;font-weight:800;color:#059669;margin-top:4px;">${fmt(passedCount)} <span style="font-size:13px;font-weight:500;color:#64748b;">คน (${totalTraining > 0 ? Math.round(passedCount / totalTraining * 100) : 0}%)</span></div>
+        <div style="font-size:11.5px;color:#059669;margin-top:4px;">เกณฑ์ประเมินเบื้องต้น</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:16px;box-shadow:0 4px 12px rgba(15,23,42,0.05);border-left:4px solid #6366f1;">
+        <div style="font-size:12px;color:#64748b;font-weight:600;">Productivity เฉลี่ยกลุ่ม Training</div>
+        <div style="font-size:26px;font-weight:800;color:#4f46e5;margin-top:4px;">${avgProd} <span style="font-size:13px;font-weight:500;color:#64748b;">หยิบ/ชม.</span></div>
+        <div style="font-size:11.5px;color:#64748b;margin-top:4px;">เป้าหมาย 100 หยิบ/ชม.</div>
+      </div>
+    `;
+  }
+
+  let h = `<thead><tr>
+    <th>#</th>
+    <th>รหัสพนักงาน</th>
+    <th>ชื่อ-นามสกุล</th>
+    <th>วันที่เริ่มงาน (G)</th>
+    <th>สิ้นสุด Training (I)</th>
+    <th class="num">วันที่ทำจริง</th>
+    <th class="num">30 วันแรก (ชม./เฉลี่ย)</th>
+    <th class="num">30 วันหลัง (ชม./เฉลี่ย)</th>
+    <th class="num">พัฒนาการ (Improvement)</th>
+    <th class="num" style="background:#f0fdf4;color:#15803d;font-weight:700;">Avg Productivity (AF)</th>
+    <th style="text-align:center;">สถานะ Target</th>
+  </tr></thead><tbody>`;
+
+  if (!trainingList.length) {
+    h += `<tr><td colspan="11" style="text-align:center;padding:32px;color:#64748b;">ไม่พบข้อมูลพนักงานฝึกสอนในช่วงที่เลือก หรือยังไม่มีข้อมูล Training ใน Google Sheet</td></tr>`;
+  } else {
+    trainingList.forEach((t, i) => {
+      const isPass = (t.average || 0) >= (t.target || 100);
+      const imp = Number(t.improvement || 0);
+      const impColor = imp > 0 ? '#059669' : (imp < 0 ? '#dc2626' : '#64748b');
+      const impIcon = imp > 0 ? '▲ +' : (imp < 0 ? '▼ ' : '');
+      const badge = isPass
+        ? '<span class="badge-status pass">✓ ผ่าน Target</span>'
+        : '<span class="badge-status fail">⚠️ ต่ำกว่า Target</span>';
+
+      const resInfo = getPickerResignedInfo(t.userId, t.name);
+      let resBadge = '';
+      if (resInfo) {
+        resBadge = `<div style="margin-top:2px;"><span class="pill" style="background:#fee2e2; color:#b91c1c; border:1px solid #fecaca; font-size:10px; font-weight:700;" title="พ้นสภาพ: ${escapeZoneHtml(resInfo.date)} · แผนก: ${escapeZoneHtml(resInfo.role || '-')}">⛔ ลาออก (${escapeZoneHtml(resInfo.date)})</span></div>`;
+      }
+
+      h += `<tr>
+        <td><span class="rank">${i + 1}</span></td>
+        <td><b>${escapeZoneHtml(t.userId && !String(t.userId).startsWith('NAME:') ? t.userId : '-')}</b></td>
+        <td>
+          <div style="font-weight:600;">${escapeZoneHtml(t.name || '-')}</div>
+          ${resBadge}
+        </td>
+        <td>${escapeZoneHtml(t.startDate || '-')}</td>
+        <td>${escapeZoneHtml(t.trainingEndDate || '-')}</td>
+        <td class="num">${fmt(t.activeDays || t.count || 0)} วัน</td>
+        <td class="num"><span style="color:#64748b;font-size:11px;">(${t.first30Count || 0}d)</span> <b>${fmtDecimal1(t.first30Average || 0)}</b></td>
+        <td class="num"><span style="color:#64748b;font-size:11px;">(${t.second30Count || 0}d)</span> <b>${fmtDecimal1(t.second30Average || 0)}</b></td>
+        <td class="num" style="font-weight:700;color:${impColor};">${impIcon}${fmtDecimal1(imp)}</td>
+        <td class="num" style="background:#f0fdf4;font-size:14px;font-weight:800;color:${isPass ? '#059669' : '#dc2626'};">${fmtDecimal1(t.average || 0)}</td>
+        <td style="text-align:center;">${badge}</td>
+      </tr>`;
+    });
+  }
+  h += '</tbody>';
+  table.innerHTML = h;
+}
 
 // ===== 🎯 Efficiency Page Renderer =====
 function renderEfficiencyPage() {
@@ -8123,18 +9354,33 @@ function renderTopPickersView() {
       const nameTxt = x.name && x.name !== x.picker ? `${x.name} (${x.picker})` : x.picker;
       const zoneInfo = getZoneInfo(x.location);
 
+      let bqZoneSnippet = '';
+      if (x.actualZones && x.actualZones.length > 0) {
+        bqZoneSnippet = `<div style="font-size:9.5px; color:#0369a1; margin-top:2px;">📍 BQ: <b>${escapeZoneHtml(x.actualZones[0].zone)}</b> (${x.actualZones[0].sharePct.toFixed(0)}%)</div>`;
+      }
+      const bqDiffSub = (x.rawBqQty != null && x.rawBqQty !== x.qty)
+        ? `<div style="font-size:9px; color:#64748b;">BQ: ${fmt(x.rawBqQty)}</div>`
+        : '';
+
       return `<tr>
         <td style="text-align:center; width:50px;">${medal}</td>
         <td style="font-weight:700; color:#0f172a;">${escapeZoneHtml(nameTxt)}</td>
         <td><span class="affiliation-key">${escapeZoneHtml(aff)}</span></td>
-        <td><span class="pill" style="background:#f1f5f9; color:#334155; font-size:11.5px; font-weight:600;">${escapeZoneHtml(x.location || x.zone || '-')}</span> <span style="font-size:11px; color:#64748b;">${escapeZoneHtml(zoneInfo.typePick || '')}</span></td>
-        <td class="num">${fmt(x.qty)} หน่วย</td>
+        <td>
+          <span class="pill" style="background:#f1f5f9; color:#334155; font-size:11.5px; font-weight:600;">${escapeZoneHtml(x.sheetZone || x.location || x.zone || '-')}</span>
+          <span style="font-size:11px; color:#64748b;">${escapeZoneHtml(zoneInfo.typePick || '')}</span>
+          ${bqZoneSnippet}
+        </td>
+        <td class="num">${fmt(x.qty)} หน่วย${bqDiffSub}</td>
         <td class="num">${fmt(x.pcs)} ชิ้น</td>
         <td class="num"><span class="metric-main" style="color:#0284c7; font-weight:700;">${fmt(x.avg_prod)}</span></td>
         <td class="num"><span class="metric-main" style="color:#059669; font-weight:700;">${fmt(x.avg_pcs_prod)}</span></td>
         <td class="num">${x.ot > 0 ? fmt(x.ot) + ' ชม.' : '-'}</td>
       </tr>`;
     }).join('');
+
+    const hasSheetData = Boolean(CURRENT_SHEET_DATA && CURRENT_SHEET_DATA.ok);
+    const qtyHeaderTitle = hasSheetData ? 'หน่วยหยิบ (Sheet)' : 'หน่วยหยิบ';
 
     tableEl.innerHTML = `
       <thead>
@@ -8143,7 +9389,7 @@ function renderTopPickersView() {
           <th>พนักงาน</th>
           <th>สังกัด</th>
           <th>Location / Zone หลัก</th>
-          <th class="num">หน่วยหยิบ</th>
+          <th class="num">${qtyHeaderTitle}</th>
           <th class="num">จำนวนชิ้น</th>
           <th class="num">Productivity (หยิบ/ชม.)</th>
           <th class="num">Productivity (ชิ้น/ชม.)</th>
@@ -9271,6 +10517,8 @@ async function loadDataOnce(force, transientAttempt = 0, options = {}) {
           datePresetMode = (keepFrom || keepTo) ? (previous.datePresetMode || 'custom') : 'month';
           if (!silent) showLoading(true, 'กำลังดึงข้อมูลพนักงาน สินค้า และช่วงเวลาพร้อมกัน…');
           earlyCubePromise = Promise.all([
+            fetchSheetData(dfrom, dto, force),
+            fetchResignedMap(force),
             loadItemMaster(false),
             // Item exclusions are applied locally, so a ready Item Cube must not reload here.
             loadCurrentItemCube(false, sys),
@@ -9318,6 +10566,12 @@ async function loadDataOnce(force, transientAttempt = 0, options = {}) {
       return { ok: true, rows: 0 };
     }
 
+    if (!CURRENT_SHEET_DATA && dfrom && dto) {
+      try { await Promise.all([fetchSheetData(dfrom, dto, force), fetchResignedMap(force)]); } catch (_) {}
+    }
+    if (j && j.meta) {
+      syncResignedFromBackendMeta(j.meta);
+    }
     applyDashboardPayload(j, previous, 'live', { deferReady: true });
     if (!silent) showLoading(true, 'กำลังเตรียมข้อมูลพนักงาน สินค้า และช่วงเวลาให้พร้อมกัน…');
     if (earlyCubePromise) void earlyCubePromise.catch(() => null);

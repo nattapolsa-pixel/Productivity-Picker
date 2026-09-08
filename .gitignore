@@ -4,3 +4,6 @@
 .gemini/
 __pycache__/
 *.pyc
+.codex_artifact_trial/
+outputs/
+

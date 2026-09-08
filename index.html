@@ -1853,6 +1853,11 @@
           <circle cx="12" cy="8" r="4" />
           <path d="M4 21c0-4 4-6 8-6s8 2 8 6" />
         </svg> พนักงาน (Picker)</button>
+      <button class="nav" data-page="training"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2">
+          <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+          <path d="M6 12v5c3 3 9 3 12 0v-5" />
+        </svg> พนักงานฝึกสอน (Training)</button>
       <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7v5l3 3" />
@@ -1939,6 +1944,19 @@
       </div>
 
       <section class="page active" data-page="overview">
+        <!-- 🟢 Primary Data Source Banner -->
+        <div class="source-badge-bar" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; background:linear-gradient(90deg, #ecfdf5, #f0fdf4); border:1px solid #a7f3d0; border-radius:14px; padding:10px 16px; margin-bottom:18px; box-shadow:0 2px 6px rgba(16,185,129,0.08);">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span style="display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; background:#10b981; color:#fff; border-radius:8px; font-size:14px;">📊</span>
+            <div>
+              <div style="font-weight:700; color:#065f46; font-size:13.5px;">ฐานข้อมูลหลัก: Google Sheet Results Master (Official KPI)</div>
+              <div style="font-size:11.5px; color:#047857;">ตัวเลข Productivity และยอดหยิบอิงตามรายงานทางการที่ผู้บริหารยึดถือ (Col AF &amp; Total Pick)</div>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="background:#e0e7ff; color:#3730a3; padding:4px 10px; border-radius:8px; font-size:11.5px; font-weight:700;">⚡ แมพเสริม BigQuery WMS (Transaction Detail)</span>
+          </div>
+        </div>
         <div class="kpis" id="kpis"></div>
         <div class="grid">
           <!-- 📈 Chart 1: Trend Chart (Full Width) -->
@@ -2405,14 +2423,48 @@
         </div>
 
         <div class="card wide">
-          <h3>ตารางพนักงานหยิบ (เรียงตามปริมาณ)</h3>
-          <div class="sub">รหัส Picker · ชื่อพนักงาน · สังกัด · Location/Zone หลัก · จำนวนชิ้น · หน่วยหยิบ ·
-            Productivity</div>
-          <div style="overflow-x:auto">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+            <div>
+              <h3 style="margin:0;">ตารางพนักงานหยิบ (เรียงตามปริมาณ)</h3>
+              <div class="sub" style="margin-top:4px;">รหัส Picker · ชื่อพนักงาน · สังกัด · โซนตามชีต vs โซนจริง · จำนวนชิ้น · หน่วยหยิบ · Productivity</div>
+            </div>
+            <div id="pickerMobilityFilterBar" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;"></div>
+          </div>
+          <div style="overflow-x:auto; margin-top:12px;">
             <table id="ptable"></table>
           </div>
-          <div class="note">ชื่อพนักงานและสังกัดจับคู่จากรหัส Picker · Location
-            หลักคือจุดที่พนักงานมีรายการหยิบบ่อยที่สุด และนำไปจับ Zone ตาม Master Zone_V2</div>
+          <div class="note">ข้อมูลโซนที่มอบหมายอิงจาก Google Sheet Results Master และเทียบกับพิกัดสแกนจริงจาก BigQuery WMS แบบ Real-time</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="training">
+        <div class="card wide" style="margin-bottom:20px; border-top: 4px solid var(--teal); background:#ffffff;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+            <div>
+              <h3 style="font-size:18px; color:#0f172a; margin:0; display:flex; align-items:center; gap:8px;">
+                <span>🎓</span> พนักงานใหม่อยู่ระหว่างฝึกสอน (Training Performance)
+              </h3>
+              <div class="sub" style="margin-top:4px;">
+                ติดตามพัฒนาการของพนักงานใหม่ตามช่วงวันที่เริ่มงาน (G) ถึงวันสิ้นสุดฝึกสอน (I) จากชีต 2ND · ยอด Productivity อิงตาม Results Master Column AF (Target: 100 หยิบ/ชม.)
+              </div>
+            </div>
+            <span class="badge-status pass" style="font-size:12px; padding:6px 12px;">📊 ข้อมูลตรงจาก Google Sheet</span>
+          </div>
+
+          <!-- Training KPI Cards Row -->
+          <div id="trainingKpiRow" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:14px; margin-bottom:20px;">
+            <!-- Populated dynamically -->
+          </div>
+
+          <!-- Training Table -->
+          <div style="overflow-x:auto;">
+            <table id="trainingTable" class="zone-breakdown-table">
+              <!-- Populated dynamically -->
+            </table>
+          </div>
+          <div class="note" style="margin-top:12px;">
+            เกณฑ์การประเมิน: Target Training คือ 100 หยิบ/ชม. · เปรียบเทียบผลงาน 30 วันแรก กับ 30 วันหลัง เพื่อดูอัตราการพัฒนา (Improvement)
+          </div>
         </div>
       </section>
 

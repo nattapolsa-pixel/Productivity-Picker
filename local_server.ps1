@@ -1,4 +1,4 @@
-$root = 'C:\Users\somka\Desktop\งาน\Pick Productivity_V2'
+$root = $PSScriptRoot
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add('http://127.0.0.1:8088/')
 $listener.Start()
@@ -23,13 +23,17 @@ try {
       }
       $ctx.Response.ContentType = $ct
       $ctx.Response.ContentLength64 = $bytes.Length
-      $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+      if ($req.HttpMethod -ne 'HEAD') {
+        $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+      }
     } else {
       $msg = [System.Text.Encoding]::UTF8.GetBytes('Not found: ' + $rel)
       $ctx.Response.StatusCode = 404
       $ctx.Response.ContentType = 'text/plain; charset=utf-8'
       $ctx.Response.ContentLength64 = $msg.Length
-      $ctx.Response.OutputStream.Write($msg, 0, $msg.Length)
+      if ($req.HttpMethod -ne 'HEAD') {
+        $ctx.Response.OutputStream.Write($msg, 0, $msg.Length)
+      }
     }
     $ctx.Response.OutputStream.Close()
   }
