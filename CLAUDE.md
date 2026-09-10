@@ -50,7 +50,7 @@ Dashboard **ไม่เคยอ่าน view โดยตรง** view มี
 | `DASHBOARD_CACHE_FORMAT_VERSION` | `speed-v18-sheet-master-all-items` | bq:43 | เปลี่ยน = ล้าง cache ทั้งระบบ |
 | `UPLOAD_SCHEMA_VERSION` | `pick-detail-wms-v1` | app.js:10735 + bq:21 | ไม่ตรง = upload ถูกปฏิเสธ `SCHEMA_VERSION_MISMATCH` |
 | `CACHE_VERSION` | `v49-sheet-2nd-roster` | api:7 | เปลี่ยน payload = ต้อง bump + แก้ `isUsableDashboardPayload_` (api:2130) |
-| `app.js?v=` | `20260910-zonetarget-belowtarget-trend-individual-v95` | index.html (ท้ายไฟล์) | **bump ทุกครั้งที่แก้ app.js** + แก้ `performance_contract.test.js:11` |
+| `app.js?v=` | `20260910-zonetarget-belowtarget-trend-individual-v96` | index.html (ท้ายไฟล์) | **bump ทุกครั้งที่แก้ app.js** + แก้ `performance_contract.test.js:11` |
 | `SHARED_TARGETS_PROPERTY` | `dashboard_shared_targets_v1` | bq | ScriptProperty เก็บ Target ส่วนกลาง (types + zones) |
 | `BQ_PROJECT / DATASET / LOCATION` | `productivity-pick` / `pick_analytics` / `asia-southeast1` | bq:17-19 | location ผิด = ทุก job พัง "Not found: Job" |
 | `RECENT_DAYS` | 90 | bq:20 | ขอบเขตวันที่ทั้ง dashboard |

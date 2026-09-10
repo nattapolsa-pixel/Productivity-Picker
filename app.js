@@ -12576,6 +12576,8 @@ function saveTargetSettingsFromModal() {
     });
 }
 
+// ยังคงฟังก์ชันไว้เผื่อผูกปุ่มใหม่ในอนาคต แต่ตอนนี้ "ไม่ได้ผูกกับปุ่มใด" แล้ว
+// (ปุ่มกลับค่าเริ่มต้นถูกถอดออกเพราะผู้ใช้เผลอกดคิดว่าเป็นปุ่มปิด)
 function resetTargetSettingsDefaults() {
   saveProdTargetsToStorage(DEFAULT_PROD_TARGETS);
   zoneTargets = {};
@@ -12591,12 +12593,13 @@ function resetTargetSettingsDefaults() {
   const bind = () => {
     const btnClose = document.getElementById('btnCloseTargetSettings');
     const btnSave = document.getElementById('btnSaveTargetSettings');
-    const btnReset = document.getElementById('btnResetTargetDefaults');
+    // ปุ่มท้าย Modal เปลี่ยนจาก "กลับค่าเริ่มต้น" (เสี่ยงกดผิดคิดว่าปิด) เป็น "ปิด"
+    const btnCloseFooter = document.getElementById('btnCloseTargetSettingsFooter');
     const modal = document.getElementById('targetSettingsModal');
 
     if (btnClose) btnClose.onclick = closeTargetSettingsModal;
     if (btnSave) btnSave.onclick = saveTargetSettingsFromModal;
-    if (btnReset) btnReset.onclick = resetTargetSettingsDefaults;
+    if (btnCloseFooter) btnCloseFooter.onclick = closeTargetSettingsModal;
     if (modal) {
       modal.onclick = (e) => {
         if (e.target === modal) closeTargetSettingsModal();

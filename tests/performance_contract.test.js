@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260910-zonetarget-belowtarget-trend-individual-v95'), 'HTML must cache-bust the latest release');
+assert(html.includes('app.js?v=20260910-zonetarget-belowtarget-trend-individual-v96'), 'HTML must cache-bust the latest release');
 
 // ===== Target ราย Zone ย่อย (ค่ากลางร่วมกันทุกเครื่อง) =====
 assert(app.includes('function listTargetZones()') && app.includes('function resolveTargetZoneLabel') &&
