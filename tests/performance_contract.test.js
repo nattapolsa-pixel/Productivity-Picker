@@ -8,7 +8,14 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260910-zonetarget-belowtarget-trend-individual-v96'), 'HTML must cache-bust the latest release');
+assert(html.includes('app.js?v=20260910-shiftfilter-sheetpickers-v97'), 'HTML must cache-bust the latest release');
+
+// ตัวกรองกะต้องมีผลกับ Picker ที่มาจาก Google Sheet ด้วย (กันบั๊กเลือกกะ A แล้วเห็นกะ B)
+assert(app.includes('const sheetPickers = s.pickers.all.filter(sp =>') &&
+  app.includes("matchesReportTeam(null, String((sp && sp.userId) || '').trim(), sf)"),
+  'Sheet-sourced pickers must respect the shift filter');
+assert(!app.includes('s.pickers.all.forEach(sp =>'),
+  'Sheet pickers must never be merged into by_picker without the shift filter');
 
 // ===== Target ราย Zone ย่อย (ค่ากลางร่วมกันทุกเครื่อง) =====
 assert(app.includes('function listTargetZones()') && app.includes('function resolveTargetZoneLabel') &&

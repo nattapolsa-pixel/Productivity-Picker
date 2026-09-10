@@ -37,7 +37,7 @@ Dashboard **ไม่เคยอ่าน view โดยตรง** view มี
 | `apps-script-api.gs` (2,516) | Web App #2: Google Sheet "Results Master" → KPI (read-only) |
 | `pick_uom_master_pipeline.sql` (216) | runbook มือ: preflight → cutover view → post-check |
 | `zone_layout.js` / `zone_master_fallback.js` / `picker_names_fallback.js` / `picker_affiliation_fallback.js` | snapshot 2026-07-27 เป็น **พื้น** ไม่ใช่ตัว override |
-| `tests/*.test.js` (12) | plain Node ไม่มี framework — `node tests/xxx.test.js` |
+| `tests/*.test.js` (13) | plain Node ไม่มี framework — `node tests/xxx.test.js` |
 | `local_server.ps1` | static server `http://127.0.0.1:8088/` สำหรับทดสอบ local |
 
 ---
@@ -50,7 +50,7 @@ Dashboard **ไม่เคยอ่าน view โดยตรง** view มี
 | `DASHBOARD_CACHE_FORMAT_VERSION` | `speed-v18-sheet-master-all-items` | bq:43 | เปลี่ยน = ล้าง cache ทั้งระบบ |
 | `UPLOAD_SCHEMA_VERSION` | `pick-detail-wms-v1` | app.js:10735 + bq:21 | ไม่ตรง = upload ถูกปฏิเสธ `SCHEMA_VERSION_MISMATCH` |
 | `CACHE_VERSION` | `v49-sheet-2nd-roster` | api:7 | เปลี่ยน payload = ต้อง bump + แก้ `isUsableDashboardPayload_` (api:2130) |
-| `app.js?v=` | `20260910-zonetarget-belowtarget-trend-individual-v96` | index.html (ท้ายไฟล์) | **bump ทุกครั้งที่แก้ app.js** + แก้ `performance_contract.test.js:11` |
+| `app.js?v=` | `20260910-shiftfilter-sheetpickers-v97` | index.html (ท้ายไฟล์) | **bump ทุกครั้งที่แก้ app.js** + แก้ `performance_contract.test.js:11` |
 | `SHARED_TARGETS_PROPERTY` | `dashboard_shared_targets_v1` | bq | ScriptProperty เก็บ Target ส่วนกลาง (types + zones) |
 | `BQ_PROJECT / DATASET / LOCATION` | `productivity-pick` / `pick_analytics` / `asia-southeast1` | bq:17-19 | location ผิด = ทุก job พัง "Not found: Job" |
 | `RECENT_DAYS` | 90 | bq:20 | ขอบเขตวันที่ทั้ง dashboard |
@@ -103,6 +103,12 @@ shift_minute: A = tmin-420, B(กลางคืน) = tmin-1140, B(เช้า
 
 ตัวกรองกะบนหน้าเว็บ (`shiftF`) กรองด้วย **Team จาก roster** ไม่ใช่เวลา (`matchesReportTeam` app.js:1452)
 ใครที่ Team ไม่ใช่ A/B → `NOT_FOUND` → มี banner แจ้งเตือน (`renderUnmappedTeamBanner` app.js:3863)
+
+⚠️ **ตัวกรองกะต้องมีผลกับ Picker ที่มาจาก Sheet ด้วย** (แก้ 2026-09-10)
+บล็อกผสมข้อมูล Sheet เคยวน `s.pickers.all` ทั้งหมดแล้ว `push` เข้า `by_picker` โดยไม่เช็ค `sf`
+→ เลือก "กะ A" แล้วยังเห็นคนกะ B โผล่มา ตอนนี้กรองด้วย `matchesReportTeam(null, userId, sf)` ตัวเดียวกับฝั่ง BigQuery
+`kpis.pickers` / `kpis.sheet_pickers` ก็นับหลังกรองแล้ว · `tests/shift_filter_sheet.test.js` ล็อกไว้
+**ถ้าเพิ่มบล็อกที่เอาข้อมูลจาก Sheet มาผสมอีก ต้องกรอง `sf` เองทุกครั้ง**
 
 ### 3.3 ชั่วโมงทำงาน & OT
 - **Active Hours = popcount(hourMask)** = จำนวนชั่วโมงนาฬิกาที่มี Pick > 0 ต่อ picker × วัน
@@ -509,7 +515,7 @@ IndexedDB:    db 'pick_dashboard_cache_v1' store 'responses'  (TTL 30 วัน)
 cd "C:\Users\somka\Desktop\งาน\Pick Productivity_V2"
 Get-ChildItem tests\*.test.js | ForEach-Object { node $_.FullName }
 ```
-ไม่มี package.json / framework — plain Node (**12 ไฟล์**: 10 ไฟล์ imperative assert, 2 ไฟล์ใช้ `node:test`)
+ไม่มี package.json / framework — plain Node (**13 ไฟล์**: 11 ไฟล์ imperative assert, 2 ไฟล์ใช้ `node:test`)
 ควรรันข้าม timezone ด้วย เพราะมี logic เกี่ยวกับวันที่: `TZ=Asia/Bangkok`, `TZ=UTC`, `TZ=America/New_York`
 
 **สคริปต์ตรวจ static ที่ควรรันหลังแก้ตาราง/หน้าใหม่** (เขียนใหม่ได้ตามต้องการ):
@@ -621,6 +627,8 @@ Smoke test หลัง deploy:
 | 13 | slot cube width 6 เสีย picker identity → picker drilldown timeslot ว่างเงียบๆ | รู้ไว้ |
 | 14 | `app.js` เคยเป็น CRLF ในเครื่องแต่ LF ใน repo → `git diff` เป็นทั้งไฟล์ และ assertion ที่เทียบ string มี `\n` กลายเป็นจริงตลอด | ✅ **แก้แล้ว 2026-09-10** — normalize `app.js` เป็น LF แล้ว **อย่าเขียนกลับเป็น CRLF** และเลิกใช้ literal `\n` ใน assertion (ใช้ index/slice แทน) |
 | 15 | `fetchDailyItemCube` ส่ง `dashboardScopeQuery()` ต่างจาก `loadCurrentItemCube` ที่ไม่ส่ง | ตั้งใจหรือเปล่ายังไม่ยืนยัน — test บังคับเฉพาะ `loadCurrentItemCube` |
+| 16 | Picker จาก Sheet ถูก push เข้า `by_picker` โดยไม่เช็คตัวกรองกะ | ✅ **แก้แล้ว 2026-09-10** — `tests/shift_filter_sheet.test.js` ล็อกไว้ |
+| 17 | **ยังเหลือ**: `kpis.qty` (`s.totalPick`), `kpis.avg_prod` (`s.overall.average`) และ `daily[]` (`s.monthlyTrend.days`) ยังเป็นค่า **รวมทุกกะ** ถึงจะเลือกกะ A/B อยู่ | ยังไม่แก้ — เป็นค่าที่ CLAUDE.md §3.11 ระบุว่า Sheet เป็นเจ้าของ ถ้าจะให้กรองตามกะต้องรวมจาก `sheetPickers` เอง **ต้องให้ผู้ใช้ตัดสินใจก่อน** เพราะเลขพาดหัวจะไม่ตรงกับยอดใน Sheet อีก |
 
 ---
 

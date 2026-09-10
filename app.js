@@ -3513,14 +3513,20 @@ function aggregate(system, from, to, sf) {
       result.kpis.status = s.overall.status || '';
     }
     if (s.pickers && Array.isArray(s.pickers.all)) {
-      result.kpis.sheet_pickers = s.pickers.all.length;
+      // ⚠️ ตัวกรองกะต้องมีผลกับ Picker ที่มาจาก Sheet ด้วย
+      // ก่อนหน้านี้วน s.pickers.all ทั้งหมดแล้ว push เข้า by_picker โดยไม่เช็ค sf
+      // ทำให้เลือก "กะ A" แล้วยังเห็นคนกะ B โผล่มาจาก Sheet
+      // ใช้ matchesReportTeam ตัวเดียวกับที่ฝั่ง BigQuery ใช้ เพื่อให้เกณฑ์ตรงกัน (Team จาก roster)
+      const sheetPickers = s.pickers.all.filter(sp =>
+        matchesReportTeam(null, String((sp && sp.userId) || '').trim(), sf));
+      result.kpis.sheet_pickers = sheetPickers.length;
       result.kpis.pickers = result.kpis.sheet_pickers;
 
       // Sync Sheet pickers onto result.by_picker
       const pickerMap = new Map();
       result.by_picker.forEach(p => pickerMap.set(p.picker, p));
 
-      s.pickers.all.forEach(sp => {
+      sheetPickers.forEach(sp => {
         const pid = String(sp.userId || '').trim();
         let bp = pickerMap.get(pid);
         if (!bp) {
