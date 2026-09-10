@@ -2132,9 +2132,11 @@
             <div class="sub">แท่ง = ปริมาณของระบบที่เลือก (ซ้าย) · เส้น = Productivity V2 เฉลี่ยราย
               Picker/วันของระบบที่เลือก (ขวา) ·
               หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ</div>
-            <div class="controls">
+            <div class="controls" style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
               <div class="seg" id="seg"><button data-mode="day" class="active">รายวัน</button><button
                   data-mode="week">รายสัปดาห์</button><button data-mode="month">รายเดือน</button></div>
+              <!-- แถบเลื่อนเดือนของกราฟ (สร้างโดย app.js) — โหมดรายวันเท่านั้น -->
+              <div id="overviewChartMonthWrap"></div>
             </div>
             <div class="chartbox tall" style="height:380px;"><canvas id="trend"></canvas></div>
           </div>
@@ -2992,7 +2994,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260910-shiftfilter-sheetpickers-v97"></script>
+  <script src="app.js?v=20260910-monthwide-charts-v98"></script>
 </body>
 
 </html>

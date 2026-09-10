@@ -8,7 +8,7 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260910-shiftfilter-sheetpickers-v97'), 'HTML must cache-bust the latest release');
+assert(html.includes('app.js?v=20260910-monthwide-charts-v98'), 'HTML must cache-bust the latest release');
 
 // ตัวกรองกะต้องมีผลกับ Picker ที่มาจาก Google Sheet ด้วย (กันบั๊กเลือกกะ A แล้วเห็นกะ B)
 assert(app.includes('const sheetPickers = s.pickers.all.filter(sp =>') &&
@@ -114,9 +114,24 @@ assert(app.includes("bar.querySelectorAll('.preset-range-group button').forEach(
   'Date preset handler must remain scoped to All/Weekly/Monthly');
 assert(!app.includes('btnCalendarDropdown') && !app.includes('calPopover') && !app.includes('เลือกหลายวัน'),
   'The daily calendar dropdown must be removed from the overview controls');
-assert(app.includes("mode === 'day' && datePresetMode === 'all' && latestMonth") &&
-  app.includes("daily.filter(d => String(d.date || '').startsWith(latestMonth))"),
-  'Overview daily trend must default to the latest data month without changing weekly/monthly trends');
+// กราฟเทรนรายวันต้องกางทั้งเดือน ไม่หุบตามตัวกรองวันที่ (ตาราง/KPI ยังหุบตามตัวกรอง)
+assert(app.includes("const trendRows = mode === 'day'") &&
+  app.includes("dailySeriesForRange(sys, chartMonthRange().from, chartMonthRange().to, shiftF)"),
+  'Overview daily trend must span the whole chart month instead of collapsing to the date filter');
+assert(app.includes('function dailySeriesForRange(system, from, to, sf)') &&
+  app.includes('const chartDailyCache = new Map();'),
+  'A dedicated month-wide daily series with its own memo cache must exist');
+// ห้ามเรียก aggregate() ด้วยช่วงของกราฟ เพราะจะเก็บผลที่ by_item/by_timeslot ว่างลง aggregateCache
+assert(!app.includes('aggregate(sys, chartMonthRange().from'),
+  'Chart range must never go through aggregate() — it would poison aggregateCache with empty item/slot data');
+assert(app.includes('chartDailyCache.clear();'),
+  'Chart daily cache must be invalidated together with the aggregation cache');
+assert(app.includes('function chartMonthNavHtml(navId)') && app.includes('function bindChartMonthNav'),
+  'Chart month navigator (‹ ›) must exist and be bindable');
+assert(app.includes('function resetChartMonth()') && app.includes('function autoChartMonth()'),
+  'Chart month must follow the selected date by default and be resettable');
+assert(app.includes('sheet.monthlyTrend && Array.isArray(sheet.monthlyTrend.days)'),
+  'Month-wide chart series must apply the Google Sheet daily override like aggregate() does');
 const historicalDailyMatch = app.match(/const HISTORICAL_V1_DAILY = '([^']+)'/);
 assert(historicalDailyMatch, 'Historical V1 daily snapshot is missing');
 const historicalDaily = historicalDailyMatch[1].split(';').map(value => {

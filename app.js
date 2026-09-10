@@ -1322,6 +1322,7 @@ function updateExcludedZonesBar() {
 function invalidateAggregationCache() {
   excludedSkuRevision++;
   aggregateCache.clear();
+  chartDailyCache.clear();
 }
 
 // ===== shift helpers =====
@@ -2993,6 +2994,233 @@ function calculateCrossSystemWeightedProductivity(from, to, sf) {
 
 // ===== core: aggregate ตามช่วงวันที่(ของกะ) + กะ =====
 // Work cube = [shiftDateIdx, shiftCode, zone, pickerIdx, pcs, pick_qty, lines, minSm, maxSm]
+// =========================================================================
+// ===== ยอดรายวันสำหรับ "กราฟ" โดยเฉพาะ (ช่วงกว้างกว่าตัวกรองของตาราง) =====
+// ผู้ใช้ต้องการ: เลือกวันที่ 8 วันเดียว → ตาราง/KPI โชว์วันที่ 8
+// แต่กราฟเทรนยังกางทั้งเดือนเพื่อเห็นบริบท และเลื่อนดูเดือนอื่นได้
+//
+// ทำไมไม่เรียก aggregate() ตรงๆ ด้วยช่วงกว้าง:
+//   item cube / slot cube ถูก fetch จาก server ตาม from|to|shift เป๊ะๆ
+//   ถ้าเรียก aggregate ด้วยช่วงที่ไม่ได้โหลด cube ไว้ by_item/by_timeslot จะว่าง
+//   แล้วผลนั้นจะถูกเก็บลง aggregateCache → พอผู้ใช้เลือกช่วงนั้นจริง หน้า Items/ช่วงเวลาจะว่างเปล่า
+// จึงอ่านเฉพาะ work cube (มีครบ 90 วันในเครื่องอยู่แล้ว = ไม่ยิง BigQuery เพิ่ม)
+// และ memo แยก cache ของตัวเอง
+//
+// ⚠️ ตัวเลขต้องตรงกับ aggregate().daily เป๊ะ — มี tests/chart_daily_series.test.js เทียบไว้
+// ถ้าแก้สูตร productivity ใน aggregate ต้องแก้ที่นี่ด้วย (ใช้ primitive ตัวเดียวกัน)
+// =========================================================================
+const chartDailyCache = new Map();
+
+function dailySeriesForRange(system, from, to, sf) {
+  const key = [system, from, to, sf, excludedSkuRevision].join('|');
+  if (chartDailyCache.has(key)) return chartDailyCache.get(key);
+
+  const S = DATA[system];
+  const empty = [];
+  if (!S || !S._sh) {
+    chartDailyCache.set(key, empty);
+    return empty;
+  }
+
+  const dayVol = {};
+  const grp = {};
+  const SH = S._sh;
+  const rowCount = packedRowCount(S);
+  for (let i = 0; i < rowCount; i++) {
+    const si = SH[i];
+    if (si.sd < from || si.sd > to) continue;
+    const r = packedRowData(S, i);
+    const zoneInfo = getZoneInfo(r.zone);
+    const picker = S.pickers[r.pickerIdx];
+    if (!matchesReportTeam(si, picker, sf)) continue;
+    if (isZoneExcluded(zoneInfo.zone)) continue;
+
+    (dayVol[si.sd] = dayVol[si.sd] || { lines: 0, pcs: 0, qty: 0, pk: new Set() });
+    dayVol[si.sd].lines += r.lines;
+    dayVol[si.sd].pcs += r.pcs;
+    dayVol[si.sd].qty += r.pickQty;
+    dayVol[si.sd].pk.add(picker);
+
+    const k = picker + '|' + si.sd;
+    const b = grp[k] || (grp[k] = { picker, sd: si.sd, pcs: 0, q: 0, n: 0, hourMask: 0 });
+    b.pcs += r.pcs;
+    b.q += r.pickQty;
+    b.n += r.lines;
+    b.hourMask = mergeHourMask(b.hourMask, r.hourMask);
+  }
+
+  const byDate = {};
+  Object.values(grp).forEach(g => {
+    const activeHours = activeHourCount(g.hourMask);
+    const prod = v2RoundedProductivity(g.q, activeHours);
+    const pcsProd = v2RoundedProductivity(g.pcs, activeHours);
+    if (!(g.n > 0 && isV2CountableProductivity(g.picker, activeHours, prod))) return;
+    const d = byDate[g.sd] || (byDate[g.sd] = { prod: [], pcsProd: [], h: 0 });
+    d.prod.push(prod);
+    d.pcsProd.push(pcsProd);
+    d.h += activeHours;
+  });
+
+  const series = Object.keys(dayVol).sort().map(d => ({
+    date: d,
+    lines: dayVol[d].lines,
+    pcs: dayVol[d].pcs,
+    qty: dayVol[d].qty,
+    pickers: dayVol[d].pk.size,
+    hours: r1(byDate[d] ? byDate[d].h : 0),
+    avg_prod: r1(byDate[d] ? mean(byDate[d].prod) : 0),
+    avg_pcs_prod: r1(byDate[d] ? mean(byDate[d].pcsProd) : 0)
+  }));
+
+  // Google Sheet เป็นเจ้าของยอดรายวัน (CLAUDE.md §3.11) — ต้องทับให้เหมือน aggregate().daily
+  // ไม่งั้นกราฟจะโชว์ยอด BigQuery ขณะที่ตารางโชว์ยอด Sheet = ไม่ตรงกัน
+  // หมายเหตุ: monthlyTrend จาก Sheet ครอบเฉพาะช่วงที่ร้องขอ ถ้าเลื่อนไปเดือนที่ Sheet ไม่ได้ส่งมา
+  // กราฟเดือนนั้นจะกลับไปใช้ยอด BigQuery ตามธรรมชาติ
+  const sheet = CURRENT_SHEET_DATA;
+  if (sheet && sheet.ok && sheet.monthlyTrend && Array.isArray(sheet.monthlyTrend.days)) {
+    const dailyMap = new Map();
+    series.forEach(d => dailyMap.set(d.date, d));
+    sheet.monthlyTrend.days.forEach(d => {
+      if (!d.hasData || !d.date) return;
+      if (from && d.date < from) return;
+      if (to && d.date > to) return;
+      const existing = dailyMap.get(d.date);
+      if (!existing) {
+        const added = {
+          date: d.date,
+          lines: 0,
+          pcs: Number(d.totalPick) || 0,
+          qty: Math.round(Number(d.totalPick) || 0),
+          pickers: Number(d.count) || 0,
+          hours: 0,
+          avg_prod: Math.round(Number(d.productivity) || 0),
+          avg_pcs_prod: Math.round(Number(d.productivity) || 0)
+        };
+        series.push(added);
+        dailyMap.set(d.date, added);
+      } else {
+        if (d.totalPick != null && Number(d.totalPick) > 0) existing.qty = Math.round(Number(d.totalPick));
+        if (d.productivity != null && Number(d.productivity) > 0) existing.avg_prod = Math.round(Number(d.productivity));
+        if (d.count != null && Number(d.count) > 0) existing.pickers = Number(d.count);
+      }
+    });
+    series.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  chartDailyCache.set(key, series);
+  return series;
+}
+
+// ===== เดือนที่กราฟกางให้เห็น (แยกจากตัวกรองวันที่ของตาราง) =====
+// null = ตามเดือนของวันที่ที่เลือกอยู่ (auto) · มีค่า = ผู้ใช้กด ‹ › เลื่อนเอง
+let chartMonth = null;
+
+function monthKeyOf(dateStr) {
+  return String(dateStr || '').slice(0, 7);
+}
+
+function autoChartMonth() {
+  // ยึดเดือนของ "วันสุดท้าย" ที่เลือก เพราะเป็นวันที่ผู้ใช้กำลังสนใจ
+  return monthKeyOf(dto) || monthKeyOf(dfrom) || monthKeyOf(DMAX) || monthKeyOf(new Date().toISOString());
+}
+
+function activeChartMonth() {
+  return chartMonth || autoChartMonth();
+}
+
+function chartMonthIsAuto() {
+  return !chartMonth || chartMonth === autoChartMonth();
+}
+
+function chartMonthRange(monthKey = activeChartMonth()) {
+  const mk = String(monthKey || '').slice(0, 7);
+  const [y, m] = mk.split('-').map(Number);
+  if (!y || !m) return { from: dfrom, to: dto, monthKey: mk };
+  const lastDay = new Date(y, m, 0).getDate();
+  const pad = n => String(n).padStart(2, '0');
+  return { from: `${y}-${pad(m)}-01`, to: `${y}-${pad(m)}-${pad(lastDay)}`, monthKey: mk };
+}
+
+function chartMonthLabel(monthKey = activeChartMonth()) {
+  const dt = new Date(String(monthKey).slice(0, 7) + '-01T00:00:00');
+  if (Number.isNaN(dt.getTime())) return String(monthKey);
+  return new Intl.DateTimeFormat('th-TH', { month: 'long', year: 'numeric' }).format(dt);
+}
+
+// รายการเดือนที่มีข้อมูลจริง (ใช้กันการเลื่อนออกนอกช่วงที่มีข้อมูล)
+function availableChartMonths() {
+  const set = new Set();
+  const min = monthKeyOf(DMIN);
+  const max = monthKeyOf(DMAX);
+  if (!min || !max) return [];
+  let [y, m] = min.split('-').map(Number);
+  const pad = n => String(n).padStart(2, '0');
+  for (let guard = 0; guard < 240; guard++) {
+    const mk = `${y}-${pad(m)}`;
+    set.add(mk);
+    if (mk === max) break;
+    m += 1;
+    if (m > 12) { m = 1; y += 1; }
+  }
+  return [...set].sort();
+}
+
+function shiftChartMonth(delta) {
+  const months = availableChartMonths();
+  const current = activeChartMonth();
+  const idx = months.indexOf(current);
+  if (idx < 0) {
+    chartMonth = months.length ? months[months.length - 1] : null;
+  } else {
+    const next = idx + Number(delta || 0);
+    if (next < 0 || next >= months.length) return false;
+    chartMonth = months[next];
+  }
+  return true;
+}
+
+function resetChartMonth() {
+  chartMonth = null;
+}
+
+// แถบเลื่อนเดือนบนหัวกราฟ — ใช้ทั้งหน้าภาพรวมและหน้าเทรน
+function chartMonthNavHtml(navId) {
+  const months = availableChartMonths();
+  const current = activeChartMonth();
+  const idx = months.indexOf(current);
+  const canPrev = idx > 0;
+  const canNext = idx >= 0 && idx < months.length - 1;
+  const btn = (dir, label, enabled) =>
+    `<button type="button" data-chartmonth="${dir}" ${enabled ? '' : 'disabled'}
+      style="border:1px solid #cbd5e1; background:${enabled ? '#fff' : '#f8fafc'}; color:${enabled ? '#334155' : '#cbd5e1'};
+      font-family:inherit; font-size:14px; font-weight:700; width:30px; height:30px; border-radius:9px;
+      cursor:${enabled ? 'pointer' : 'not-allowed'}; line-height:1;">${label}</button>`;
+  const resetBtn = chartMonthIsAuto()
+    ? ''
+    : `<button type="button" data-chartmonth="auto"
+        style="border:1px solid #c7d2fe; background:#eef2ff; color:#4338ca; font-family:inherit; font-size:11.5px;
+        font-weight:700; padding:6px 10px; border-radius:9px; cursor:pointer; margin-left:4px;">↩ กลับเดือนของวันที่เลือก</button>`;
+  return `<div class="chart-month-nav" id="${navId}" style="display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap;">
+    ${btn('prev', '‹', canPrev)}
+    <span style="font-size:13px; font-weight:800; color:#0f172a; min-width:118px; text-align:center;">${escapeZoneHtml(chartMonthLabel(current))}</span>
+    ${btn('next', '›', canNext)}
+    ${resetBtn}
+  </div>`;
+}
+
+function bindChartMonthNav(navId, onChange) {
+  const host = document.getElementById(navId);
+  if (!host) return;
+  host.querySelectorAll('button[data-chartmonth]').forEach(b => {
+    b.onclick = () => {
+      const action = b.dataset.chartmonth;
+      if (action === 'auto') resetChartMonth();
+      else if (!shiftChartMonth(action === 'prev' ? -1 : 1)) return;
+      if (typeof onChange === 'function') onChange();
+    };
+  });
+}
+
 function aggregate(system, from, to, sf) {
   const cacheKey = [system, from, to, sf, excludedSkuRevision, prodCalcMode].join('|');
   if (aggregateCache.has(cacheKey)) return aggregateCache.get(cacheKey);
@@ -6273,7 +6501,10 @@ function trendPeriodLabel(key, mode) {
 
 function buildTrendPeriods(mode) {
   const map = new Map();
-  (A.daily || []).forEach(d => {
+  // หน้าเทรนมีหน้าที่ดู "ความเปลี่ยนแปลงข้ามงวด" ถ้าหุบตามตัวกรองวันเดียวจะเหลือแท่งเดียว
+  // จึงใช้ช่วงข้อมูลที่มีทั้งหมด (DMIN..DMAX) เสมอ แล้วไฮไลต์งวดที่ครอบวันที่เลือกไว้
+  const series = dailySeriesForRange(sys, DMIN, DMAX, shiftF);
+  (series.length ? series : (A.daily || [])).forEach(d => {
     const key = trendPeriodKey(d.date, mode);
     const g = map.get(key) || { key, qty: 0, lines: 0, hours: 0, prodValues: [], days: 0, pickerPeak: 0, dates: [] };
     g.qty += Number(d.qty || 0);
@@ -6297,6 +6528,8 @@ function buildTrendPeriods(mode) {
     g.prodDelta = prev ? r1(g.prod - prev.prod) : null;
     g.prodDeltaPct = prev && prev.prod > 0 ? r1(((g.prod - prev.prod) / prev.prod) * 100) : null;
     g.qtyDeltaPct = prev && prev.qty > 0 ? r1(((g.qty - prev.qty) / prev.qty) * 100) : null;
+    // งวดนี้ครอบวันที่ผู้ใช้เลือกอยู่หรือไม่ (ใช้ไฮไลต์ในกราฟและตาราง)
+    g.inFilter = g.dates.some(d => d >= dfrom && d <= dto);
   });
   return list;
 }
@@ -6348,9 +6581,9 @@ function renderTrendPage() {
       ? '<td class="num">—</td>'
       : `<td class="num" style="color:${qPct >= 0 ? '#0f766e' : '#b45309'};">${qPct >= 0 ? '+' : ''}${fmtDecimal1(qPct)}%</td>`;
     const hit = g.prod >= target;
-    return `<tr>
+    return `<tr${g.inFilter ? ' style="background:#eef2ff;"' : ''}>
       <td>${i + 1}</td>
-      <td><b>${escapeZoneHtml(g.label)}</b><span class="metric-sub">${fmt(g.days)} วันทำการ</span></td>
+      <td><b>${escapeZoneHtml(g.label)}</b>${g.inFilter ? '<span class="pill" style="background:#4338ca;color:#fff;margin-left:6px;font-size:10px;">ช่วงที่เลือก</span>' : ''}<span class="metric-sub">${fmt(g.days)} วันทำการ</span></td>
       <td class="num">${fmt(g.qty)}</td>
       <td class="num">${fmt(g.avgQtyPerDay)}</td>
       <td class="num" style="font-weight:800; color:${hit ? '#059669' : '#b91c1c'};">${fmt(g.prod)}</td>
@@ -6365,7 +6598,9 @@ function renderTrendPage() {
   host.innerHTML = `
     <div class="card wide">
       <h3>📈 เทรนผลงาน${unitWord === 'เดือน' ? 'รายเดือน' : 'รายสัปดาห์'}</h3>
-      <div class="sub">ดูทิศทางว่า Productivity และปริมาณหยิบขยับขึ้นหรือลงเทียบงวดก่อนหน้า (${deltaWord})</div>
+      <div class="sub">ดูทิศทางว่า Productivity และปริมาณหยิบขยับขึ้นหรือลงเทียบงวดก่อนหน้า (${deltaWord})
+        · หน้านี้กางข้อมูล<b>ทุกงวดที่มี</b> (${escapeZoneHtml(DMIN)} – ${escapeZoneHtml(DMAX)}) ไม่หุบตามตัวกรองวันที่
+        · แท่งสีเข้ม = งวดที่ครอบช่วงวันที่ที่เลือกอยู่</div>
       ${toggle}
       ${cards}
       <div class="chartbox tall" style="margin-top:16px;"><canvas id="trendPeriodChart"></canvas></div>
@@ -6419,7 +6654,12 @@ function drawTrendCharts(periods, target, deltaWord) {
       data: {
         labels,
         datasets: [
-          { type: 'bar', label: 'หน่วยหยิบรวม', data: periods.map(g => g.qty), backgroundColor: '#6366f1', borderRadius: 8, yAxisID: 'y', order: 2 },
+          {
+            type: 'bar', label: 'หน่วยหยิบรวม', data: periods.map(g => g.qty),
+            // งวดที่ครอบวันที่เลือกอยู่ = สีเข้ม งวดอื่น = สีอ่อน
+            backgroundColor: periods.map(g => (g.inFilter ? '#4338ca' : 'rgba(99,102,241,.42)')),
+            borderRadius: 8, yAxisID: 'y', order: 2
+          },
           {
             type: 'line', label: 'Productivity (หยิบ/ชม.)', data: periods.map(g => g.prod),
             borderColor: '#059669', backgroundColor: '#059669', borderWidth: 3, tension: .32,
@@ -6970,12 +7210,11 @@ const builders = {
 
     function bucket(mode) {
       const map = {};
-      const latestDailyDate = daily.length ? String(daily[daily.length - 1].date || '') : String(DMAX || '');
-      const latestMonth = latestDailyDate.slice(0, 7);
-      // หน้าแรกโหมดรายวัน + ช่วง "ทั้งหมด" แสดงเฉพาะเดือนล่าสุดเพื่อให้อ่านกราฟง่าย
-      // หากผู้ใช้เลือกวัน/ช่วงเดือนเอง ให้คงข้อมูลตาม Filter; รายสัปดาห์และรายเดือนไม่เปลี่ยน
-      const trendRows = mode === 'day' && datePresetMode === 'all' && latestMonth
-        ? daily.filter(d => String(d.date || '').startsWith(latestMonth))
+      // โหมดรายวัน: กราฟกางทั้งเดือน (ไม่ตามตัวกรองวันที่ของตาราง)
+      // เพื่อให้เห็นว่าวันที่เลือกอยู่ตรงไหนของเดือน และเลื่อนดูเดือนอื่นได้ด้วยปุ่ม ‹ ›
+      // รายสัปดาห์/รายเดือนยังใช้ช่วงตามตัวกรองเหมือนเดิม
+      const trendRows = mode === 'day'
+        ? dailySeriesForRange(sys, chartMonthRange().from, chartMonthRange().to, shiftF)
         : daily;
       trendRows.forEach(d => {
         let k = d.date; const dt = new Date(d.date);
@@ -7007,11 +7246,19 @@ const builders = {
 
       const trendSub = document.querySelector('#trend')?.closest('.card')?.querySelector('.sub');
       if (trendSub) {
+        let baseSub;
         if (hasSheet && !isPcs) {
-          trendSub.innerHTML = 'แท่ง = หน่วยหยิบทางการ (Google Sheet Results Master) · เส้น = Productivity หลัก Col AF (ขวา)';
+          baseSub = 'แท่ง = หน่วยหยิบทางการ (Google Sheet Results Master) · เส้น = Productivity หลัก Col AF (ขวา)';
         } else {
-          trendSub.innerHTML = 'แท่ง = ปริมาณของระบบที่เลือก (ซ้าย) · เส้น = Productivity V2 เฉลี่ยราย Picker/วันของระบบที่เลือก (ขวา) · หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ';
+          baseSub = 'แท่ง = ปริมาณของระบบที่เลือก (ซ้าย) · เส้น = Productivity V2 เฉลี่ยราย Picker/วันของระบบที่เลือก (ขวา) · หน่วยหยิบใช้ค่า UOM ที่ BigQuery คำนวณให้ต่อรายการ';
         }
+        if (mode === 'day') {
+          const mr = chartMonthRange();
+          baseSub += `<br><b style="color:#4338ca;">กราฟกางทั้งเดือน ${escapeZoneHtml(chartMonthLabel(mr.monthKey))}</b>`
+            + ` — แท่งสีเข้ม = วันที่อยู่ในตัวกรอง (${escapeZoneHtml(dfrom)}${dfrom === dto ? '' : ' – ' + escapeZoneHtml(dto)})`
+            + ` · ตารางและการ์ด KPI ยังเป็นยอดตามตัวกรองเท่านั้น`;
+        }
+        trendSub.innerHTML = baseSub;
       }
 
       const maxMainQty = Math.max(1, ...mainQty);
@@ -7026,7 +7273,12 @@ const builders = {
               type: 'bar',
               label: mainLabel,
               data: mainQty,
-              backgroundColor: isPcs ? 'rgba(20,184,166,.85)' : 'rgba(99,102,241,.85)',
+              // โหมดรายวัน: แท่งของวันที่อยู่ในตัวกรอง = สีเข้ม, วันอื่นในเดือน = สีอ่อน
+              backgroundColor: mode === 'day'
+                ? b.labels.map(lb => (lb >= dfrom && lb <= dto
+                  ? 'rgba(79,70,229,.95)'
+                  : 'rgba(99,102,241,.28)'))
+                : (isPcs ? 'rgba(20,184,166,.85)' : 'rgba(99,102,241,.85)'),
               borderRadius: 6,
               yAxisID: 'y',
               datalabels: {
@@ -7138,10 +7390,25 @@ const builders = {
       const ex = Chart.getChart('trend'); if (ex) ex.destroy();
       new Chart(document.getElementById('trend'), cfg);
     }
+    // แถบเลื่อนเดือนของกราฟ — แสดงเฉพาะโหมดรายวัน เพราะรายสัปดาห์/รายเดือนใช้ช่วงตามตัวกรอง
+    function renderOverviewChartMonthNav() {
+      const wrap = document.getElementById('overviewChartMonthWrap');
+      if (!wrap) return;
+      if (trendMode !== 'day') { wrap.innerHTML = ''; return; }
+      wrap.innerHTML = chartMonthNavHtml('overviewChartMonthNav');
+      bindChartMonthNav('overviewChartMonthNav', () => {
+        renderOverviewChartMonthNav();
+        drawTrend(trendMode);
+      });
+    }
+
     drawTrend(trendMode);
+    renderOverviewChartMonthNav();
     document.querySelectorAll('#seg button').forEach(b => b.onclick = () => {
       document.querySelectorAll('#seg button').forEach(x => x.classList.remove('active'));
-      b.classList.add('active'); trendMode = b.dataset.mode; drawTrend(trendMode);
+      b.classList.add('active'); trendMode = b.dataset.mode;
+      drawTrend(trendMode);
+      renderOverviewChartMonthNav();
     });
     document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('active', b.dataset.mode === trendMode));
     const pttTotals = sysTotals('PTT', dfrom, dto, shiftF);

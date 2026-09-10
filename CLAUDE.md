@@ -37,7 +37,7 @@ Dashboard **ไม่เคยอ่าน view โดยตรง** view มี
 | `apps-script-api.gs` (2,516) | Web App #2: Google Sheet "Results Master" → KPI (read-only) |
 | `pick_uom_master_pipeline.sql` (216) | runbook มือ: preflight → cutover view → post-check |
 | `zone_layout.js` / `zone_master_fallback.js` / `picker_names_fallback.js` / `picker_affiliation_fallback.js` | snapshot 2026-07-27 เป็น **พื้น** ไม่ใช่ตัว override |
-| `tests/*.test.js` (13) | plain Node ไม่มี framework — `node tests/xxx.test.js` |
+| `tests/*.test.js` (14) | plain Node ไม่มี framework — `node tests/xxx.test.js` |
 | `local_server.ps1` | static server `http://127.0.0.1:8088/` สำหรับทดสอบ local |
 
 ---
@@ -50,7 +50,7 @@ Dashboard **ไม่เคยอ่าน view โดยตรง** view มี
 | `DASHBOARD_CACHE_FORMAT_VERSION` | `speed-v18-sheet-master-all-items` | bq:43 | เปลี่ยน = ล้าง cache ทั้งระบบ |
 | `UPLOAD_SCHEMA_VERSION` | `pick-detail-wms-v1` | app.js:10735 + bq:21 | ไม่ตรง = upload ถูกปฏิเสธ `SCHEMA_VERSION_MISMATCH` |
 | `CACHE_VERSION` | `v49-sheet-2nd-roster` | api:7 | เปลี่ยน payload = ต้อง bump + แก้ `isUsableDashboardPayload_` (api:2130) |
-| `app.js?v=` | `20260910-shiftfilter-sheetpickers-v97` | index.html (ท้ายไฟล์) | **bump ทุกครั้งที่แก้ app.js** + แก้ `performance_contract.test.js:11` |
+| `app.js?v=` | `20260910-monthwide-charts-v98` | index.html (ท้ายไฟล์) | **bump ทุกครั้งที่แก้ app.js** + แก้ `performance_contract.test.js:11` |
 | `SHARED_TARGETS_PROPERTY` | `dashboard_shared_targets_v1` | bq | ScriptProperty เก็บ Target ส่วนกลาง (types + zones) |
 | `BQ_PROJECT / DATASET / LOCATION` | `productivity-pick` / `pick_analytics` / `asia-southeast1` | bq:17-19 | location ผิด = ทุก job พัง "Not found: Job" |
 | `RECENT_DAYS` | 90 | bq:20 | ขอบเขตวันที่ทั้ง dashboard |
@@ -109,6 +109,35 @@ shift_minute: A = tmin-420, B(กลางคืน) = tmin-1140, B(เช้า
 → เลือก "กะ A" แล้วยังเห็นคนกะ B โผล่มา ตอนนี้กรองด้วย `matchesReportTeam(null, userId, sf)` ตัวเดียวกับฝั่ง BigQuery
 `kpis.pickers` / `kpis.sheet_pickers` ก็นับหลังกรองแล้ว · `tests/shift_filter_sheet.test.js` ล็อกไว้
 **ถ้าเพิ่มบล็อกที่เอาข้อมูลจาก Sheet มาผสมอีก ต้องกรอง `sf` เองทุกครั้ง**
+
+### 3.2.1 ช่วงของ "ตาราง" vs ช่วงของ "กราฟ" — แยกกัน ⚠️ อัปเดต 2026-09-10
+ผู้ใช้ต้องการ: เลือกวันที่ 8 วันเดียว → **ตาราง/KPI โชว์แค่วันที่ 8** แต่ **กราฟกางทั้งเดือน** เพื่อเห็นบริบท
+
+```
+ตาราง / KPI / การ์ด  → A = aggregate(sys, dfrom, dto, shiftF)     ← ตามตัวกรองเป๊ะ
+กราฟเทรนรายวัน       → dailySeriesForRange(sys, chartMonthRange().from, .to, shiftF)
+หน้าเทรน (สัปดาห์/เดือน) → dailySeriesForRange(sys, DMIN, DMAX, shiftF)   ← กางทุกงวดที่มี
+```
+
+**`dailySeriesForRange(system, from, to, sf)`** — อ่าน **work cube เท่านั้น** (มีครบ 90 วันในเครื่อง = ไม่ยิง BigQuery เพิ่ม)
+มี memo แยก `chartDailyCache` และถูกล้างใน `invalidateAggregationCache()`
+
+🚫 **ห้ามเรียก `aggregate()` ด้วยช่วงของกราฟ** — เพราะ item cube / slot cube ถูก fetch ตาม `from|to|shift` เป๊ะๆ
+ถ้าเรียกด้วยช่วงที่ไม่ได้โหลด cube ไว้ `by_item`/`by_timeslot` จะว่าง แล้วผลนั้นจะถูกเก็บลง `aggregateCache`
+→ พอผู้ใช้เลือกช่วงนั้นจริง หน้า Items / ช่วงเวลา จะว่างเปล่าแบบหาสาเหตุไม่เจอ
+
+⚠️ **`dailySeriesForRange` ต้องผสม Sheet `monthlyTrend` ด้วย** (เหมือน `aggregate` §3.11)
+ไม่งั้นกราฟโชว์ยอด BigQuery ขณะที่ตารางโชว์ยอด Sheet = ไม่ตรงกัน
+`tests/chart_daily_series.test.js` เทียบ parity กับ `aggregate().daily` ไว้ **ทั้งกรณีมีและไม่มี Sheet**
+→ ถ้าแก้สูตร productivity ใน `aggregate` ต้องแก้ที่นี่ด้วย test จะจับให้
+
+**เดือนของกราฟ** — `chartMonth` (`null` = auto ตามเดือนของ `dto`)
+`activeChartMonth()` / `chartMonthRange()` / `shiftChartMonth(±1)` / `resetChartMonth()` / `availableChartMonths()`
+UI: `chartMonthNavHtml(navId)` + `bindChartMonthNav(navId, onChange)` → ปุ่ม `‹ เดือน ›` + ปุ่ม "↩ กลับเดือนของวันที่เลือก" เมื่อเลื่อนเอง
+วางที่ `#overviewChartMonthWrap` (index.html) แสดงเฉพาะ `trendMode === 'day'`
+
+**ไฮไลต์**: กราฟรายวัน แท่งที่อยู่ในช่วง `dfrom..dto` = สีเข้ม วันอื่นในเดือน = สีอ่อน ·
+หน้าเทรน งวดที่ครอบวันที่เลือก (`g.inFilter`) = สีเข้ม + ป้าย "ช่วงที่เลือก" ในตาราง
 
 ### 3.3 ชั่วโมงทำงาน & OT
 - **Active Hours = popcount(hourMask)** = จำนวนชั่วโมงนาฬิกาที่มี Pick > 0 ต่อ picker × วัน
@@ -515,7 +544,7 @@ IndexedDB:    db 'pick_dashboard_cache_v1' store 'responses'  (TTL 30 วัน)
 cd "C:\Users\somka\Desktop\งาน\Pick Productivity_V2"
 Get-ChildItem tests\*.test.js | ForEach-Object { node $_.FullName }
 ```
-ไม่มี package.json / framework — plain Node (**13 ไฟล์**: 11 ไฟล์ imperative assert, 2 ไฟล์ใช้ `node:test`)
+ไม่มี package.json / framework — plain Node (**14 ไฟล์**: 12 ไฟล์ imperative assert, 2 ไฟล์ใช้ `node:test`)
 ควรรันข้าม timezone ด้วย เพราะมี logic เกี่ยวกับวันที่: `TZ=Asia/Bangkok`, `TZ=UTC`, `TZ=America/New_York`
 
 **สคริปต์ตรวจ static ที่ควรรันหลังแก้ตาราง/หน้าใหม่** (เขียนใหม่ได้ตามต้องการ):
@@ -543,6 +572,7 @@ source.search(/\/\/ init\r?\nloadExcludedSkusFromStorage\(\);/)
 | `resigned_status` | คนลาออกต้องไม่เสีย qty/pcs/ot/avg_prod |
 | `performance_contract` | 100+ assertion — de-facto spec ทั้งระบบ (รวม Target ราย Zone, การถอด pcs, 3 หน้าใหม่, เมนู 4 หมวด) |
 | `new_pages_render` | เรนเดอร์ 3 หน้าใหม่จริงจาก cube ผ่าน DOM stub: zone target ชนะ type target, week bucket เริ่มจันทร์, prod รายวัน 1000÷5=200, Modal 17 zone |
+| `chart_daily_series` | `dailySeriesForRange` ให้เลขตรงกับ `aggregate().daily` เป๊ะ 6 ช่วง/3 กะ **ทั้งมีและไม่มี Sheet** · กราฟกางทั้งเดือนขณะตารางเหลือวันเดียว · `‹ ›` เลื่อนเดือนในช่วงข้อมูลจริง · หน้าเทรนกางทุกงวด + รู้งวดที่ครอบวันที่เลือก · exclude โซนมีผลกับกราฟ |
 | `table_columns` | เรนเดอร์ 17 renderer/builder ด้วย DOM stub แบบ catch-all แล้วนับ `<th>` vs `<td>` vs `colspan` ให้ตรงกันทุกตาราง (27 ตาราง) + ห้ามมีหัวคอลัมน์ "ชิ้น" กลับมา |
 
 ### Performance budget ใน `performance_contract.test.js`
