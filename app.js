@@ -521,7 +521,7 @@ const PRODUCTIVITY_WEIGHT_CONFIG = Object.freeze([
   })
 ]);
 // ==============================================
-const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', training: '🎓 พนักงานฝึกสอน (Training)', efficiency: '🎯 Efficiency (ประสิทธิภาพการหยิบ)', cycletime: '⏱️ Cycle Time (รอบเวลาการทำงาน)', incentive: '💰 Incentive (เบี้ยขยัน & ผลตอบแทนตามเป้า)', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
+const TITLES = { overview: 'ภาพรวม', prod: 'Productivity', belowtarget: '⚠️ ไม่ถึงเป้า (แยกตามโซน)', trend: '📈 เทรนรายสัปดาห์ / รายเดือน', individual: '👤 ภาพรวมรายบุคคล', training: '🎓 พนักงานฝึกสอน (Training)', efficiency: '🎯 Efficiency (ประสิทธิภาพการหยิบ)', cycletime: '⏱️ Cycle Time (รอบเวลาการทำงาน)', incentive: '💰 Incentive (เบี้ยขยัน & ผลตอบแทนตามเป้า)', zones: 'โซน & ผังคลัง', typebreak: 'Activity by Type Pick', pickers: 'พนักงาน (Picker)', time: 'ช่วงเวลา', items: 'สินค้า (Items)', history: 'ข้อมูลย้อนหลัง V1', report: '📊 สรุปผล & Insights', simulator: 'วางแผนกำลังคน & OT' };
 const HISTORICAL_V1 = Object.freeze({
   source: 'Results Master!E (Total pick)',
   startDate: '2026-01-02',
@@ -565,7 +565,10 @@ try {
   const savedSys = localStorage.getItem('pickProductivitySystem');
   if (savedSys === 'PTT' || savedSys === 'BPS' || savedSys === 'ALL') sys = savedSys;
 } catch (_) {}
-let unitMode = 'units'; // เปิดหน้าเริ่มต้นเป็นหน่วยหยิบ (UOM ที่ BigQuery คำนวณแล้ว)
+// หน่วยที่แสดงถูกล็อกเป็น "หน่วยหยิบ (Pick Units)" ตามมติผู้ใช้งานจริง
+// ปุ่มสลับหน่วย/ชิ้น ถูกถอดออกจาก .sysbar แล้ว โค้ดคำนวณ pcs ยังอยู่เพื่อใช้ตรวจสอบย้อนหลัง
+// ห้ามเปลี่ยนค่านี้เป็น 'pcs' เพราะ UI ไม่มีทางกลับมาเป็นหน่วยหยิบได้อีก
+const unitMode = 'units';
 let prodCalcMode = 'raw'; // 'raw' | 'weighted'
 try {
   const savedCalc = localStorage.getItem('pickProductivityCalcMode');
@@ -588,6 +591,12 @@ try {
 } catch (_) {}
 let trendMode = 'day';
 let datePresetMode = 'month';
+// โหมดของหน้า "เทรนรายสัปดาห์ / รายเดือน" (แยกจาก trendMode ของกราฟหน้าแรก)
+let trendPeriodModeInitial = 'week';
+try {
+  const savedTrendPeriod = localStorage.getItem('pickProductivityTrendPeriod');
+  if (savedTrendPeriod === 'week' || savedTrendPeriod === 'month') trendPeriodModeInitial = savedTrendPeriod;
+} catch (_) {}
 let excludedSkus = new Set();
 let excludedSkusSavedAt = null;
 let itemSearchTerm = '';
@@ -804,6 +813,286 @@ function saveProdTargetToStorage(val) {
   saveProdTargetsToStorage({ ...prodTargets, overall: val });
 }
 
+// ===== Target ต่อ Zone ย่อย (17 Zone จาก Zone_V2) =====
+// ค่าเหล่านี้ "ชนะ" Target ตามประเภท Rack เสมอ ถ้าโซนนั้นถูกตั้งค่าไว้
+// Key ที่ใช้เทียบเป็นชื่อ Zone แบบรวม (เช่น AL-BL-BM-AM) หลัง normalize แล้ว
+const ZONE_TARGETS_STORAGE_KEY = 'pick_dashboard_zone_targets_v1';
+let zoneTargets = {};
+let sharedTargetsUpdatedAt = null;
+let sharedTargetsSyncPromise = null;
+let lastSharedTargetsSavedJson = '';
+let targetZoneLabelCache = null;
+let targetZoneLabelCacheSource = null;
+
+function normalizeTargetZoneKey(value) {
+  return String(value == null ? '' : value).trim().toUpperCase().replace(/[–—]/g, '-').replace(/\s+/g, '');
+}
+
+function activeZoneMasterSource() {
+  if (typeof ZONE_MASTER === 'object' && ZONE_MASTER && Object.keys(ZONE_MASTER).length) return ZONE_MASTER;
+  return (typeof ZONE_MASTER_FALLBACK === 'object' && ZONE_MASTER_FALLBACK) ? ZONE_MASTER_FALLBACK : {};
+}
+
+// Map: normalize(location code) และ normalize(zone label) → zone label จริง
+// สร้างครั้งเดียวต่อ ZONE_MASTER หนึ่งชุด เพราะ getTargetForZoneOrType ถูกเรียกหลายพันครั้งต่อ render
+function targetZoneLabelMap() {
+  const src = activeZoneMasterSource();
+  if (targetZoneLabelCache && targetZoneLabelCacheSource === src) return targetZoneLabelCache;
+  const map = new Map();
+  Object.keys(src).forEach(loc => {
+    const info = src[loc] || {};
+    const label = String(info.zone || loc || '').trim();
+    if (!label) return;
+    const locKey = normalizeTargetZoneKey(loc);
+    if (locKey && !map.has(locKey)) map.set(locKey, label);
+    const labelKey = normalizeTargetZoneKey(label);
+    if (labelKey && !map.has(labelKey)) map.set(labelKey, label);
+  });
+  targetZoneLabelCache = map;
+  targetZoneLabelCacheSource = src;
+  return map;
+}
+
+function resolveTargetZoneLabel(raw) {
+  const key = normalizeTargetZoneKey(raw);
+  if (!key || key === '-' || key === '??') return '';
+  return targetZoneLabelMap().get(key) || String(raw || '').trim();
+}
+
+// รายการ Zone ย่อยทั้งหมด จัดกลุ่มตาม Type Pick — ใช้ทั้ง Modal ตั้งค่าและหน้า "ไม่ถึงเป้า"
+const TARGET_TYPE_ORDER = ['Full Rack', 'Half Rack', 'Micro Rack', 'Pick to Sort', 'Mezzanine'];
+function listTargetZones() {
+  const src = activeZoneMasterSource();
+  const seen = new Map();
+  Object.keys(src).forEach(loc => {
+    const info = src[loc] || {};
+    const label = String(info.zone || loc || '').trim();
+    if (!label) return;
+    const key = normalizeTargetZoneKey(label);
+    if (!key || seen.has(key)) return;
+    seen.set(key, {
+      key,
+      label,
+      typePick: String(info.typePick || '-').trim() || '-',
+      owner: String(info.owner || '-').trim() || '-'
+    });
+  });
+  return [...seen.values()].sort((a, b) => {
+    const ai = TARGET_TYPE_ORDER.indexOf(a.typePick);
+    const bi = TARGET_TYPE_ORDER.indexOf(b.typePick);
+    return ((ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi)) || a.label.localeCompare(b.label);
+  });
+}
+
+function zoneTargetOverride(...values) {
+  for (const value of values) {
+    const label = resolveTargetZoneLabel(value);
+    if (!label) continue;
+    const num = Number(zoneTargets[normalizeTargetZoneKey(label)]);
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+  return null;
+}
+
+// Target ตามประเภท (ไม่สนใจ Zone override) — ใช้เป็นค่าเริ่มต้นในช่องกรอกของแต่ละโซน
+function getTypeTargetForZone(zoneLabel, typePick) {
+  let tp = String(typePick || '').trim();
+  if (!tp || tp === '-' || tp === 'ไม่พบใน Zone_V2') {
+    tp = typeof getTypePickForZone === 'function' ? getTypePickForZone(zoneLabel) : '';
+  }
+  const tStr = String(tp || '').toLowerCase();
+  if (tStr.includes('full rack') || tStr.includes('fullrack')) return prodTargets.fullRack;
+  if (tStr.includes('half rack') || tStr.includes('halfrack')) return prodTargets.halfRack;
+  if (tStr.includes('micro rack') || tStr.includes('microrack')) return prodTargets.microRack;
+  if (tStr.includes('pick to sort') || tStr.includes('pick-to-sort')) return prodTargets.pickToSort;
+  if (tStr.includes('mezzanine') || tStr.includes('mezz')) return prodTargets.mezzanine;
+  if (tStr.includes('training') || tStr.includes('train')) return prodTargets.training;
+  return prodTargets.overall || prodTarget;
+}
+
+function loadZoneTargetsFromStorage() {
+  try {
+    const raw = localStorage.getItem(ZONE_TARGETS_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    const zones = parsed && parsed.zones && typeof parsed.zones === 'object' ? parsed.zones : {};
+    const next = {};
+    Object.keys(zones).forEach(key => {
+      const num = Number(zones[key]);
+      const k = normalizeTargetZoneKey(key);
+      if (k && Number.isFinite(num) && num > 0) next[k] = num;
+    });
+    zoneTargets = next;
+    sharedTargetsUpdatedAt = String(parsed && parsed.updatedAt || '') || null;
+  } catch (_) { }
+}
+
+function saveZoneTargetsToStorage() {
+  try {
+    localStorage.setItem(ZONE_TARGETS_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      updatedAt: sharedTargetsUpdatedAt || new Date().toISOString(),
+      zones: zoneTargets
+    }));
+  } catch (_) { }
+}
+
+function sharedTargetsSnapshot() {
+  const types = {};
+  Object.keys(DEFAULT_PROD_TARGETS).forEach(key => {
+    const num = Number(prodTargets[key]);
+    if (Number.isFinite(num) && num > 0) types[key] = num;
+  });
+  const zones = {};
+  Object.keys(zoneTargets).sort().forEach(key => {
+    const num = Number(zoneTargets[key]);
+    if (Number.isFinite(num) && num > 0) zones[key] = num;
+  });
+  return { types, zones };
+}
+
+function applySharedTargets(payload) {
+  if (!payload || payload.status !== 'success') return false;
+  const before = JSON.stringify(sharedTargetsSnapshot());
+  const types = payload.types && typeof payload.types === 'object' ? payload.types : {};
+  const nextTypes = { ...DEFAULT_PROD_TARGETS };
+  Object.keys(DEFAULT_PROD_TARGETS).forEach(key => {
+    const num = Number(types[key]);
+    if (Number.isFinite(num) && num > 0) nextTypes[key] = num;
+  });
+  prodTargets = nextTypes;
+  prodTarget = prodTargets.overall;
+  const zones = payload.zones && typeof payload.zones === 'object' ? payload.zones : {};
+  const nextZones = {};
+  Object.keys(zones).forEach(key => {
+    const num = Number(zones[key]);
+    const k = normalizeTargetZoneKey(key);
+    if (k && Number.isFinite(num) && num > 0) nextZones[k] = num;
+  });
+  zoneTargets = nextZones;
+  sharedTargetsUpdatedAt = String(payload.updated_at || '') || null;
+  try {
+    localStorage.setItem(PROD_TARGETS_STORAGE_KEY, JSON.stringify(prodTargets));
+    localStorage.setItem(PROD_TARGET_STORAGE_KEY, String(prodTarget));
+  } catch (_) { }
+  saveZoneTargetsToStorage();
+  lastSharedTargetsSavedJson = JSON.stringify(sharedTargetsSnapshot());
+  const changed = before !== lastSharedTargetsSavedJson;
+  if (changed) {
+    // Target ต่อโซนถูกคำนวณภายใน aggregate จึงต้องล้าง cache ไม่ใช่แค่ render ใหม่
+    aggregateCache.clear();
+    if (typeof hasLiveData !== 'undefined' && hasLiveData && typeof render === 'function') render();
+  }
+  return changed;
+}
+
+async function fetchSharedTargets() {
+  if (!DATA_URL) return false;
+  const url = DATA_URL + (DATA_URL.includes('?') ? '&' : '?') + 'mode=dashboard_targets&t=' + Date.now();
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) throw new Error('HTTP ' + response.status);
+  const payload = await response.json();
+  if (payload && payload.status === 'success' && payload.initialized === false) {
+    // ยังไม่เคยตั้งค่าส่วนกลาง → ดันค่าในเครื่องขึ้นไปเป็นค่าเริ่มต้นให้ทุกคน
+    const local = sharedTargetsSnapshot();
+    if (Object.keys(local.zones).length) return saveSharedTargets();
+    return false;
+  }
+  return applySharedTargets(payload);
+}
+
+async function saveSharedTargets() {
+  if (!DATA_URL) return false;
+  if (sharedTargetsSyncPromise) {
+    await sharedTargetsSyncPromise;
+    if (JSON.stringify(sharedTargetsSnapshot()) !== lastSharedTargetsSavedJson) return saveSharedTargets();
+    return true;
+  }
+  const snapshot = sharedTargetsSnapshot();
+  const snapshotJson = JSON.stringify(snapshot);
+  const syncPromise = (async () => {
+    const response = await fetch(DATA_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'set_dashboard_targets', types: snapshot.types, zones: snapshot.zones })
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const payload = await response.json();
+    if (!payload || payload.status !== 'success') {
+      throw new Error(String(payload && (payload.message || payload.code) || 'บันทึก Target ส่วนกลางไม่สำเร็จ'));
+    }
+    lastSharedTargetsSavedJson = snapshotJson;
+    sharedTargetsUpdatedAt = String(payload.updated_at || '') || null;
+    saveZoneTargetsToStorage();
+    return true;
+  })();
+  sharedTargetsSyncPromise = syncPromise;
+  try {
+    await syncPromise;
+  } finally {
+    if (sharedTargetsSyncPromise === syncPromise) sharedTargetsSyncPromise = null;
+  }
+  return true;
+}
+
+const TARGET_TYPE_ICON = {
+  'Full Rack': '📦', 'Half Rack': '🗄️', 'Micro Rack': '🧱',
+  'Pick to Sort': '⚡', 'Mezzanine': '🏗️'
+};
+
+function renderTargetZoneInputs() {
+  const host = document.getElementById('targetZoneListHost');
+  if (!host) return;
+  const zones = listTargetZones();
+  if (!zones.length) {
+    host.innerHTML = '';
+    return;
+  }
+  const groups = [];
+  zones.forEach(z => {
+    const last = groups[groups.length - 1];
+    if (last && last.typePick === z.typePick) last.rows.push(z);
+    else groups.push({ typePick: z.typePick, rows: [z] });
+  });
+
+  let body = '';
+  groups.forEach(g => {
+    body += `<div style="font-size:11.5px; font-weight:800; color:#38bdf8; letter-spacing:.4px; margin:14px 2px 6px 2px; display:flex; align-items:center; gap:6px;">`
+      + `<span>${TARGET_TYPE_ICON[g.typePick] || '📍'}</span>${escapeZoneHtml(g.typePick)}`
+      + `<span style="color:#475569; font-weight:600;">· ${g.rows.length} โซน</span></div>`;
+    g.rows.forEach(z => {
+      const override = Number(zoneTargets[z.key]);
+      const value = Number.isFinite(override) && override > 0 ? override : '';
+      const fallback = Math.round(Number(getTypeTargetForZone(z.label, z.typePick)) || 0);
+      body += `<div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:12px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:7px;">`
+        + `<div style="min-width:0;">`
+        + `<div style="font-size:13.5px; font-weight:700; color:#e2e8f0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Zone ${escapeZoneHtml(z.label)}</div>`
+        + `<div style="font-size:10.5px; color:#64748b; margin-top:1px;">${escapeZoneHtml(z.owner)}</div>`
+        + `</div>`
+        + `<input type="number" class="target-zone-input" data-zone-key="${escapeZoneHtml(z.key)}" min="1" max="1000" value="${value}" placeholder="${fallback}"`
+        + ` style="width:88px; flex-shrink:0; background:#090d16; border:1px solid rgba(255,255,255,0.12); color:#f1f5f9; font-weight:700; font-size:15px; text-align:center; padding:7px 8px; border-radius:10px; outline:none;"`
+        + ` onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">`
+        + `</div>`;
+    });
+  });
+
+  host.innerHTML = `<div style="margin-top:8px; border-top:1px solid rgba(255,255,255,0.07); padding-top:14px;">`
+    + `<div style="font-size:13.5px; font-weight:800; color:#f8fafc; display:flex; align-items:center; justify-content:space-between; gap:8px;">`
+    + `<span>🎯 Target แต่ละ Zone ย่อย (${zones.length} Zone)</span>`
+    + `<button type="button" id="btnClearZoneTargets" style="border:1px solid rgba(255,255,255,0.14); background:rgba(255,255,255,0.04); color:#94a3b8; font-family:inherit; font-size:11px; font-weight:600; padding:5px 10px; border-radius:8px; cursor:pointer;">ล้างค่าโซนทั้งหมด</button>`
+    + `</div>`
+    + `<div style="font-size:11px; color:#64748b; margin:4px 2px 0 2px;">ปล่อยว่าง = ใช้ Target ตามประเภท (เลขจางในช่องคือค่าที่จะใช้)</div>`
+    + body
+    + `</div>`;
+
+  const btnClear = host.querySelector('#btnClearZoneTargets');
+  if (btnClear) {
+    btnClear.onclick = () => {
+      host.querySelectorAll('.target-zone-input').forEach(inp => { inp.value = ''; });
+    };
+  }
+}
+
 function getTargetForZoneOrType(typePick, zone) {
   let tp = typePick;
   let zn = zone;
@@ -814,6 +1103,9 @@ function getTargetForZoneOrType(typePick, zone) {
       tp = '';
     }
   }
+  // 🎯 Zone ย่อยที่ตั้งค่าไว้เอง ชนะ Target ตามประเภทเสมอ
+  const zoneOverride = zoneTargetOverride(zn);
+  if (zoneOverride !== null) return zoneOverride;
   if (!tp || tp === '-' || tp === 'ไม่พบใน Zone_V2') {
     if (typeof getTypePickForZone === 'function') {
       tp = getTypePickForZone(zn);
@@ -959,8 +1251,13 @@ async function saveSharedExclusions() {
 
 function startSharedExclusionsPolling() {
   if (sharedExclusionsPollTimer) clearInterval(sharedExclusionsPollTimer);
+  let targetPollTick = 0;
   sharedExclusionsPollTimer = setInterval(() => {
-    if (document.visibilityState === 'visible' && !sharedExclusionsSyncPromise) void fetchSharedExclusions(true).catch(() => null);
+    if (document.visibilityState !== 'visible') return;
+    if (!sharedExclusionsSyncPromise) void fetchSharedExclusions(true).catch(() => null);
+    // Target เปลี่ยนไม่บ่อยเท่า exclusion จึงตรวจทุก 4 รอบ (~1 นาที)
+    targetPollTick = (targetPollTick + 1) % 4;
+    if (targetPollTick === 0 && !sharedTargetsSyncPromise) void fetchSharedTargets().catch(() => null);
   }, 15000);
 }
 
@@ -1882,7 +2179,6 @@ function renderWarehouseMap(activeLocations, isPcs) {
       `Zone: ${info.zone}`,
       `Type Pick: ${info.typePick}`,
       `Owner: ${info.owner}`,
-      `จำนวนชิ้น: ${fmt(row.pcs || 0)} ชิ้น${isLinked ? ` (ยอดรวมแร็ค ${info.zone})` : ''}`,
       `หน่วยหยิบ: ${fmt(row.qty || 0)} หน่วย${isLinked ? ` (ยอดรวมแร็ค ${info.zone})` : ''}`,
       `Productivity: ${active && prodVal > 0 ? fmt(Math.ceil(prodVal)) : '-'} ${active && prodVal > 0 ? (isPcs ? 'ชิ้น/ชม.' : 'หน่วย/ชม.') : ''}`,
       `Picker: ${fmt(row.pickers || 0)} คน${extraNote}`
@@ -2101,7 +2397,6 @@ function openZoneDetailModal(zoneCode) {
           <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #4338ca; padding:12px 14px; border-radius:10px;">
             <div style="font-size:11px; color:#64748b; font-weight:600;">📦 ยอดหยิบรวม</div>
             <div style="font-size:20px; font-weight:800; color:#0f172a; margin-top:2px;">${fmt(Math.ceil(overallVal))} <span style="font-size:11px; font-weight:400;">${isPcs ? 'ชิ้น' : 'หน่วย'}</span></div>
-            <div style="font-size:10px; color:#64748b; margin-top:2px;">${isPcs ? fmt(Math.ceil(totalQty)) + ' หน่วยหยิบ' : fmt(totalPcs) + ' ชิ้น'}</div>
           </div>
 
           <div style="background:#f8fafc; border:1px solid #e2e8f0; border-left:4px solid #0284c7; padding:12px 14px; border-radius:10px;">
@@ -2257,17 +2552,15 @@ function renderZoneProductivityBreakdown() {
     return `<tr>` +
       `<td><span class="rank">${index + 1}</span></td>` +
       `<td><span class="zone-breakdown-key"><i style="background:${color}"></i>${escapeZoneHtml(displayName)}</span><span class="metric-sub">${escapeZoneHtml(relatedLabel)}</span></td>` +
-      `<td class="num">${fmt(row.pcs)}<span class="metric-sub">${fmt(row.eligiblePcs)} นับ Productivity</span></td>` +
       `<td class="num">${fmt(row.qty)}<span class="metric-sub">${fmt(row.eligibleQty)} นับ Productivity</span></td>` +
       `<td class="num">${fmt(row.hours)} ชม.<span class="metric-sub">${fmt(row.productiveGroups)} กลุ่มที่มีงาน</span></td>` +
       `<td class="num"><span class="metric-main">${fmt(productivity)}</span> หยิบ/ชม.<span class="metric-sub">เฉลี่ยถ่วงน้ำหนัก</span></td>` +
-      `<td class="num"><span class="metric-main">${fmt(pcsProductivity)}</span> ชิ้น/ชม.</td>` +
       `<td class="num">${fmt(row.productivePickers)} / ${fmt(row.pickers)} คน</td>` +
       `</tr>`;
   }).join('');
   root.innerHTML = `<div class="zone-breakdown-wrap"><table class="zone-breakdown-table"><thead><tr>` +
-    `<th>#</th><th>${label}</th><th class="num">จำนวนชิ้นรวม</th><th class="num">หน่วยหยิบรวม</th><th class="num">ชั่วโมงที่นับ</th>` +
-    `<th class="num">Productivity หยิบ/ชม.</th><th class="num">Productivity ชิ้น/ชม.</th><th class="num">Picker ที่นับ / ทั้งหมด</th>` +
+    `<th>#</th><th>${label}</th><th class="num">หน่วยหยิบรวม</th><th class="num">ชั่วโมงที่นับ</th>` +
+    `<th class="num">Productivity หยิบ/ชม.</th><th class="num">Picker ที่นับ / ทั้งหมด</th>` +
     `</tr></thead><tbody>${body}</tbody></table></div>` +
     `<div class="zone-breakdown-foot">Productivity แบบ V2 = ROUND(Total Pick ÷ Active Hours, 0) · Active Hours คือจำนวนชั่วโมงที่มี Pick > 0 · Count เมื่อ Active Hours > 3 และ Productivity < 1000 · ไม่หัก Break</div>`;
 
@@ -2388,11 +2681,9 @@ function renderAffiliationBreakdown() {
   const summaryRows = rows.map((row, index) => `<tr>
     <td><span class="rank">${index + 1}</span></td>
     <td><span class="affiliation-key">${escapeZoneHtml(row.name)}</span><span class="metric-sub">${fmt(row.productivePickers)} / ${fmt(row.pickers)} คน นับ Productivity</span></td>
-    <td class="num">${fmt(row.pcs)}<span class="metric-sub">${fmt(row.eligiblePcs)} ชิ้นที่นำไปคิด</span></td>
     <td class="num">${fmt(row.qty)}<span class="metric-sub">${fmt(row.eligibleQty)} หน่วยที่นำไปคิด</span></td>
     <td class="num">${fmt(row.hours)} ชม.<span class="metric-sub">${fmt(row.productiveGroups)} กลุ่มที่มีงาน</span></td>
     <td class="num"><span class="metric-main">${fmt(row.avg_prod)}</span> หน่วย/ชม.</td>
-    <td class="num"><span class="metric-main">${fmt(row.avg_pcs_prod)}</span> ชิ้น/ชม.</td>
     <td class="num">${row.ot > 0 ? fmt(row.ot) : '-'} ชม.</td>
   </tr>`).join('');
 
@@ -2400,23 +2691,21 @@ function renderAffiliationBreakdown() {
     <td>${escapeZoneHtml(row.date)}</td>
     <td><span class="affiliation-key">${escapeZoneHtml(row.name)}</span></td>
     <td class="num">${fmt(row.pickers)}</td>
-    <td class="num">${fmt(row.pcs)}</td>
     <td class="num">${fmt(row.qty)}</td>
     <td class="num">${fmt(row.hours)} ชม.</td>
     <td class="num"><span class="metric-main">${fmt(row.avg_prod)}</span></td>
-    <td class="num"><span class="metric-main">${fmt(row.avg_pcs_prod)}</span></td>
     <td class="num ot-cell">${row.ot > 0 ? fmt(row.ot) : '-'} ชม.</td>
   </tr>`).join('');
 
   root.innerHTML = `<div class="affiliation-table-wrap"><table class="affiliation-table"><thead><tr>
-    <th>#</th><th>สังกัด</th><th class="num">จำนวนชิ้นรวม</th><th class="num">หน่วยหยิบรวม</th><th class="num">ชั่วโมงที่นับ</th>
-    <th class="num">Productivity หน่วย/ชม.</th><th class="num">Productivity ชิ้น/ชม.</th><th class="num">OT รวม</th>
+    <th>#</th><th>สังกัด</th><th class="num">หน่วยหยิบรวม</th><th class="num">ชั่วโมงที่นับ</th>
+    <th class="num">Productivity หน่วย/ชม.</th><th class="num">OT รวม</th>
   </tr></thead><tbody>${summaryRows}</tbody></table></div>
   <div class="affiliation-daily-title">OT และ Productivity รายวันแยกตามสังกัด</div>
   <div class="affiliation-table-wrap"><table class="affiliation-table affiliation-daily-table"><thead><tr>
-    <th>วันที่</th><th>สังกัด</th><th class="num">Picker</th><th class="num">จำนวนชิ้น</th><th class="num">หน่วยหยิบ</th>
-    <th class="num">ชั่วโมงที่นับ</th><th class="num">หน่วย/ชม.</th><th class="num">ชิ้น/ชม.</th><th class="num">OT รายวัน</th>
-  </tr></thead><tbody>${dailyRows || '<tr><td colspan="9" class="empty-cell">ยังไม่มีข้อมูลรายวัน</td></tr>'}</tbody></table></div>
+    <th>วันที่</th><th>สังกัด</th><th class="num">Picker</th><th class="num">หน่วยหยิบ</th>
+    <th class="num">ชั่วโมงที่นับ</th><th class="num">หน่วย/ชม.</th><th class="num">OT รายวัน</th>
+  </tr></thead><tbody>${dailyRows || '<tr><td colspan="7" class="empty-cell">ยังไม่มีข้อมูลรายวัน</td></tr>'}</tbody></table></div>
   <div class="zone-breakdown-foot">สังกัดจับจากรหัสพนักงานใน Sheet “บันทึกเวลาทำงาน” · Productivity แบบ V2 ใช้ค่าเฉลี่ยราย Picker/Calendar Date · OT อยู่ใน Active Hour อัตโนมัติเมื่อมี Pick ในช่วงนั้น</div>`;
 }
 
@@ -3615,12 +3904,10 @@ function buildControls() {
   const rangeBtns = `<div class="preset-range-group"><button data-all="1">ทั้งหมด</button><button data-range="week">Weekly</button><button data-range="month">Monthly</button></div>`;
   const datePresetGroup = `<div class="datepreset">${rangeBtns}</div>`;
   const bar = document.createElement('div'); bar.className = 'sysbar';
-  const targetUnitTxt = unitMode === 'pcs' ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
+  const targetUnitTxt = 'หยิบ/ชม.';
   bar.innerHTML =
     '<span class="lab">ระบบ:</span>'
     + '<div class="systog"><button data-sys="ALL">ทั้งหมด (All)</button><button data-sys="PTT">Pick (PTT)</button><button data-sys="BPS">Pick to Sort (BPS)</button></div>'
-    + '<span class="lab">หน่วยที่แสดง:</span>'
-    + '<div class="systog unittog"><button data-unit="units">📦 หน่วยหยิบ (Units)</button><button data-unit="pcs">🧩 จำนวนชิ้น (Pcs)</button></div>'
     + '<span class="lab">สูตรคำนวณ:</span>'
     + '<div class="systog prodmodetog"><button data-prodmode="raw">⚡ หยิบจริง (Raw)</button><button data-prodmode="weighted">⚖️ ถ่วงน้ำหนัก (Weighted KPI)</button></div>'
     + '<span class="lab">กะ:</span>'
@@ -3689,13 +3976,6 @@ function buildControls() {
       sys = nextSystem;
       try { localStorage.setItem('pickProductivitySystem', sys); } catch (_) {}
       bar.querySelectorAll('.systog:not(.shiftog):not(.unittog):not(.prodmodetog) button').forEach(x => x.classList.toggle('active', x.dataset.sys === sys));
-      render();
-    };
-  });
-  bar.querySelectorAll('.unittog button').forEach(b => {
-    b.classList.toggle('active', b.dataset.unit === unitMode); b.onclick = () => {
-      if (b.dataset.unit === unitMode) return; unitMode = b.dataset.unit;
-      bar.querySelectorAll('.unittog button').forEach(x => x.classList.toggle('active', x.dataset.unit === unitMode));
       render();
     };
   });
@@ -3890,7 +4170,6 @@ function renderUnmappedTeamBanner() {
       '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:center;">' + escapeZoneHtml(rawTeam || '-') + '</td>' +
       '<td style="padding:7px 8px;border-top:1px solid #fed7aa;">' + escapeZoneHtml(reason) + '</td>' +
       '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:right;font-weight:700;">' + fmt(Math.ceil(Number(p.qty || 0))) + '</td>' +
-      '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:right;">' + fmt(Math.ceil(Number(p.pcs || 0))) + '</td>' +
       '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:right;">' + fmt(Number(p.lines || 0)) + '</td>' +
       '<td style="padding:7px 8px;border-top:1px solid #fed7aa;text-align:right;">' + fmtDecimal1(Number(p.avg_prod || 0)) + '</td>' +
       '</tr>';
@@ -3906,7 +4185,7 @@ function renderUnmappedTeamBanner() {
     '<th style="padding:7px 8px;">#</th><th style="padding:7px 8px;text-align:left;">รหัส Picker</th>' +
     '<th style="padding:7px 8px;text-align:left;">ชื่อพนักงาน</th><th style="padding:7px 8px;">ค่า Team ที่พบ</th>' +
     '<th style="padding:7px 8px;text-align:left;">สาเหตุที่เป็น Not Found</th>' +
-    '<th style="padding:7px 8px;text-align:right;">หน่วยหยิบ</th><th style="padding:7px 8px;text-align:right;">ชิ้น</th>' +
+    '<th style="padding:7px 8px;text-align:right;">หน่วยหยิบ</th>' +
     '<th style="padding:7px 8px;text-align:right;">แถว</th><th style="padding:7px 8px;text-align:right;">Productivity</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table>' +
     '</div>' +
@@ -5542,7 +5821,7 @@ function renderPickerDrilldown() {
       <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; border-top:3px solid #0891b2; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
         <div style="font-size:11px; color:#64748b; font-weight:700;">📦 สแกนหน้างาน (BQ)</div>
         <div style="font-size:18px; font-weight:800; color:#0e7490; margin-top:2px;">${fmt(totalQty)} <span style="font-size:11px; font-weight:400; color:#64748b;">หน่วย</span></div>
-        <div style="font-size:10px; color:#64748b; margin-top:2px;">${fmt(totalPcs)} ชิ้น (${fmt(totalLines)} lines)</div>
+        <div style="font-size:10px; color:#64748b; margin-top:2px;">${fmt(totalLines)} lines</div>
       </div>
       <div style="background:#ffffff; padding:12px; border-radius:12px; border:1px solid #e2e8f0; border-top:3px solid #d97706; box-shadow:0 2px 6px rgba(0,0,0,0.03);">
         <div style="font-size:11px; color:#64748b; font-weight:700;">⏱️ ชั่วโมงสแกนหน้างาน</div>
@@ -5636,8 +5915,7 @@ function renderPickerDrilldown() {
             <tr style="background:#f8fafc; text-align:left; color:#64748b; font-size:10.5px;">
               <th style="padding:6px 8px;">Zone</th>
               <th style="padding:6px 8px;">ประเภท Rack</th>
-              <th style="padding:6px 8px;" class="num">ชิ้น (QTY)</th>
-              <th style="padding:6px 8px;" class="num">หน่วยหยิบ</th>
+                            <th style="padding:6px 8px;" class="num">หน่วยหยิบ</th>
               <th style="padding:6px 8px;" class="num">สัดส่วน</th>
               <th style="padding:6px 8px; text-align:center;">สถานะ</th>
             </tr>
@@ -5657,7 +5935,6 @@ function renderPickerDrilldown() {
             <tr style="border-bottom:1px solid #f1f5f9;">
               <td style="padding:7px 8px; font-weight:600;"><span class="pill">${escapeZoneHtml(z)}</span></td>
               <td style="padding:7px 8px; font-size:11px; color:#475569;">${escapeZoneHtml(typePick)}</td>
-              <td style="padding:7px 8px;" class="num">${fmt(zv.pcs)}</td>
               <td style="padding:7px 8px;" class="num">${fmt(zv.qty)}</td>
               <td style="padding:7px 8px;" class="num"><span style="font-size:11px; font-weight:700; color:#6366f1;">${share.toFixed(1)}%</span></td>
               <td style="padding:7px 8px; text-align:center;">${statusTag}</td>
@@ -5718,7 +5995,6 @@ function renderPickerDrilldown() {
             <th style="padding:8px 10px;">รหัส SKU</th>
             <th style="padding:8px 10px;">ชื่อสินค้า</th>
             <th style="padding:8px 10px;">Owner</th>
-            <th style="padding:8px 10px;" class="num">ชิ้น (QTY)</th>
             <th style="padding:8px 10px;" class="num">หน่วยหยิบ (BigQuery)</th>
             <th style="padding:8px 10px;" class="num">จำนวน Lines</th>
           </tr>
@@ -5727,13 +6003,13 @@ function renderPickerDrilldown() {
 
   if (!activeSkusList.length) {
     if (pickerSkuState && pickerSkuState.status === 'loading') {
-      html += `<tr><td colspan="7" class="empty-cell">⏳ กำลังโหลดรายการ SKU ของพนักงานคนนี้…</td></tr>`;
+      html += `<tr><td colspan="6" class="empty-cell">⏳ กำลังโหลดรายการ SKU ของพนักงานคนนี้…</td></tr>`;
     } else if (pickerSkuState && pickerSkuState.status === 'error') {
-      html += `<tr><td colspan="7" class="empty-cell">⚠️ ${escapeZoneHtml(pickerSkuState.message || 'โหลดรายการ SKU ไม่สำเร็จ')} <button type="button" onclick="retryPickerItemsLoad()">ลองอีกครั้ง</button></td></tr>`;
+      html += `<tr><td colspan="6" class="empty-cell">⚠️ ${escapeZoneHtml(pickerSkuState.message || 'โหลดรายการ SKU ไม่สำเร็จ')} <button type="button" onclick="retryPickerItemsLoad()">ลองอีกครั้ง</button></td></tr>`;
     } else if (pData._skuLoadKey === pickerSkuRequestKey) {
-      html += `<tr><td colspan="7" class="empty-cell">ไม่พบรายการ SKU ในช่วงวันที่และตัวกรองที่เลือก</td></tr>`;
+      html += `<tr><td colspan="6" class="empty-cell">ไม่พบรายการ SKU ในช่วงวันที่และตัวกรองที่เลือก</td></tr>`;
     } else {
-      html += `<tr><td colspan="7" class="empty-cell">⏳ กำลังเตรียมโหลดรายการ SKU รายพนักงาน…</td></tr>`;
+      html += `<tr><td colspan="6" class="empty-cell">⏳ กำลังเตรียมโหลดรายการ SKU รายพนักงาน…</td></tr>`;
     }
   }
   activeSkusList.forEach((itemKey, idx) => {
@@ -5745,7 +6021,6 @@ function renderPickerDrilldown() {
             <td style="padding:7px 10px; font-weight:700; color:#0f172a;">${escapeZoneHtml(kv.sku)}</td>
             <td style="padding:7px 10px; color:#334155;"><div style="font-weight:600;">${escapeZoneHtml(info.name)}</div></td>
             <td style="padding:7px 10px;"><span class="pill" style="font-size:11px;">${escapeZoneHtml(info.owner)}</span></td>
-            <td style="padding:7px 10px;" class="num" style="font-weight:700; color:#0284c7;">${fmt(kv.pcs)}</td>
             <td style="padding:7px 10px;" class="num" style="font-weight:700; color:#4338ca;">${fmt(kv.qty)}</td>
             <td style="padding:7px 10px;" class="num">${fmt(kv.lines)}</td>
           </tr>`;
@@ -5758,6 +6033,831 @@ function renderPickerDrilldown() {
   </div>`;
 
   contentEl.innerHTML = html;
+}
+
+// =========================================================================
+// ===== เกณฑ์เปรียบเทียบรายบุคคล (ใช้ร่วมกันในหน้า "ไม่ถึงเป้า" และ "รายบุคคล") =====
+// ลำดับ: Blended Target (ถ่วงตามโซนที่ทำจริง ถ้ามีข้อมูล Sheet) → Target ของโซนหลัก
+// =========================================================================
+function pickerTargetInfo(p) {
+  const zoneLabel = resolveTargetZoneLabel(p && p.zone) || String((p && p.zone) || '-');
+  const typePick = typeof getTypePickForZone === 'function' ? getTypePickForZone(zoneLabel) : '-';
+  const zoneTarget = Number(getTargetForZoneOrType(typePick, zoneLabel)) || Number(prodTarget) || 170;
+  const blended = Number(p && p.blendedTarget);
+  const hasBlended = Number.isFinite(blended) && blended > 0;
+  const target = hasBlended ? blended : zoneTarget;
+  const prod = Number((p && p.avg_prod) || 0);
+  return {
+    zoneLabel: zoneLabel || '-',
+    typePick: typePick || '-',
+    zoneTarget,
+    blendedTarget: hasBlended ? blended : null,
+    target,
+    prod,
+    gap: r1(prod - target),
+    effPct: target > 0 ? r1((prod / target) * 100) : 0,
+    isBelow: prod > 0 && prod < target,
+    counted: prod > 0
+  };
+}
+
+function pickerTeamBadge(pickerId) {
+  const team = getPickerReportTeam(pickerId);
+  if (team === 'A') return '<span class="pill" style="background:#e0f2fe;color:#0369a1;">กะ A</span>';
+  if (team === 'B') return '<span class="pill" style="background:#fef3c7;color:#92400e;">กะ B</span>';
+  return '<span class="pill" style="background:#f1f5f9;color:#64748b;">Not Found</span>';
+}
+
+function pickerResignedBadge(pickerId, pickerName) {
+  const info = typeof getPickerResignedInfo === 'function' ? getPickerResignedInfo(pickerId, pickerName) : null;
+  if (!info) return '';
+  const when = info.date ? ' ' + escapeZoneHtml(info.date) : '';
+  return `<span class="pill" style="background:#fee2e2;color:#b91c1c;margin-left:6px;">⛔ ลาออก${when}</span>`;
+}
+
+function statCardsHtml(cards) {
+  return `<div class="zone-summary">` + cards.map(c => `
+    <div class="zone-stat">
+      <div class="zone-stat-label">${c.label}</div>
+      <div class="zone-stat-value" style="color:${c.color || '#0f172a'};">${c.val}<span style="font-size:11px; font-weight:400; color:#64748b; margin-left:4px;">${c.unit || ''}</span></div>
+      <div class="zone-stat-detail">${c.sub || ''}</div>
+    </div>`).join('') + `</div>`;
+}
+
+// =========================================================================
+// ===== ⚠️ หน้า "ไม่ถึงเป้า" แยกตามโซน =====
+// =========================================================================
+function renderBelowTargetPage() {
+  const host = document.getElementById('belowtargetPage');
+  if (!host || !A) return;
+
+  const rows = (A.by_picker || [])
+    .filter(p => Number(p.avg_prod || 0) > 0)
+    .map(p => ({ p, t: pickerTargetInfo(p) }));
+
+  if (!rows.length) {
+    host.innerHTML = `<div class="card"><div class="floor-all-mapped">ยังไม่มีพนักงานที่นับ Productivity ได้ในช่วงที่เลือก</div></div>`;
+    return;
+  }
+
+  const below = rows.filter(x => x.t.isBelow);
+  const zoneMap = new Map();
+  rows.forEach(x => {
+    const key = x.t.zoneLabel || '-';
+    const g = zoneMap.get(key) || { zone: key, typePick: x.t.typePick, target: x.t.zoneTarget, all: [], below: [] };
+    g.all.push(x);
+    if (x.t.isBelow) g.below.push(x);
+    zoneMap.set(key, g);
+  });
+  const zones = [...zoneMap.values()].sort((a, b) =>
+    (b.below.length - a.below.length) || (b.all.length - a.all.length) || a.zone.localeCompare(b.zone));
+  const zonesWithMiss = zones.filter(z => z.below.length > 0);
+
+  const avgGap = below.length ? r1(mean(below.map(x => Math.abs(x.t.gap)))) : 0;
+  const worstZone = zonesWithMiss[0];
+  const missPct = rows.length ? r1((below.length / rows.length) * 100) : 0;
+
+  const cards = statCardsHtml([
+    { label: '👥 ไม่ถึงเป้า', val: fmt(below.length), unit: 'คน', sub: `จากทั้งหมด ${fmt(rows.length)} คนที่นับได้`, color: below.length ? '#e11d48' : '#16a34a' },
+    { label: '📉 สัดส่วนที่ไม่ถึงเป้า', val: fmtDecimal1(missPct), unit: '%', sub: `ถึงเป้า ${fmt(rows.length - below.length)} คน`, color: missPct >= 50 ? '#e11d48' : (missPct >= 25 ? '#ea580c' : '#16a34a') },
+    { label: '↕️ ช่องว่างเฉลี่ย', val: fmtDecimal1(avgGap), unit: 'หยิบ/ชม.', sub: 'ต่ำกว่า Target ของโซนเฉลี่ย', color: '#ea580c' },
+    { label: '🚩 โซนที่ต้องดูก่อน', val: worstZone ? escapeZoneHtml(worstZone.zone) : '—', unit: '', sub: worstZone ? `ไม่ถึงเป้า ${fmt(worstZone.below.length)} / ${fmt(worstZone.all.length)} คน` : 'ทุกโซนถึงเป้า', color: '#be123c' },
+    { label: '📍 โซนที่มีคนไม่ถึงเป้า', val: fmt(zonesWithMiss.length), unit: `/ ${fmt(zones.length)} โซน`, sub: 'นับจากโซนหลักที่ทำงานจริง', color: '#7c3aed' }
+  ]);
+
+  const zoneTables = zonesWithMiss.map(z => {
+    const list = [...z.below].sort((a, b) => a.t.gap - b.t.gap);
+    const body = list.map((x, i) => {
+      const p = x.p;
+      const t = x.t;
+      const nameTxt = `${escapeZoneHtml(p.picker)} · ${escapeZoneHtml(p.name && p.name !== p.picker ? p.name : '-')}`;
+      const blendedCell = t.blendedTarget !== null
+        ? `<td class="num">${fmt(Math.round(t.blendedTarget))}<span class="metric-sub">ผสมตามโซนที่ทำจริง</span></td>`
+        : `<td class="num">—<span class="metric-sub">ไม่มีข้อมูลชีต</span></td>`;
+      return `<tr>
+        <td><span class="rank">${i + 1}</span></td>
+        <td><b>${nameTxt}</b>${pickerResignedBadge(p.picker, p.name)}<span class="metric-sub">${escapeZoneHtml(p.affiliation || '-')} · ${pickerTeamBadge(p.picker)}</span></td>
+        <td class="num" style="font-weight:800; color:#b91c1c;">${fmt(Math.round(t.prod))}</td>
+        <td class="num">${fmt(Math.round(z.target))}</td>
+        ${blendedCell}
+        <td class="num" style="font-weight:700; color:#e11d48;">${fmtDecimal1(t.gap)}</td>
+        <td class="num">${fmtDecimal1(t.effPct)}%</td>
+        <td class="num">${fmtDecimal1(p.hours || 0)} ชม.<span class="metric-sub">OT ${p.ot > 0 ? fmtDecimal1(p.ot) : '-'}</span></td>
+        <td class="num">${fmt(Math.round(p.qty || 0))}</td>
+        <td style="text-align:center;"><button class="refreshbtn" style="padding:4px 10px; font-size:11px;" onclick="openIndividualScorecard('${encodeURIComponent(p.picker)}')">ดูรายบุคคล</button></td>
+      </tr>`;
+    }).join('');
+
+    const missRate = z.all.length ? r1((z.below.length / z.all.length) * 100) : 0;
+    return `<div class="card wide" style="margin-top:16px;">
+      <h3 style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <span>📍 Zone ${escapeZoneHtml(z.zone)}
+          <span class="pill" style="background:#eef2ff; color:#4338ca; margin-left:6px;">${escapeZoneHtml(z.typePick)}</span>
+          <span class="pill" style="background:#fef2f2; color:#b91c1c; margin-left:4px;">Target ${fmt(Math.round(z.target))} หยิบ/ชม.</span>
+        </span>
+        <span style="font-size:12.5px; font-weight:700; color:${missRate >= 50 ? '#b91c1c' : '#ea580c'};">ไม่ถึงเป้า ${fmt(z.below.length)} / ${fmt(z.all.length)} คน (${fmtDecimal1(missRate)}%)</span>
+      </h3>
+      <div class="zone-breakdown-wrap"><table class="zone-breakdown-table">
+        <thead><tr>
+          <th>#</th><th>พนักงาน</th>
+          <th class="num">Prod จริง</th><th class="num">Target โซน</th><th class="num">Target ผสม</th>
+          <th class="num">Gap</th><th class="num">% Efficiency</th>
+          <th class="num">ชั่วโมง Active</th><th class="num">หน่วยหยิบ</th>
+          <th style="text-align:center;">เจาะลึก</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table></div>
+    </div>`;
+  }).join('');
+
+  host.innerHTML = `
+    <div class="card wide">
+      <h3>⚠️ พนักงานที่ยังไม่ถึง Target ของโซน</h3>
+      <div class="sub">เทียบ Productivity จริงรายคนกับ Target ของโซนหลักที่ทำงานมากที่สุด · โซนไหนตั้ง Target เองไว้จะใช้ค่านั้นก่อน Target ตามประเภท</div>
+      ${cards}
+      <div class="chartbox tall" style="margin-top:16px;"><canvas id="belowTargetZoneChart"></canvas></div>
+      <div class="note" style="margin-top:12px;">นับเฉพาะพนักงานที่ Productivity นับได้ (Active Hours &gt; 3 และ Prod &lt; 1000) · Target ผสมใช้ได้เมื่อมีข้อมูลโซนจาก Google Sheet Master</div>
+    </div>
+    ${zoneTables || `<div class="card wide" style="margin-top:16px;"><div class="floor-all-mapped">🎉 ทุกโซนมีพนักงานถึง Target ครบในช่วงที่เลือก</div></div>`}
+  `;
+
+  drawBelowTargetChart(zones);
+}
+
+function drawBelowTargetChart(zones) {
+  const el = document.getElementById('belowTargetZoneChart');
+  if (!el || typeof Chart === 'undefined') return;
+  const existing = Chart.getChart('belowTargetZoneChart');
+  if (existing) existing.destroy();
+
+  const list = zones.filter(z => z.all.length).slice(0, 20);
+  if (!list.length) return;
+  const labels = list.map(z => z.zone);
+  const missCounts = list.map(z => z.below.length);
+  const hitCounts = list.map(z => z.all.length - z.below.length);
+  const maxTotal = Math.max(...list.map(z => z.all.length), 1);
+
+  new Chart(el, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'ไม่ถึงเป้า (คน)', data: missCounts, backgroundColor: '#f43f5e', borderRadius: 6, stack: 's' },
+        { label: 'ถึงเป้า (คน)', data: hitCounts, backgroundColor: '#10b981', borderRadius: 6, stack: 's' }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top' },
+        datalabels: {
+          color: '#fff', font: { weight: 700, size: 10 }, clip: false, clamp: true,
+          display: ctx => Number(ctx.dataset.data[ctx.dataIndex]) > 0
+        },
+        tooltip: {
+          callbacks: {
+            afterBody: items => {
+              const z = list[items[0].dataIndex];
+              return z ? [`Target โซน: ${Math.round(z.target)} หยิบ/ชม.`, `ประเภท: ${z.typePick}`] : [];
+            }
+          }
+        }
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false } },
+        y: { stacked: true, beginAtZero: true, suggestedMax: Math.ceil(maxTotal * 1.35), grace: '25%', grid: { display: false }, ticks: { precision: 0 } }
+      }
+    }
+  });
+}
+
+// =========================================================================
+// ===== 📈 หน้าเทรนรายสัปดาห์ / รายเดือน =====
+// =========================================================================
+let trendPeriodMode = typeof trendPeriodModeInitial === 'string' ? trendPeriodModeInitial : 'week';
+
+function trendPeriodKey(dateStr, mode) {
+  const ds = String(dateStr || '');
+  if (mode === 'month') return ds.slice(0, 7);
+  const dt = new Date(ds + 'T00:00:00');
+  if (Number.isNaN(dt.getTime())) return ds;
+  const dow = (dt.getDay() + 6) % 7; // จันทร์ = 0
+  const monday = new Date(dt);
+  monday.setDate(dt.getDate() - dow);
+  // ห้ามใช้ toISOString() เพราะจะแปลงเป็น UTC แล้วเลื่อนวันย้อนหลังในโซนเวลา +07:00
+  const y = monday.getFullYear();
+  const m = String(monday.getMonth() + 1).padStart(2, '0');
+  const d = String(monday.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function trendPeriodLabel(key, mode) {
+  if (mode === 'month') {
+    const dt = new Date(key + '-01T00:00:00');
+    if (Number.isNaN(dt.getTime())) return key;
+    return new Intl.DateTimeFormat('th-TH', { month: 'short', year: '2-digit' }).format(dt);
+  }
+  const start = new Date(key + 'T00:00:00');
+  if (Number.isNaN(start.getTime())) return key;
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const f = d => `${d.getDate()}/${d.getMonth() + 1}`;
+  return `${f(start)}–${f(end)}`;
+}
+
+function buildTrendPeriods(mode) {
+  const map = new Map();
+  (A.daily || []).forEach(d => {
+    const key = trendPeriodKey(d.date, mode);
+    const g = map.get(key) || { key, qty: 0, lines: 0, hours: 0, prodValues: [], days: 0, pickerPeak: 0, dates: [] };
+    g.qty += Number(d.qty || 0);
+    g.lines += Number(d.lines || 0);
+    g.hours += Number(d.hours || 0);
+    g.days += 1;
+    g.dates.push(d.date);
+    if (Number(d.avg_prod) > 0) g.prodValues.push(Number(d.avg_prod));
+    if (Number(d.pickers || 0) > g.pickerPeak) g.pickerPeak = Number(d.pickers || 0);
+    map.set(key, g);
+  });
+  const list = [...map.values()].sort((a, b) => a.key.localeCompare(b.key)).map(g => ({
+    ...g,
+    label: trendPeriodLabel(g.key, mode),
+    prod: g.prodValues.length ? Math.round(mean(g.prodValues)) : 0,
+    avgQtyPerDay: g.days > 0 ? Math.round(g.qty / g.days) : 0
+  }));
+  // เทียบกับงวดก่อนหน้า (WoW / MoM)
+  list.forEach((g, i) => {
+    const prev = i > 0 ? list[i - 1] : null;
+    g.prodDelta = prev ? r1(g.prod - prev.prod) : null;
+    g.prodDeltaPct = prev && prev.prod > 0 ? r1(((g.prod - prev.prod) / prev.prod) * 100) : null;
+    g.qtyDeltaPct = prev && prev.qty > 0 ? r1(((g.qty - prev.qty) / prev.qty) * 100) : null;
+  });
+  return list;
+}
+
+function renderTrendPage() {
+  const host = document.getElementById('trendPage');
+  if (!host || !A) return;
+
+  const mode = trendPeriodMode === 'month' ? 'month' : 'week';
+  const periods = buildTrendPeriods(mode);
+  const unitWord = mode === 'month' ? 'เดือน' : 'สัปดาห์';
+  const deltaWord = mode === 'month' ? 'MoM' : 'WoW';
+
+  const toggle = `<div class="seg" id="trendPeriodTog" style="margin-bottom:14px;">
+    <button data-tperiod="week" class="${mode === 'week' ? 'active' : ''}">📅 รายสัปดาห์</button>
+    <button data-tperiod="month" class="${mode === 'month' ? 'active' : ''}">🗓️ รายเดือน</button>
+  </div>`;
+
+  if (!periods.length) {
+    host.innerHTML = `<div class="card wide"><h3>📈 เทรนผลงาน</h3>${toggle}<div class="floor-all-mapped">ยังไม่มีข้อมูลรายวันในช่วงที่เลือก</div></div>`;
+    bindTrendPeriodButtons();
+    return;
+  }
+
+  const latest = periods[periods.length - 1];
+  const best = periods.reduce((a, b) => (b.prod > a.prod ? b : a), periods[0]);
+  const target = Number(prodTarget) > 0 ? Number(prodTarget) : 170;
+  const hitPeriods = periods.filter(g => g.prod >= target).length;
+  const deltaColor = latest.prodDeltaPct === null ? '#64748b' : (latest.prodDeltaPct >= 0 ? '#16a34a' : '#e11d48');
+  const deltaTxt = latest.prodDeltaPct === null
+    ? '—'
+    : `${latest.prodDeltaPct >= 0 ? '▲' : '▼'} ${fmtDecimal1(Math.abs(latest.prodDeltaPct))}`;
+
+  const cards = statCardsHtml([
+    { label: `⚡ Productivity ${unitWord}ล่าสุด`, val: fmt(latest.prod), unit: 'หยิบ/ชม.', sub: escapeZoneHtml(latest.label), color: latest.prod >= target ? '#16a34a' : '#e11d48' },
+    { label: `📊 เปลี่ยนแปลง ${deltaWord}`, val: deltaTxt, unit: '%', sub: latest.prodDelta === null ? 'ไม่มีงวดก่อนหน้าให้เทียบ' : `${latest.prodDelta >= 0 ? '+' : ''}${fmtDecimal1(latest.prodDelta)} หยิบ/ชม.`, color: deltaColor },
+    { label: '📦 หน่วยหยิบงวดล่าสุด', val: fmt(latest.qty), unit: 'หน่วย', sub: `${fmt(latest.days)} วันทำการ · เฉลี่ย ${fmt(latest.avgQtyPerDay)}/วัน`, color: '#0ea5e9' },
+    { label: `🏆 ${unitWord}ที่ดีที่สุด`, val: fmt(best.prod), unit: 'หยิบ/ชม.', sub: escapeZoneHtml(best.label), color: '#7c3aed' },
+    { label: '🎯 งวดที่ถึงเป้า', val: `${fmt(hitPeriods)} / ${fmt(periods.length)}`, unit: unitWord, sub: `Target ${fmt(Math.round(target))} หยิบ/ชม.`, color: hitPeriods === periods.length ? '#16a34a' : '#ea580c' }
+  ]);
+
+  const tableRows = [...periods].reverse().map((g, i) => {
+    const dPct = g.prodDeltaPct;
+    const dCell = dPct === null
+      ? '<td class="num">—</td>'
+      : `<td class="num" style="font-weight:700; color:${dPct >= 0 ? '#16a34a' : '#e11d48'};">${dPct >= 0 ? '▲' : '▼'} ${fmtDecimal1(Math.abs(dPct))}%</td>`;
+    const qPct = g.qtyDeltaPct;
+    const qCell = qPct === null
+      ? '<td class="num">—</td>'
+      : `<td class="num" style="color:${qPct >= 0 ? '#0f766e' : '#b45309'};">${qPct >= 0 ? '+' : ''}${fmtDecimal1(qPct)}%</td>`;
+    const hit = g.prod >= target;
+    return `<tr>
+      <td>${i + 1}</td>
+      <td><b>${escapeZoneHtml(g.label)}</b><span class="metric-sub">${fmt(g.days)} วันทำการ</span></td>
+      <td class="num">${fmt(g.qty)}</td>
+      <td class="num">${fmt(g.avgQtyPerDay)}</td>
+      <td class="num" style="font-weight:800; color:${hit ? '#059669' : '#b91c1c'};">${fmt(g.prod)}</td>
+      ${dCell}
+      ${qCell}
+      <td class="num">${fmtDecimal1(g.hours)} ชม.</td>
+      <td class="num">${fmt(g.pickerPeak)}</td>
+      <td style="text-align:center;">${hit ? '<span class="badge-status pass">ถึงเป้า</span>' : '<span class="badge-status fail">ต่ำกว่าเป้า</span>'}</td>
+    </tr>`;
+  }).join('');
+
+  host.innerHTML = `
+    <div class="card wide">
+      <h3>📈 เทรนผลงาน${unitWord === 'เดือน' ? 'รายเดือน' : 'รายสัปดาห์'}</h3>
+      <div class="sub">ดูทิศทางว่า Productivity และปริมาณหยิบขยับขึ้นหรือลงเทียบงวดก่อนหน้า (${deltaWord})</div>
+      ${toggle}
+      ${cards}
+      <div class="chartbox tall" style="margin-top:16px;"><canvas id="trendPeriodChart"></canvas></div>
+      <div class="chartbox" style="margin-top:16px;"><canvas id="trendChangeChart"></canvas></div>
+    </div>
+    <div class="card wide" style="margin-top:16px;">
+      <h3>ตารางเปรียบเทียบราย${unitWord} (ใหม่ → เก่า)</h3>
+      <div class="zone-breakdown-wrap"><table class="zone-breakdown-table">
+        <thead><tr>
+          <th>#</th><th>งวด</th>
+          <th class="num">หน่วยหยิบรวม</th><th class="num">เฉลี่ย/วัน</th>
+          <th class="num">Productivity</th><th class="num">Δ Prod ${deltaWord}</th><th class="num">Δ ปริมาณ ${deltaWord}</th>
+          <th class="num">ชั่วโมง Active</th><th class="num">Picker สูงสุด/วัน</th>
+          <th style="text-align:center;">เทียบ Target</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table></div>
+      <div class="zone-breakdown-foot">สัปดาห์เริ่มวันจันทร์ · Productivity ของงวด = ค่าเฉลี่ยของค่าเฉลี่ยรายวันที่นับได้ · ปริมาณเป็นผลรวมทั้งงวด</div>
+    </div>
+  `;
+
+  drawTrendCharts(periods, target, deltaWord);
+  bindTrendPeriodButtons();
+}
+
+function bindTrendPeriodButtons() {
+  const tog = document.getElementById('trendPeriodTog');
+  if (!tog) return;
+  tog.querySelectorAll('button[data-tperiod]').forEach(b => {
+    b.onclick = () => {
+      const next = b.dataset.tperiod;
+      if (next === trendPeriodMode) return;
+      trendPeriodMode = next;
+      try { localStorage.setItem('pickProductivityTrendPeriod', trendPeriodMode); } catch (_) { }
+      renderTrendPage();
+    };
+  });
+}
+
+function drawTrendCharts(periods, target, deltaWord) {
+  if (typeof Chart === 'undefined') return;
+  const labels = periods.map(g => g.label);
+
+  const mainEl = document.getElementById('trendPeriodChart');
+  if (mainEl) {
+    const old = Chart.getChart('trendPeriodChart');
+    if (old) old.destroy();
+    const maxQty = Math.max(...periods.map(g => g.qty), 1);
+    const maxProd = Math.max(...periods.map(g => g.prod), target, 1);
+    new Chart(mainEl, {
+      data: {
+        labels,
+        datasets: [
+          { type: 'bar', label: 'หน่วยหยิบรวม', data: periods.map(g => g.qty), backgroundColor: '#6366f1', borderRadius: 8, yAxisID: 'y', order: 2 },
+          {
+            type: 'line', label: 'Productivity (หยิบ/ชม.)', data: periods.map(g => g.prod),
+            borderColor: '#059669', backgroundColor: '#059669', borderWidth: 3, tension: .32,
+            pointRadius: 4, pointBackgroundColor: '#fff', pointBorderWidth: 2, yAxisID: 'y1', order: 1
+          }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top' },
+          datalabels: {
+            clip: false, clamp: true, font: { weight: 700, size: 10 },
+            align: ctx => (ctx.dataset.type === 'line' ? 'top' : 'end'),
+            anchor: ctx => (ctx.dataset.type === 'line' ? 'end' : 'end'),
+            color: ctx => (ctx.dataset.type === 'line' ? '#047857' : '#4338ca'),
+            display: ctx => Number(ctx.dataset.data[ctx.dataIndex]) > 0,
+            formatter: v => fmt(Math.round(Number(v)))
+          }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { beginAtZero: true, position: 'left', suggestedMax: Math.ceil(maxQty * 1.35), grace: '25%', grid: { display: false }, title: { display: true, text: 'หน่วยหยิบ' } },
+          y1: { beginAtZero: true, position: 'right', suggestedMax: Math.ceil(maxProd * 1.35), grid: { display: false }, title: { display: true, text: 'หยิบ/ชม.' } }
+        }
+      }
+    });
+  }
+
+  const changeEl = document.getElementById('trendChangeChart');
+  if (changeEl) {
+    const old = Chart.getChart('trendChangeChart');
+    if (old) old.destroy();
+    const deltas = periods.map(g => (g.prodDeltaPct === null ? 0 : g.prodDeltaPct));
+    const maxAbs = Math.max(...deltas.map(v => Math.abs(v)), 5);
+    new Chart(changeEl, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{
+          label: `% เปลี่ยนแปลง Productivity (${deltaWord})`,
+          data: deltas,
+          backgroundColor: deltas.map(v => (v >= 0 ? '#10b981' : '#f43f5e')),
+          borderRadius: 6
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          datalabels: {
+            clip: false, clamp: true, font: { weight: 700, size: 10 },
+            align: ctx => (Number(ctx.dataset.data[ctx.dataIndex]) >= 0 ? 'top' : 'bottom'),
+            color: ctx => (Number(ctx.dataset.data[ctx.dataIndex]) >= 0 ? '#047857' : '#be123c'),
+            display: ctx => Number(ctx.dataset.data[ctx.dataIndex]) !== 0,
+            formatter: v => (Number(v) >= 0 ? '+' : '') + fmtDecimal1(v) + '%'
+          }
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { suggestedMin: -Math.ceil(maxAbs * 1.35), suggestedMax: Math.ceil(maxAbs * 1.35), grace: '25%', grid: { display: false }, ticks: { callback: v => v + '%' } }
+        }
+      }
+    });
+  }
+}
+
+// =========================================================================
+// ===== 👤 หน้าภาพรวมรายบุคคล (ตารางเทียบทุกคน + Scorecard) =====
+// =========================================================================
+let individualPickerId = null;
+let individualSearchTerm = '';
+
+function openIndividualScorecard(encodedId) {
+  let id = String(encodedId || '');
+  try { id = decodeURIComponent(id); } catch (_) { }
+  individualPickerId = id;
+  currentPage = 'individual';
+  show('individual');
+  renderIndividualPage();
+  const host = document.getElementById('individualPage');
+  if (host && host.scrollIntoView) host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+window.openIndividualScorecard = openIndividualScorecard;
+
+function closeIndividualScorecard() {
+  individualPickerId = null;
+  renderIndividualPage();
+}
+window.closeIndividualScorecard = closeIndividualScorecard;
+
+function individualDailyRows(pickerId) {
+  const drill = (A.picker_drilldown || {})[pickerId];
+  if (!drill || !drill.byDate) return [];
+  return Object.keys(drill.byDate).sort().map(date => {
+    const rec = drill.byDate[date];
+    const activeHours = activeHourCount(rec.hourMask);
+    const rawProd = v2RoundedProductivity(rec.qty, activeHours);
+    const countable = rec.lines > 0 && isV2CountableProductivity(pickerId, activeHours, rawProd);
+    const zones = Object.keys(rec.zones || {})
+      .map(z => ({ zone: z, qty: Number(rec.zones[z].qty || 0), lines: Number(rec.zones[z].lines || 0) }))
+      .sort((a, b) => b.qty - a.qty);
+    return {
+      date, qty: Number(rec.qty || 0), lines: Number(rec.lines || 0),
+      activeHours, prod: countable ? rawProd : 0, countable,
+      ot: activeOtHoursFromMask(rec.hourMask, pickerId),
+      timeSpan: (rec.minMinutes < 999999 && rec.maxMinutes >= 0)
+        ? formatMinutesToTime(rec.minMinutes) + ' - ' + formatMinutesToTime(rec.maxMinutes) : '-',
+      zones
+    };
+  });
+}
+
+function renderIndividualPage() {
+  const host = document.getElementById('individualPage');
+  if (!host || !A) return;
+  if (individualPickerId) {
+    const found = (A.by_picker || []).some(p => p.picker === individualPickerId);
+    if (!found) individualPickerId = null;
+  }
+  host.innerHTML = individualPickerId ? individualScorecardHtml(individualPickerId) : individualCompareHtml();
+  if (individualPickerId) {
+    drawIndividualTrendChart(individualPickerId);
+  } else {
+    bindIndividualCompareControls();
+    drawIndividualCompareChart();
+  }
+}
+
+function individualCompareRows() {
+  const term = String(individualSearchTerm || '').trim().toLowerCase();
+  return (A.by_picker || [])
+    .map(p => ({ p, t: pickerTargetInfo(p) }))
+    .filter(x => {
+      if (!term) return true;
+      return String(x.p.picker || '').toLowerCase().includes(term)
+        || String(x.p.name || '').toLowerCase().includes(term)
+        || String(x.p.affiliation || '').toLowerCase().includes(term)
+        || String(x.t.zoneLabel || '').toLowerCase().includes(term);
+    })
+    .sort((a, b) => (b.t.effPct - a.t.effPct) || (b.p.qty - a.p.qty));
+}
+
+function individualCompareHtml() {
+  const rows = individualCompareRows();
+  const counted = rows.filter(x => x.t.counted);
+  const hit = counted.filter(x => !x.t.isBelow);
+  const avgEff = counted.length ? r1(mean(counted.map(x => x.t.effPct))) : 0;
+  const totalDrill = A.picker_drilldown || {};
+
+  const cards = statCardsHtml([
+    { label: '👥 พนักงานทั้งหมด', val: fmt(rows.length), unit: 'คน', sub: `นับ Productivity ได้ ${fmt(counted.length)} คน`, color: '#6366f1' },
+    { label: '✅ ถึง Target', val: fmt(hit.length), unit: 'คน', sub: counted.length ? `${fmtDecimal1((hit.length / counted.length) * 100)}% ของคนที่นับได้` : '—', color: '#16a34a' },
+    { label: '⚠️ ต่ำกว่า Target', val: fmt(counted.length - hit.length), unit: 'คน', sub: 'ดูรายละเอียดที่เมนู “ไม่ถึงเป้า”', color: '#e11d48' },
+    { label: '📊 Efficiency เฉลี่ย', val: fmtDecimal1(avgEff), unit: '%', sub: 'เทียบ Target ของโซนที่ทำจริง', color: avgEff >= 100 ? '#16a34a' : '#ea580c' }
+  ]);
+
+  const body = rows.map((x, i) => {
+    const p = x.p;
+    const t = x.t;
+    const days = totalDrill[p.picker] && totalDrill[p.picker].dates ? totalDrill[p.picker].dates.size : 0;
+    const status = !t.counted
+      ? '<span class="badge-status" style="background:#f1f5f9;color:#64748b;border-color:#e2e8f0;">ไม่นับ Productivity</span>'
+      : (t.isBelow ? '<span class="badge-status fail">ต่ำกว่าเป้า</span>' : '<span class="badge-status pass">ถึงเป้า</span>');
+    const medal = i === 0 ? '🥇' : (i === 1 ? '🥈' : (i === 2 ? '🥉' : (i + 1)));
+    return `<tr>
+      <td style="text-align:center;">${medal}</td>
+      <td><b>${escapeZoneHtml(p.picker)}</b>${pickerResignedBadge(p.picker, p.name)}<span class="metric-sub">${escapeZoneHtml(p.name && p.name !== p.picker ? p.name : '-')}</span></td>
+      <td><span class="affiliation-key">${escapeZoneHtml(p.affiliation || '-')}</span><span class="metric-sub">${pickerTeamBadge(p.picker)}</span></td>
+      <td><span class="pill" style="background:#e0f2fe;color:#0369a1;">${escapeZoneHtml(t.zoneLabel)}</span><span class="metric-sub">${escapeZoneHtml(t.typePick)}</span></td>
+      <td class="num" style="font-weight:800; color:${t.isBelow ? '#b91c1c' : '#059669'};">${fmt(Math.round(t.prod))}</td>
+      <td class="num">${fmt(Math.round(t.target))}${t.blendedTarget !== null ? '<span class="metric-sub">ผสมตามโซน</span>' : '<span class="metric-sub">Target โซน</span>'}</td>
+      <td class="num" style="font-weight:700; color:${t.gap >= 0 ? '#16a34a' : '#e11d48'};">${t.gap >= 0 ? '+' : ''}${fmtDecimal1(t.gap)}</td>
+      <td class="num">${fmtDecimal1(t.effPct)}%</td>
+      <td class="num">${fmt(Math.round(p.qty || 0))}</td>
+      <td class="num">${fmtDecimal1(p.hours || 0)} ชม.<span class="metric-sub">OT ${p.ot > 0 ? fmtDecimal1(p.ot) : '-'}</span></td>
+      <td class="num">${fmt(days)}</td>
+      <td style="text-align:center;">${status}</td>
+      <td style="text-align:center;"><button class="refreshbtn" style="padding:4px 10px; font-size:11px;" onclick="openIndividualScorecard('${encodeURIComponent(p.picker)}')">Scorecard</button></td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="card wide">
+      <h3>👤 ภาพรวมรายบุคคล — เทียบทุกคน</h3>
+      <div class="sub">เรียงตาม % Efficiency เทียบ Target ของโซนที่ทำงานจริง · คลิก Scorecard เพื่อดูรายละเอียดรายคน</div>
+      ${cards}
+      <div style="margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <input type="search" id="individualSearch" placeholder="ค้นหารหัส / ชื่อ / สังกัด / โซน" value="${escapeZoneHtml(individualSearchTerm)}"
+          style="flex:1 1 260px; min-width:200px; padding:8px 12px; border:1px solid #cbd5e1; border-radius:10px; font-family:inherit; font-size:13px;">
+        <span style="font-size:12px; color:#64748b;">แสดง ${fmt(rows.length)} คน</span>
+      </div>
+      <div class="chartbox tall" style="margin-top:16px;"><canvas id="individualCompareChart"></canvas></div>
+    </div>
+    <div class="card wide" style="margin-top:16px;">
+      <h3>ตารางเทียบผลงานรายบุคคล</h3>
+      <div class="zone-breakdown-wrap"><table class="zone-breakdown-table">
+        <thead><tr>
+          <th style="text-align:center; width:52px;">อันดับ</th><th>รหัส / ชื่อ</th><th>สังกัด / กะ</th><th>โซนหลัก</th>
+          <th class="num">Prod จริง</th><th class="num">Target</th><th class="num">Gap</th><th class="num">% Eff</th>
+          <th class="num">หน่วยหยิบ</th><th class="num">ชั่วโมง Active</th><th class="num">วันทำงาน</th>
+          <th style="text-align:center;">สถานะ</th><th style="text-align:center;">เจาะลึก</th>
+        </tr></thead>
+        <tbody>${body || '<tr><td colspan="13" class="empty-cell">ไม่พบพนักงานที่ตรงกับคำค้นหา</td></tr>'}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+function bindIndividualCompareControls() {
+  const search = document.getElementById('individualSearch');
+  if (!search) return;
+  search.oninput = () => {
+    individualSearchTerm = search.value;
+    const pos = search.selectionStart;
+    renderIndividualPage();
+    const next = document.getElementById('individualSearch');
+    if (next) { next.focus(); try { next.setSelectionRange(pos, pos); } catch (_) { } }
+  };
+}
+
+function drawIndividualCompareChart() {
+  const el = document.getElementById('individualCompareChart');
+  if (!el || typeof Chart === 'undefined') return;
+  const old = Chart.getChart('individualCompareChart');
+  if (old) old.destroy();
+
+  const rows = individualCompareRows().filter(x => x.t.counted).slice(0, 20);
+  if (!rows.length) return;
+  const labels = rows.map(x => `${x.p.picker} ${x.p.name && x.p.name !== x.p.picker ? x.p.name : ''}`.trim());
+  const prods = rows.map(x => Math.round(x.t.prod));
+  const targets = rows.map(x => Math.round(x.t.target));
+  const maxVal = Math.max(...prods, ...targets, 1);
+
+  new Chart(el, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Productivity จริง', data: prods, backgroundColor: rows.map(x => (x.t.isBelow ? '#f43f5e' : '#10b981')), borderRadius: 6 },
+        { label: 'Target ของโซน', data: targets, backgroundColor: '#c7d2fe', borderRadius: 6 }
+      ]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      layout: { padding: { right: 65 } },
+      plugins: {
+        legend: { position: 'top' },
+        datalabels: {
+          anchor: 'end', align: 'right', clip: false, clamp: true,
+          font: { weight: 700, size: 10 }, color: '#334155',
+          display: ctx => ctx.datasetIndex === 0 && Number(ctx.dataset.data[ctx.dataIndex]) > 0,
+          formatter: v => fmt(Math.round(Number(v)))
+        }
+      },
+      scales: {
+        x: { beginAtZero: true, suggestedMax: Math.ceil(maxVal * 1.35), grace: '25%', grid: { display: false } },
+        y: { grid: { display: false }, ticks: { font: { size: 10.5 } } }
+      }
+    }
+  });
+}
+
+function individualScorecardHtml(pickerId) {
+  const p = (A.by_picker || []).find(x => x.picker === pickerId);
+  if (!p) {
+    return `<div class="card wide"><div class="floor-all-mapped">ไม่พบพนักงานรหัสนี้ในช่วงที่เลือก
+      <div style="margin-top:10px;"><button class="refreshbtn" onclick="closeIndividualScorecard()">← กลับตารางเทียบทุกคน</button></div></div></div>`;
+  }
+  const t = pickerTargetInfo(p);
+  const daily = individualDailyRows(pickerId);
+  const countedDays = daily.filter(d => d.countable);
+  const bestDay = countedDays.length ? countedDays.reduce((a, b) => (b.prod > a.prod ? b : a)) : null;
+  const worstDay = countedDays.length ? countedDays.reduce((a, b) => (b.prod < a.prod ? b : a)) : null;
+  const totalOt = r1(daily.reduce((s, d) => s + Number(d.ot || 0), 0));
+  const responsibility = getPickerMetaMapValue('picker_responsibilities', pickerId) || '-';
+  const rosterZone = getPickerMetaMapValue('picker_roster_zones', pickerId) || '-';
+
+  const cards = statCardsHtml([
+    { label: '⚡ Productivity', val: fmt(Math.round(t.prod)), unit: 'หยิบ/ชม.', sub: `Target ${fmt(Math.round(t.target))} · ${t.gap >= 0 ? 'สูงกว่า' : 'ต่ำกว่า'} ${fmtDecimal1(Math.abs(t.gap))}`, color: t.isBelow ? '#e11d48' : '#16a34a' },
+    { label: '🎯 % Efficiency', val: fmtDecimal1(t.effPct), unit: '%', sub: t.blendedTarget !== null ? 'เทียบ Target ผสมตามโซนที่ทำจริง' : `เทียบ Target โซน ${escapeZoneHtml(t.zoneLabel)}`, color: t.effPct >= 100 ? '#16a34a' : '#ea580c' },
+    { label: '📦 หน่วยหยิบรวม', val: fmt(Math.round(p.qty || 0)), unit: 'หน่วย', sub: `${fmt(p.lines || 0)} lines · ${fmt(daily.length)} วันทำงาน`, color: '#0ea5e9' },
+    { label: '⏱️ ชั่วโมง Active', val: fmtDecimal1(p.hours || 0), unit: 'ชม.', sub: `OT รวม ${totalOt > 0 ? fmtDecimal1(totalOt) : '-'} ชม.`, color: '#7c3aed' },
+    { label: '📈 วันดีที่สุด / แย่ที่สุด', val: bestDay ? fmt(bestDay.prod) : '—', unit: 'หยิบ/ชม.', sub: bestDay ? `${escapeZoneHtml(bestDay.date)} · ต่ำสุด ${fmt(worstDay.prod)} (${escapeZoneHtml(worstDay.date)})` : 'ยังไม่มีวันที่นับได้', color: '#0891b2' }
+  ]);
+
+  const zoneList = Array.isArray(p.actualZones) && p.actualZones.length
+    ? p.actualZones
+    : (() => {
+      const agg = new Map();
+      daily.forEach(d => d.zones.forEach(z => {
+        const g = agg.get(z.zone) || { zone: z.zone, qty: 0, lines: 0 };
+        g.qty += z.qty; g.lines += z.lines; agg.set(z.zone, g);
+      }));
+      const total = [...agg.values()].reduce((s, z) => s + z.qty, 0);
+      return [...agg.values()].sort((a, b) => b.qty - a.qty).map(z => {
+        const label = resolveTargetZoneLabel(z.zone) || z.zone;
+        const tp = getTypePickForZone(label);
+        return {
+          zone: label, typePick: tp, target: getTargetForZoneOrType(tp, label),
+          qty: z.qty, lines: z.lines, sharePct: total > 0 ? (z.qty / total) * 100 : 0,
+          isAssigned: null, timeSpan: '-'
+        };
+      });
+    })();
+
+  const zoneRows = zoneList.map((z, i) => {
+    const hit = t.prod >= Number(z.target || 0);
+    const assignedTag = z.isAssigned === true
+      ? '<span class="pill" style="background:#dcfce7;color:#15803d;">โซนประจำ</span>'
+      : (z.isAssigned === false ? '<span class="pill" style="background:#ffedd5;color:#c2410c;">ไปช่วย</span>' : '');
+    return `<tr>
+      <td><span class="rank">${i + 1}</span></td>
+      <td><b>${escapeZoneHtml(z.zone)}</b> ${assignedTag}<span class="metric-sub">${escapeZoneHtml(z.typePick || '-')}</span></td>
+      <td class="num">${fmt(Math.round(z.qty || 0))}</td>
+      <td class="num">${fmtDecimal1(z.sharePct || 0)}%</td>
+      <td class="num">${fmt(Math.round(z.target || 0))}</td>
+      <td class="num">${fmt(z.lines || 0)}</td>
+      <td>${escapeZoneHtml(z.timeSpan || '-')}</td>
+      <td style="text-align:center;">${hit ? '<span class="badge-status pass">ถึงเป้าโซนนี้</span>' : '<span class="badge-status fail">ต่ำกว่าเป้าโซนนี้</span>'}</td>
+    </tr>`;
+  }).join('');
+
+  const dailyRows = [...daily].reverse().map(d => {
+    const dayHit = d.countable && d.prod >= t.target;
+    return `<tr>
+      <td><b>${escapeZoneHtml(d.date)}</b></td>
+      <td>${escapeZoneHtml(d.timeSpan)}</td>
+      <td class="num">${fmt(Math.round(d.qty))}</td>
+      <td class="num">${fmt(d.lines)}</td>
+      <td class="num">${fmt(d.activeHours)} ชม.</td>
+      <td class="num">${d.ot > 0 ? fmtDecimal1(d.ot) : '-'}</td>
+      <td class="num" style="font-weight:800; color:${d.countable ? (dayHit ? '#059669' : '#b91c1c') : '#94a3b8'};">${d.countable ? fmt(d.prod) : 'ไม่นับ'}</td>
+      <td>${escapeZoneHtml(d.zones.slice(0, 3).map(z => z.zone).join(', ') || '-')}</td>
+      <td style="text-align:center;">${d.countable ? (dayHit ? '<span class="badge-status pass">ถึงเป้า</span>' : '<span class="badge-status fail">ต่ำกว่าเป้า</span>') : '<span class="badge-status" style="background:#f1f5f9;color:#64748b;border-color:#e2e8f0;">Active ≤ 3 ชม.</span>'}</td>
+    </tr>`;
+  }).join('');
+
+  const mobility = p.mobilityLabel
+    ? `<span class="pill" style="background:#f5f3ff;color:${p.mobilityColor || '#7c3aed'};">${escapeZoneHtml(p.mobilityLabel)}</span>`
+    : '';
+
+  return `
+    <div class="card wide">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+        <div>
+          <h3 style="font-size:19px;">👤 ${escapeZoneHtml(p.picker)} · ${escapeZoneHtml(p.name && p.name !== p.picker ? p.name : '-')}${pickerResignedBadge(p.picker, p.name)}</h3>
+          <div class="sub" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:6px;">
+            <span class="affiliation-key">${escapeZoneHtml(p.affiliation || '-')}</span>
+            ${pickerTeamBadge(p.picker)}
+            <span class="pill" style="background:#e0f2fe;color:#0369a1;">โซนหลัก ${escapeZoneHtml(t.zoneLabel)}</span>
+            <span class="pill" style="background:#f1f5f9;color:#475569;">หน้าที่: ${escapeZoneHtml(responsibility)}</span>
+            <span class="pill" style="background:#f1f5f9;color:#475569;">โซนตามชีต: ${escapeZoneHtml(rosterZone)}</span>
+            ${mobility}
+          </div>
+        </div>
+        <button class="refreshbtn" onclick="closeIndividualScorecard()">← กลับตารางเทียบทุกคน</button>
+      </div>
+      ${cards}
+      <div class="chartbox tall" style="margin-top:16px;"><canvas id="individualTrendChart"></canvas></div>
+    </div>
+
+    <div class="card wide" style="margin-top:16px;">
+      <h3>📍 โซนที่ทำงานจริง และ Target ของแต่ละโซน</h3>
+      <div class="zone-breakdown-wrap"><table class="zone-breakdown-table">
+        <thead><tr>
+          <th>#</th><th>โซน</th><th class="num">หน่วยหยิบ</th><th class="num">สัดส่วน</th>
+          <th class="num">Target โซน</th><th class="num">Lines</th><th>ช่วงเวลาที่ทำ</th>
+          <th style="text-align:center;">เทียบ Prod รวมของคนนี้</th>
+        </tr></thead>
+        <tbody>${zoneRows || '<tr><td colspan="8" class="empty-cell">ยังไม่มีข้อมูลโซน</td></tr>'}</tbody>
+      </table></div>
+    </div>
+
+    <div class="card wide" style="margin-top:16px;">
+      <h3>🗓️ ผลงานรายวัน (ใหม่ → เก่า)</h3>
+      <div class="zone-breakdown-wrap"><table class="zone-breakdown-table">
+        <thead><tr>
+          <th>วันที่</th><th>ช่วงเวลา</th><th class="num">หน่วยหยิบ</th><th class="num">Lines</th>
+          <th class="num">Active Hours</th><th class="num">OT</th><th class="num">Productivity</th><th>โซนที่ทำ</th>
+          <th style="text-align:center;">เทียบ Target</th>
+        </tr></thead>
+        <tbody>${dailyRows || '<tr><td colspan="9" class="empty-cell">ยังไม่มีข้อมูลรายวัน</td></tr>'}</tbody>
+      </table></div>
+      <div class="zone-breakdown-foot">Productivity รายวัน = ROUND(หน่วยหยิบ ÷ Active Hours) · นับเมื่อ Active Hours &gt; 3 และ Prod &lt; 1000 · OT มาจากชั่วโมงที่มี Pick จริงในช่วง OT ของกะนั้น</div>
+    </div>
+  `;
+}
+
+function drawIndividualTrendChart(pickerId) {
+  const el = document.getElementById('individualTrendChart');
+  if (!el || typeof Chart === 'undefined') return;
+  const old = Chart.getChart('individualTrendChart');
+  if (old) old.destroy();
+
+  const daily = individualDailyRows(pickerId);
+  if (!daily.length) return;
+  const p = (A.by_picker || []).find(x => x.picker === pickerId);
+  const target = Math.round(pickerTargetInfo(p || {}).target);
+  const labels = daily.map(d => d.date.slice(5));
+  const qty = daily.map(d => Math.round(d.qty));
+  const prod = daily.map(d => d.prod);
+  const maxQty = Math.max(...qty, 1);
+  const maxProd = Math.max(...prod, target, 1);
+
+  new Chart(el, {
+    data: {
+      labels,
+      datasets: [
+        { type: 'bar', label: 'หน่วยหยิบ/วัน', data: qty, backgroundColor: '#818cf8', borderRadius: 6, yAxisID: 'y', order: 2 },
+        {
+          type: 'line', label: 'Productivity (หยิบ/ชม.)', data: prod,
+          borderColor: '#059669', backgroundColor: '#059669', borderWidth: 3, tension: .3,
+          pointRadius: 3.5, pointBackgroundColor: '#fff', pointBorderWidth: 2, yAxisID: 'y1', order: 1
+        },
+        {
+          type: 'line', label: `Target ${target}`, data: labels.map(() => target),
+          borderColor: '#f43f5e', borderWidth: 2, borderDash: [6, 5], pointRadius: 0,
+          yAxisID: 'y1', order: 0, datalabels: { display: false }
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'top' },
+        datalabels: {
+          clip: false, clamp: true, font: { weight: 700, size: 9.5 },
+          align: 'top', anchor: 'end',
+          color: ctx => (ctx.dataset.type === 'line' ? '#047857' : '#4338ca'),
+          display: ctx => Number(ctx.dataset.data[ctx.dataIndex]) > 0 && labels.length <= 16,
+          formatter: v => fmt(Math.round(Number(v)))
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { maxRotation: labels.length > 14 ? 90 : 0 } },
+        y: { beginAtZero: true, position: 'left', suggestedMax: Math.ceil(maxQty * 1.35), grace: '25%', grid: { display: false }, title: { display: true, text: 'หน่วยหยิบ' } },
+        y1: { beginAtZero: true, position: 'right', suggestedMax: Math.ceil(maxProd * 1.35), grid: { display: false }, title: { display: true, text: 'หยิบ/ชม.' } }
+      }
+    }
+  });
 }
 
 // ===== chart builders =====
@@ -6061,14 +7161,14 @@ const builders = {
     const pttValEl = document.getElementById('pttVal');
     if (pttValEl) pttValEl.textContent = `${fmt(Math.ceil(catData[0]))} ${unitTxt}`;
     const pttSubEl = document.getElementById('pttSubText');
-    if (pttSubEl) pttSubEl.textContent = `${fmt(pttTotals.pcs)} ชิ้น · ${fmt(pttTotals.lines)} Lines`;
+    if (pttSubEl) pttSubEl.textContent = `${fmt(pttTotals.lines)} Lines`;
 
     const bpsPctEl = document.getElementById('bpsSharePct');
     if (bpsPctEl) bpsPctEl.textContent = `${bpsPctVal}%`;
     const bpsValEl = document.getElementById('bpsVal');
     if (bpsValEl) bpsValEl.textContent = `${fmt(Math.ceil(catData[1]))} ${unitTxt}`;
     const bpsSubEl = document.getElementById('bpsSubText');
-    if (bpsSubEl) bpsSubEl.textContent = `${fmt(bpsTotals.pcs)} ชิ้น · ${fmt(bpsTotals.lines)} Lines`;
+    if (bpsSubEl) bpsSubEl.textContent = `${fmt(bpsTotals.lines)} Lines`;
 
     // Re-render Cat Donut Chart with clean layout
     const exCat = Chart.getChart('cat'); if (exCat) exCat.destroy();
@@ -6097,7 +7197,7 @@ const builders = {
                 const sysName = ctx.label;
                 const pVal = idx === 0 ? pttTotals.pcs : bpsTotals.pcs;
                 const qVal = idx === 0 ? pttTotals.qty : bpsTotals.qty;
-                return [` ${sysName}`, ` จำนวนชิ้น: ${fmt(pVal)} ชิ้น`, ` หน่วยหยิบ: ${fmt(qVal)} หน่วย`];
+                return [` ${sysName}`, ` หน่วยหยิบ: ${fmt(qVal)} หน่วย`];
               }
             }
           }
@@ -6481,7 +7581,6 @@ const builders = {
                   `Type Pick: ${row.typePick || '-'}`,
                   `Owner: ${row.owner || '-'}`,
                   `Location: ${locations.join(', ') || '-'}`,
-                  `จำนวนชิ้น: ${fmt(row.pcs)} ชิ้น`,
                   `หน่วยหยิบ: ${fmt(row.qty)} หน่วย`
                 ];
               }
@@ -6500,7 +7599,7 @@ const builders = {
       const mx = c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
       const e = document.createElement('div'); e.className = 'tile'; e.style.background = 'rgb(' + mx.join(',') + ')';
       if (t < .35) e.style.color = '#334155';
-      const mainTxt = isPcs ? `${fmt(x.pcs)} ชิ้น (${fmt(x.qty)} หน่วย)` : `${fmt(x.qty)} หน่วย (${fmt(x.pcs)} ชิ้น)`;
+      const mainTxt = `${fmt(x.qty)} หน่วยหยิบ`;
       const locations = masterLocationsByZone[x.zone] || x.locations || [];
       const zoneProd = (A.zone_prod_map && A.zone_prod_map[x.zone]) || null;
       const productivity = zoneProd ? Number(isPcs ? zoneProd.avg_pcs_prod : zoneProd.avg_prod) : 0;
@@ -6521,7 +7620,6 @@ const builders = {
       const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
       const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
       let h = `<thead><tr><th>#</th><th>Location</th><th>Zone</th><th>Type Pick</th><th>Owner</th>` +
-        `<th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น ${isPcs ? '★' : ''}</th>` +
         `<th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ ${!isPcs ? '★' : ''}</th>` +
         `<th class="num">Picker</th><th>สถานะช่วงที่เลือก</th></tr></thead><tbody>`;
       locationRows.forEach((row, i) => {
@@ -6544,7 +7642,6 @@ const builders = {
           `<td><span class="pill">${escapeZoneHtml(row.zone)}</span></td>` +
           `<td>${escapeZoneHtml(row.typePick)}</td>` +
           `<td>${escapeZoneHtml(row.owner)}</td>` +
-          `<td class="num" style="${pcsHeaderStyle}">${fmt(row.pcs || 0)}</td>` +
           `<td class="num" style="${qtyHeaderStyle}">${fmt(row.qty || 0)}</td>` +
           `<td class="num">${fmt(row.pickers || 0)}</td>` +
           `<td><span class="zone-status ${statusClass}" style="${extraStyle}">${escapeZoneHtml(noteStatus)}</span></td></tr>`;
@@ -6614,8 +7711,8 @@ const builders = {
     const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
     const prodHeaderLabel = isPcs ? 'ชิ้น/ชม.' : 'หยิบ/ชม.';
 
-    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>ชื่อพนักงาน</th><th>สังกัด</th><th>กะ</th><th>โซนตามชีต vs หน้างานจริง (BQ)</th><th class="num" style="${pcsHeaderStyle}">ชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">${qtyHeaderTitle} ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th><th style="text-align:center;">เจาะลึก</th></tr></thead><tbody>`;
-    if (!list.length) h += '<tr><td colspan="11" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลพนักงานตามเงื่อนไขที่เลือก</td></tr>';
+    let h = `<thead><tr><th>#</th><th>รหัส Picker</th><th>ชื่อพนักงาน</th><th>สังกัด</th><th>กะ</th><th>โซนตามชีต vs หน้างานจริง (BQ)</th><th class="num" style="${qtyHeaderStyle}">${qtyHeaderTitle} ${!isPcs ? '★' : ''}</th><th class="num">OT (ชม.)</th><th class="num">${prodHeaderLabel}</th><th style="text-align:center;">เจาะลึก</th></tr></thead><tbody>`;
+    if (!list.length) h += '<tr><td colspan="10" style="text-align:center;color:#94a3b8;padding:24px">ไม่มีข้อมูลพนักงานตามเงื่อนไขที่เลือก</td></tr>';
     list.forEach((p, i) => {
       const pcsCellStyle = isPcs ? 'background:#f0f9ff;font-weight:700;color:#0284c7;' : 'color:#0f766e;font-weight:600;';
       const qtyCellStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : 'color:#4338ca;font-weight:600;';
@@ -6684,7 +7781,6 @@ const builders = {
           ${mobilityPill}
           ${actualZoneSummary}
         </td>
-        <td class="num" style="${pcsCellStyle}">${fmt(p.pcs)}</td>
         <td class="num" style="${qtyCellStyle}">${fmt(p.qty)}${bqDiffSubtitle}</td>
         <td class="num">${p.ot > 0 ? fmt(p.ot) : '-'}</td>
         <td class="num">
@@ -6795,7 +7891,7 @@ const builders = {
                 return [
                   ` SKU: ${item.sku}`,
                   ` Owner: ${item.owner || '-'}`,
-                  ` จำนวน: ${fmt(item.pcs)} ชิ้น (${fmt(item.qty)} หน่วยหยิบ)`
+                  ` จำนวน: ${fmt(item.qty)} หน่วยหยิบ`
                 ];
               }
             }
@@ -6871,15 +7967,15 @@ const builders = {
       const pcsHeaderStyle = isPcs ? 'background:#e0f2fe;color:#0369a1;font-weight:700;' : '';
       const qtyHeaderStyle = !isPcs ? 'background:#e0e7ff;color:#3730a3;font-weight:700;' : '';
 
-      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th>Location</th><th>Zone</th><th class="num" style="${pcsHeaderStyle}">จำนวนชิ้น (QTY เดิม) ${isPcs ? '★' : ''}</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (BigQuery) ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
+      let h = `<thead><tr><th>#</th><th>รหัส SKU</th><th>ชื่อสินค้า</th><th>Owner</th><th>Location</th><th>Zone</th><th class="num" style="${qtyHeaderStyle}">หน่วยหยิบ (BigQuery) ${!isPcs ? '★' : ''}</th><th style="text-align:center;">สถานะการคำนวณ</th></tr></thead><tbody>`;
       if (!displayItems.length) {
         const itemState = itemCubeLoadState.get(itemCubeRequestKey());
         if (!hasCurrentItemCube() && itemState && itemState.status === 'error') {
-          h += `<tr><td colspan="9" style="text-align:center;color:#b91c1c;padding:24px">โหลดรายการสินค้าไม่สำเร็จ: ${escapeZoneHtml(itemState.message || '')} <button onclick="retryCurrentItemCube()" class="refreshbtn">ลองอีกครั้ง</button></td></tr>`;
+          h += `<tr><td colspan="8" style="text-align:center;color:#b91c1c;padding:24px">โหลดรายการสินค้าไม่สำเร็จ: ${escapeZoneHtml(itemState.message || '')} <button onclick="retryCurrentItemCube()" class="refreshbtn">ลองอีกครั้ง</button></td></tr>`;
         } else if (!hasCurrentItemCube()) {
-          h += '<tr><td colspan="9" style="text-align:center;color:#64748b;padding:24px">⏳ กำลังโหลดสินค้า 4 Owner เฉพาะช่วงวันที่เลือก… หน้าอื่นยังใช้งานได้ตามปกติ</td></tr>';
+          h += '<tr><td colspan="8" style="text-align:center;color:#64748b;padding:24px">⏳ กำลังโหลดสินค้า 4 Owner เฉพาะช่วงวันที่เลือก… หน้าอื่นยังใช้งานได้ตามปกติ</td></tr>';
         } else {
-          h += '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
+          h += '<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:24px">ไม่พบสินค้าที่ตรงกับคำค้นหา</td></tr>';
         }
       } else {
         displayItems.forEach((x, i) => {
@@ -6916,7 +8012,6 @@ const builders = {
             <td><span class="pill">${x.owner || '-'}</span></td>
             <td>${locPill}</td>
             <td>${zonePill}</td>
-            <td class="num" style="${isEx ? 'color:#94a3b8;' : pcsCellStyle}">${fmt(x.pcs)}</td>
             <td class="num" style="${isEx ? 'color:#94a3b8;' : qtyCellStyle}">${fmt(x.qty)}</td>
             <td style="text-align:center;display:flex;align-items:center;justify-content:center;gap:10px;">${statusBadge} ${btnAction}</td>
           </tr>`;
@@ -7871,6 +8966,15 @@ const builders = {
   },
   training() {
     renderTrainingPage();
+  },
+  belowtarget() {
+    renderBelowTargetPage();
+  },
+  trend() {
+    renderTrendPage();
+  },
+  individual() {
+    renderIndividualPage();
   }
 };
 
@@ -8230,7 +9334,6 @@ function drawEfficiencyTables(daily, target, isPcs, uTxt) {
       return `<tr>
         <td>${index + 1}</td>
         <td><b>${d.date.slice(8, 10)}/${d.date.slice(5, 7)}/${d.date.slice(0, 4)}</b></td>
-        <td class="num">${fmt(d.pcs || 0)}</td>
         <td class="num">${fmt(d.qty || 0)}</td>
         <td class="num">${fmtDecimal1(d.hours || 0)}</td>
         <td class="num" style="font-weight:700;color:#2563eb;">${fmtDecimal1(prod)}</td>
@@ -8246,7 +9349,6 @@ function drawEfficiencyTables(daily, target, isPcs, uTxt) {
         <tr>
           <th>#</th>
           <th>วันที่</th>
-          <th class="num">จำนวนชิ้น</th>
           <th class="num">หน่วยหยิบ</th>
           <th class="num">ชั่วโมง Active</th>
           <th class="num">Prod จริง (${uTxt})</th>
@@ -8256,7 +9358,7 @@ function drawEfficiencyTables(daily, target, isPcs, uTxt) {
           <th style="text-align:center;">สถานะ</th>
         </tr>
       </thead>
-      <tbody>${rows || '<tr><td colspan="10" class="empty-cell">ไม่พบข้อมูลในช่วงที่เลือก</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="9" class="empty-cell">ไม่พบข้อมูลในช่วงที่เลือก</td></tr>'}</tbody>
     `;
   }
 
@@ -8282,7 +9384,6 @@ function drawEfficiencyTables(daily, target, isPcs, uTxt) {
         <td>${index + 1}</td>
         <td><b>${escapeZoneHtml(zoneName)}</b></td>
         <td><span class="pill" style="font-size:11.5px;padding:2px 8px;">${escapeZoneHtml(typePick)}</span></td>
-        <td class="num">${fmt(z.pcs || 0)}</td>
         <td class="num">${fmt(z.qty || 0)}</td>
         <td class="num" style="font-weight:700;color:#2563eb;">${fmtDecimal1(prod)}</td>
         <td class="num">${zoneTarget}</td>
@@ -8297,15 +9398,14 @@ function drawEfficiencyTables(daily, target, isPcs, uTxt) {
           <th>#</th>
           <th>โซน (Zone)</th>
           <th>ประเภทการจัดเก็บ (Type Pick)</th>
-          <th class="num">จำนวนชิ้น</th>
           <th class="num">หน่วยหยิบ</th>
           <th class="num">Productivity (${uTxt})</th>
-          <th class="num">Target ประจำประเภท</th>
+          <th class="num">Target ของโซน</th>
           <th class="num">% Efficiency</th>
           <th style="text-align:center;">สถานะ</th>
         </tr>
       </thead>
-      <tbody>${rows || '<tr><td colspan="9" class="empty-cell">ไม่พบข้อมูลโซน</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="8" class="empty-cell">ไม่พบข้อมูลโซน</td></tr>'}</tbody>
     `;
   }
 }
@@ -8332,7 +9432,6 @@ function renderCycleTimePage() {
 
   const cards = [
     { label: '⏱️ Cycle Time ต่อหน่วยหยิบ', val: `${fmtDecimal1(secPerUnit)}`, unit: 'วินาที/หน่วย', sub: `เป้าหมาย Pace: ${fmtDecimal1(targetCycleTime)} วินาที`, color: secPerUnit <= targetCycleTime ? '#059669' : '#d97706' },
-    { label: '📦 Cycle Time ต่อชิ้น', val: `${fmtDecimal1(secPerPc)}`, unit: 'วินาที/ชิ้น', sub: `เฉลี่ยจากทั้งหมด ${fmt(totalPcs)} ชิ้น`, color: '#0891b2' },
     { label: '📑 Line Pace (เวลาต่อบรรทัด)', val: `${fmtDecimal1(secPerLine)}`, unit: 'วินาที/Line', sub: `เฉลี่ยจาก ${fmt(totalLines)} Lines`, color: '#7c3aed' },
     { label: '⚡ ความเร็วเฉลี่ย (Speed)', val: `${fmt(speedPerHour)}`, unit: `${uTxt}/ชม.`, sub: `เวลาทำงาน Active รวม ${fmtDecimal1(totalHours)} ชม.`, color: '#2563eb' }
   ];
@@ -8383,7 +9482,7 @@ function renderCycleTimePage() {
 
     <div class="card wide" style="margin-bottom:20px;">
       <h3 style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:4px;">🏭 ตารางวิเคราะห์ Cycle Time &amp; ความเร็วรายโซน</h3>
-      <div class="sub" style="margin-bottom:12px;">รายละเอียดเวลาเฉลี่ยต่อหน่วย (Cycle Time), เวลาต่อชิ้น, ปริมาณหยิบ และการประเมินความเร็ว</div>
+      <div class="sub" style="margin-bottom:12px;">รายละเอียดเวลาเฉลี่ยต่อหน่วยหยิบ (Cycle Time), ปริมาณหยิบ และการประเมินความเร็ว</div>
       <div style="overflow-x:auto;">
         <table id="cycleTimeZoneTable" class="affiliation-table"></table>
       </div>
@@ -8551,8 +9650,6 @@ function drawCycleTimeTables(daily, targetCycleTime, isPcs, uTxt) {
       const zoneName = z.name || z.zone || '-';
       const typePick = getTypePickForZone(zoneName, z);
       const secUnit = prod > 0 ? Math.round((3600 / prod) * 10) / 10 : 0;
-      const pcsProd = Number(z.avg_pcs_prod || z.pcs || 0);
-      const secPc = pcsProd > 0 ? Math.round((3600 / pcsProd) * 10) / 10 : 0;
 
       let speedBadge = '<span class="badge-status fail">🐢 ช้ากว่าเป้า</span>';
       if (secUnit > 0 && secUnit <= targetCycleTime * 0.85) {
@@ -8565,11 +9662,9 @@ function drawCycleTimeTables(daily, targetCycleTime, isPcs, uTxt) {
         <td>${index + 1}</td>
         <td><b>${escapeZoneHtml(zoneName)}</b></td>
         <td><span class="pill" style="font-size:11.5px;padding:2px 8px;">${escapeZoneHtml(typePick)}</span></td>
-        <td class="num">${fmt(z.pcs || 0)}</td>
         <td class="num">${fmt(z.qty || 0)}</td>
         <td class="num" style="font-weight:700;color:#0891b2;">${fmtDecimal1(prod)}</td>
         <td class="num" style="font-weight:800;color:#0f172a;">${secUnit > 0 ? secUnit + ' s' : '-'}</td>
-        <td class="num" style="color:#64748b;">${secPc > 0 ? secPc + ' s' : '-'}</td>
         <td style="text-align:center;">${speedBadge}</td>
       </tr>`;
     }).join('');
@@ -8580,15 +9675,13 @@ function drawCycleTimeTables(daily, targetCycleTime, isPcs, uTxt) {
           <th>#</th>
           <th>โซน (Zone)</th>
           <th>รูปแบบการจัดเก็บ</th>
-          <th class="num">จำนวนชิ้น</th>
           <th class="num">หน่วยหยิบ</th>
           <th class="num">Prod (${uTxt}/ชม.)</th>
           <th class="num">Cycle Time ต่อหน่วย</th>
-          <th class="num">Cycle Time ต่อชิ้น</th>
           <th style="text-align:center;">การประเมินความเร็ว</th>
         </tr>
       </thead>
-      <tbody>${rows || '<tr><td colspan="9" class="empty-cell">ไม่พบข้อมูลโซน</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="7" class="empty-cell">ไม่พบข้อมูลโซน</td></tr>'}</tbody>
     `;
   }
 
@@ -8612,7 +9705,6 @@ function drawCycleTimeTables(daily, targetCycleTime, isPcs, uTxt) {
         <td>${escapeZoneHtml(p.name)}</td>
         <td>${escapeZoneHtml(p.affiliation || '-')}</td>
         <td>${escapeZoneHtml(p.zone || '-')}</td>
-        <td class="num">${fmt(p.pcs || 0)}</td>
         <td class="num">${fmt(p.qty || 0)}</td>
         <td class="num" style="font-weight:700;color:#0891b2;">${fmtDecimal1(p.prod)}</td>
         <td class="num" style="font-weight:800;color:#059669;">⚡ ${p.sec} วินาที/หน่วย</td>
@@ -8627,13 +9719,12 @@ function drawCycleTimeTables(daily, targetCycleTime, isPcs, uTxt) {
           <th>ชื่อพนักงาน</th>
           <th>สังกัด</th>
           <th>โซนหลัก</th>
-          <th class="num">จำนวนชิ้น</th>
           <th class="num">หน่วยหยิบ</th>
           <th class="num">Productivity</th>
           <th class="num">Cycle Time ต่อหน่วย</th>
         </tr>
       </thead>
-      <tbody>${rows || '<tr><td colspan="9" class="empty-cell">ไม่พบข้อมูลพนักงาน</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="8" class="empty-cell">ไม่พบข้อมูลพนักงาน</td></tr>'}</tbody>
     `;
   }
 }
@@ -9131,7 +10222,6 @@ function renderSheetAnalysisView() {
   if (stats) {
     const cards = [
       ['หน่วยหยิบรวม', fmt(totalUnits), 'หน่วยหยิบ', '#2563eb'],
-      ['จำนวนชิ้นรวม', fmt(totalPcs), 'ชิ้น', '#0891b2'],
       ['Productivity รวม', fmtDecimal1(combinedProd), 'หยิบ/ชม.', '#7c3aed'],
       ['ประสิทธิภาพเทียบเป้า', fmtDecimal1(achievement), '%', achievement >= 100 ? '#059669' : '#d97706'],
       ['Not Found', fmt(unknownPickerRows.length), 'พนักงาน', unknownPickerRows.length ? '#dc2626' : '#059669']
@@ -9146,9 +10236,9 @@ function renderSheetAnalysisView() {
       const productivity = Number(k.avg_prod || 0);
       const efficiency = prodTarget > 0 ? productivity / prodTarget * 100 : 0;
       const status = productivity >= prodTarget ? '<span class="badge-status pass">✅ Hit</span>' : '<span class="badge-status fail">⚠️ Miss</span>';
-      return `<tr><td>${index + 1}</td><td><b>${row.label}</b></td><td class="num">${fmt(k.pcs || 0)}</td><td class="num">${fmt(k.qty || 0)}</td><td class="num">${fmtDecimal1(productivity)}</td><td class="num">${fmtDecimal1(efficiency)}%</td><td class="num">${prodTarget}</td><td style="text-align:center">${status}</td></tr>`;
+      return `<tr><td>${index + 1}</td><td><b>${row.label}</b></td><td class="num">${fmt(k.qty || 0)}</td><td class="num">${fmtDecimal1(productivity)}</td><td class="num">${fmtDecimal1(efficiency)}%</td><td class="num">${prodTarget}</td><td style="text-align:center">${status}</td></tr>`;
     }).join('');
-    systemTable.innerHTML = `<thead><tr><th>#</th><th>ระบบ</th><th class="num">จำนวนชิ้น</th><th class="num">หน่วยหยิบ</th><th class="num">Productivity</th><th class="num">Efficiency เทียบเป้า</th><th class="num">Target</th><th>Hit/Miss</th></tr></thead><tbody>${body}</tbody>`;
+    systemTable.innerHTML = `<thead><tr><th>#</th><th>ระบบ</th><th class="num">หน่วยหยิบ</th><th class="num">Productivity</th><th class="num">Efficiency เทียบเป้า</th><th class="num">Target</th><th>Hit/Miss</th></tr></thead><tbody>${body}</tbody>`;
   }
 
   const nfTable = document.getElementById('sheetAnalysisNotFoundTable');
@@ -9161,10 +10251,10 @@ function renderSheetAnalysisView() {
         reasons.push(rawTeam ? `ค่า Team “${rawTeam}” ไม่ใช่ A/B` : 'ไม่พบกะ A/B');
       }
       if (!row.zone || row.zone === '-' || row.zone === '??') reasons.push('ไม่พบ Zone');
-      return `<tr><td>${index + 1}</td><td><b>${escapeZoneHtml(row.picker || '-')}</b></td><td>${escapeZoneHtml(row.name || '-')}</td><td>${escapeZoneHtml(reasons.join(', ') || 'Master ไม่ครบ')}</td><td class="num">${fmt(row.pcs || 0)}</td><td class="num">${fmt(row.qty || 0)}</td><td class="num">${fmtDecimal1(row.avg_prod || 0)}</td><td><span class="badge-status fail">Not Found</span></td></tr>`;
+      return `<tr><td>${index + 1}</td><td><b>${escapeZoneHtml(row.picker || '-')}</b></td><td>${escapeZoneHtml(row.name || '-')}</td><td>${escapeZoneHtml(reasons.join(', ') || 'Master ไม่ครบ')}</td><td class="num">${fmt(row.qty || 0)}</td><td class="num">${fmtDecimal1(row.avg_prod || 0)}</td><td><span class="badge-status fail">Not Found</span></td></tr>`;
     }).join('');
     const zoneSummary = unknownZoneRows.length ? ` · Zone ไม่พบ Master ${fmt(unknownZoneRows.length)} Zone` : '';
-    nfTable.innerHTML = `<caption style="caption-side:top;text-align:left;padding:0 0 10px;color:#64748b;">Not Found ${fmt(unknownPickerRows.length)} พนักงาน · ${fmt(unknownUnits)} หน่วยหยิบ${zoneSummary} — ยอดยังถูกนับ แต่ Target/Hit/Miss ราย Master แสดง Not Found</caption><thead><tr><th>#</th><th>รหัสพนักงาน</th><th>ชื่อ</th><th>สาเหตุ</th><th class="num">ชิ้น</th><th class="num">หน่วยหยิบ</th><th class="num">Productivity</th><th>สถานะ Master</th></tr></thead><tbody>${pickerDetails || '<tr><td colspan="8" class="empty-cell">ไม่พบข้อมูล Not Found ในช่วงที่เลือก</td></tr>'}</tbody>`;
+    nfTable.innerHTML = `<caption style="caption-side:top;text-align:left;padding:0 0 10px;color:#64748b;">Not Found ${fmt(unknownPickerRows.length)} พนักงาน · ${fmt(unknownUnits)} หน่วยหยิบ${zoneSummary} — ยอดยังถูกนับ แต่ Target/Hit/Miss ราย Master แสดง Not Found</caption><thead><tr><th>#</th><th>รหัสพนักงาน</th><th>ชื่อ</th><th>สาเหตุ</th><th class="num">หน่วยหยิบ</th><th class="num">Productivity</th><th>สถานะ Master</th></tr></thead><tbody>${pickerDetails || '<tr><td colspan="7" class="empty-cell">ไม่พบข้อมูล Not Found ในช่วงที่เลือก</td></tr>'}</tbody>`;
   }
 }
 
@@ -9305,7 +10395,6 @@ function renderWeightedKpiView() {
           <td class="num"><span class="metric-main" style="color:#059669; font-weight:700;">${fmt(zProd)}</span></td>
           <td class="num"><span class="metric-main" style="color:#0284c7; font-weight:700;">+${fmt(zContrib)}</span></td>
           <td class="num">${fmt(z.eligibleQty || 0)}</td>
-          <td class="num">${fmt(z.eligiblePcs || 0)}</td>
           <td class="num">${fmt(z.hours || 0)} ชม.</td>
         </tr>`;
       });
@@ -9323,7 +10412,6 @@ function renderWeightedKpiView() {
           <th class="num">Productivity (${uTxt})</th>
           <th class="num">Contribution สู่ยอดรวม</th>
           <th class="num">หน่วยหยิบ</th>
-          <th class="num">จำนวนชิ้น</th>
           <th class="num">ชั่วโมงที่นับ</th>
         </tr>
       </thead>
@@ -9334,7 +10422,7 @@ function renderWeightedKpiView() {
           <td class="num" style="color:#065f46;">100%</td>
           <td class="num" style="color:#059669; font-size:15px; font-weight:800;">${fmt(totOverallProd)}</td>
           <td class="num" style="color:#0284c7; font-size:15px; font-weight:800;">${fmt(totOverallProd)}</td>
-          <td colspan="3" style="color:#047857; font-size:12px; vertical-align:middle;">คะแนนรวมตามสูตร DC 2026</td>
+          <td colspan="2" style="color:#047857; font-size:12px; vertical-align:middle;">คะแนนรวมตามสูตร DC 2026</td>
         </tr>
       </tfoot>
     `;
@@ -9407,8 +10495,7 @@ function renderTopPickersView() {
                   ` Location / Zone: ${picker.location} / ${picker.zone}`,
                   ` Type Pick / Owner: ${zoneInfo.typePick} / ${zoneInfo.owner}`,
                   ` Productivity (หยิบ): ${fmt(picker.avg_prod)} หยิบ/ชม.`,
-                  ` Productivity (ชิ้น): ${fmt(picker.avg_pcs_prod)} ชิ้น/ชม.`,
-                  ` ปริมาณ: ${fmt(picker.pcs)} ชิ้น (${fmt(picker.qty)} หน่วยหยิบ) (OT: ${picker.ot > 0 ? picker.ot + ' ชม.' : '-'})`
+                  ` ปริมาณ: ${fmt(picker.qty)} หน่วยหยิบ (OT: ${picker.ot > 0 ? picker.ot + ' ชม.' : '-'})`
                 ];
               }
             }
@@ -9453,9 +10540,7 @@ function renderTopPickersView() {
           ${bqZoneSnippet}
         </td>
         <td class="num">${fmt(x.qty)} หน่วย${bqDiffSub}</td>
-        <td class="num">${fmt(x.pcs)} ชิ้น</td>
         <td class="num"><span class="metric-main" style="color:#0284c7; font-weight:700;">${fmt(x.avg_prod)}</span></td>
-        <td class="num"><span class="metric-main" style="color:#059669; font-weight:700;">${fmt(x.avg_pcs_prod)}</span></td>
         <td class="num">${x.ot > 0 ? fmt(x.ot) + ' ชม.' : '-'}</td>
       </tr>`;
     }).join('');
@@ -9471,9 +10556,7 @@ function renderTopPickersView() {
           <th>สังกัด</th>
           <th>Location / Zone หลัก</th>
           <th class="num">${qtyHeaderTitle}</th>
-          <th class="num">จำนวนชิ้น</th>
           <th class="num">Productivity (หยิบ/ชม.)</th>
-          <th class="num">Productivity (ชิ้น/ชม.)</th>
           <th class="num">OT รวม</th>
         </tr>
       </thead>
@@ -10048,7 +11131,7 @@ function renderExcludedBadges() {
   badgeContainer.innerHTML = h;
 }
 
-function destroyCharts() { ['trend', 'cat', 'picker', 'zone', 'slot', 'item', 'typepickRadar', 'historyTrend', 'efficiencyTrendChart', 'efficiencyShiftChart', 'cycleTimeTrendChart', 'cycleTimeByZoneChart', 'incentiveTierChart', 'incentiveAffiliationChart'].forEach(id => { const c = Chart.getChart(id); if (c) c.destroy(); }); }
+function destroyCharts() { ['trend', 'cat', 'picker', 'zone', 'slot', 'item', 'typepickRadar', 'historyTrend', 'efficiencyTrendChart', 'efficiencyShiftChart', 'cycleTimeTrendChart', 'cycleTimeByZoneChart', 'incentiveTierChart', 'incentiveAffiliationChart', 'belowTargetZoneChart', 'trendPeriodChart', 'trendChangeChart', 'individualCompareChart', 'individualTrendChart'].forEach(id => { const c = Chart.getChart(id); if (c) c.destroy(); }); }
 
 function show(page) {
   if (!hasLiveData) return;
@@ -10697,12 +11780,14 @@ async function loadDataOnce(force, transientAttempt = 0, options = {}) {
 loadExcludedSkusFromStorage();
 loadExcludedZonesFromStorage();
 loadProdTargetFromStorage();
+loadZoneTargetsFromStorage();
 bindDataStateActions();
 updateExcludedZonesBar();
 document.querySelectorAll('.nav[data-page]').forEach(n => n.onclick = () => show(n.dataset.page));
 async function bootstrapDashboard() {
   restoreSheetDataFromStorage();
   try { await fetchSharedExclusions(false); } catch (err) { console.warn('Shared exclusions initial load failed:', err); }
+  try { await fetchSharedTargets(); } catch (err) { console.warn('Shared targets initial load failed:', err); }
   await restoreDashboardFromCache();
   const sheetPromise = (dfrom && dto) ? fetchSheetData(dfrom, dto, false).catch(() => null) : Promise.resolve(null);
   const result = await loadData(false);
@@ -11425,7 +12510,28 @@ function openTargetSettingsModal() {
   if (inMezz) inMezz.value = prodTargets.mezzanine || 170;
   if (inTrain) inTrain.value = prodTargets.training || 100;
 
+  renderTargetZoneInputs();
+  setTargetSaveStatus(sharedTargetsUpdatedAt
+    ? 'ค่ากลางล่าสุด: ' + new Date(sharedTargetsUpdatedAt).toLocaleString('th-TH')
+    : 'ยังไม่เคยบันทึกค่ากลาง');
   modal.style.display = 'flex';
+}
+
+function setTargetSaveStatus(message, color) {
+  const el = document.getElementById('targetSaveStatus');
+  if (!el) return;
+  el.textContent = String(message || '');
+  el.style.color = color || '#94a3b8';
+}
+
+function collectZoneTargetsFromModal() {
+  const next = {};
+  document.querySelectorAll('#targetZoneListHost .target-zone-input').forEach(inp => {
+    const key = normalizeTargetZoneKey(inp.dataset.zoneKey);
+    const num = Number(inp.value);
+    if (key && Number.isFinite(num) && num > 0) next[key] = Math.round(num * 10) / 10;
+  });
+  return next;
 }
 
 function closeTargetSettingsModal() {
@@ -11453,13 +12559,30 @@ function saveTargetSettingsFromModal() {
   };
 
   saveProdTargetsToStorage(updated);
-  closeTargetSettingsModal();
+  zoneTargets = collectZoneTargetsFromModal();
+  saveZoneTargetsToStorage();
+  // Target ต่อโซนถูกใช้ภายใน aggregate จึงต้องล้าง cache ไม่ใช่แค่ render ใหม่
+  aggregateCache.clear();
   render();
+
+  setTargetSaveStatus('กำลังบันทึกค่ากลาง…', '#38bdf8');
+  saveSharedTargets()
+    .then(() => {
+      setTargetSaveStatus('บันทึกค่ากลางแล้ว ✓', '#4ade80');
+      setTimeout(closeTargetSettingsModal, 700);
+    })
+    .catch(err => {
+      setTargetSaveStatus('บันทึกในเครื่องแล้ว แต่ส่งค่ากลางไม่สำเร็จ: ' + (err && err.message ? err.message : 'ไม่ทราบสาเหตุ'), '#fbbf24');
+    });
 }
 
 function resetTargetSettingsDefaults() {
   saveProdTargetsToStorage(DEFAULT_PROD_TARGETS);
+  zoneTargets = {};
+  saveZoneTargetsToStorage();
+  aggregateCache.clear();
   openTargetSettingsModal();
+  setTargetSaveStatus('กลับค่าเริ่มต้นแล้ว — กด “บันทึก Target” เพื่อส่งเป็นค่ากลาง', '#fbbf24');
   render();
 }
 

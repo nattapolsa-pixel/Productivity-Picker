@@ -8,7 +8,59 @@ const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const backend = fs.readFileSync(path.join(root, 'bigquery_to_json.gs'), 'utf8');
 
 assert(!html.includes('xlsx.full.min.js'), 'XLSX must not block the initial page load');
-assert(html.includes('app.js?v=20260905-efficiency-cycle-incentive-v94'), 'HTML must cache-bust the latest release');
+assert(html.includes('app.js?v=20260910-zonetarget-belowtarget-trend-individual-v95'), 'HTML must cache-bust the latest release');
+
+// ===== Target ราย Zone ย่อย (ค่ากลางร่วมกันทุกเครื่อง) =====
+assert(app.includes('function listTargetZones()') && app.includes('function resolveTargetZoneLabel') &&
+  app.includes('function zoneTargetOverride'),
+  'Zone-level targets must resolve location codes to their Zone_V2 label');
+assert(app.includes('const zoneOverride = zoneTargetOverride(zn);'),
+  'getTargetForZoneOrType must let a per-zone target win over the type target');
+assert(app.includes("action: 'set_dashboard_targets'") && app.includes('mode=dashboard_targets') &&
+  app.includes('function fetchSharedTargets()') && app.includes('function saveSharedTargets()'),
+  'Zone targets must sync through the shared Apps Script endpoint');
+assert(backend.includes("SHARED_TARGETS_PROPERTY = 'dashboard_shared_targets_v1'") &&
+  backend.includes("postData.action === 'set_dashboard_targets'") && backend.includes("mode === 'dashboard_targets'"),
+  'Apps Script must persist shared per-zone and per-type targets');
+assert(html.includes('id="targetZoneListHost"') && app.includes('function renderTargetZoneInputs()'),
+  'Target modal must render one input per Zone_V2 zone');
+
+// ===== หน่วยหยิบเท่านั้น: ปุ่มสลับหน่วย/ชิ้น ต้องไม่กลับมา =====
+assert(!html.includes('data-unit="pcs"') && !app.includes('data-unit="pcs"'),
+  'The pcs unit toggle must stay removed from the dashboard');
+assert(app.includes("const unitMode = 'units';"),
+  'unitMode must be locked to Pick Units so every page reports หน่วยหยิบ');
+assert(!app.includes('.unittog button').valueOf() || app.includes('.systog:not(.shiftog):not(.unittog):not(.prodmodetog) button'),
+  'System selector must keep its exclusionary selector');
+
+// ===== 3 หน้าใหม่: ไม่ถึงเป้า / เทรน / รายบุคคล =====
+assert(html.includes('data-page="belowtarget"') && html.includes('id="belowtargetPage"') &&
+  app.includes('function renderBelowTargetPage()'),
+  'Below-target page must be reachable and have a renderer');
+assert(html.includes('data-page="trend"') && html.includes('id="trendPage"') &&
+  app.includes('function renderTrendPage()') && app.includes('function buildTrendPeriods'),
+  'Weekly/monthly trend page must be reachable and have a renderer');
+assert(html.includes('data-page="individual"') && html.includes('id="individualPage"') &&
+  app.includes('function renderIndividualPage()') && app.includes('function individualScorecardHtml'),
+  'Individual overview must offer both the compare table and a scorecard');
+assert(app.includes('window.openIndividualScorecard = openIndividualScorecard;'),
+  'Below-target rows must be able to jump into a picker scorecard');
+assert(app.includes('function pickerTargetInfo(p)') && app.includes('blendedTarget'),
+  'Per-picker comparison must prefer the blended zone target when the Sheet provides zones');
+['belowtarget', 'trend', 'individual'].forEach(page => {
+  assert(app.includes(`${page}: '`) || app.includes(`${page}: "`), `TITLES must name the ${page} page`);
+  assert(app.includes(`  ${page}() {`), `builders must build the ${page} page`);
+});
+['belowTargetZoneChart', 'trendPeriodChart', 'trendChangeChart', 'individualCompareChart', 'individualTrendChart']
+  .forEach(id => assert(app.includes(`'${id}'`), `destroyCharts must own the ${id} canvas`));
+
+// ===== เมนูจัดกลุ่ม 4 หมวด =====
+assert(html.includes('class="nav-group"') && html.includes('class="nav-group-title"') &&
+  html.includes('class="sidebar-scroll"') && html.includes('class="nav-actions"'),
+  'Sidebar must group pages into ordered sections with a scrollable body');
+assert(html.includes('ดูก่อน · ภาพรวม') && html.includes('เจาะหาปัญหา') &&
+  html.includes('วิเคราะห์ลึก') && html.includes('จัดการ &amp; อ้างอิง'),
+  'Sidebar must keep the four usage-ordered group titles');
 assert(html.includes('data-page="efficiency"') && html.includes('id="efficiencyPage"') && app.includes('function renderEfficiencyPage()'),
   'Efficiency page must be reachable and have a renderer');
 assert(app.includes('function getTargetForZoneOrType') && (app.includes('const getTargetForType = getTargetForZoneOrType;') || app.includes('getTargetForZoneOrType(')),
@@ -95,9 +147,19 @@ assert(app.includes('กำลังโหลดรายการสินค�
   'Items page must wait for both Sheet master and BigQuery activity before rendering');
 assert(app.includes('function scheduleExclusionBackgroundRefresh()') && app.includes('}, 700);'),
   'Exclusion changes must debounce the background BigQuery refresh');
-assert(app.includes('Pick Detail เป็นกิจกรรม นำมาแมปด้วย Owner + Item') &&
-  !app.includes("dashboardResponseEncodingQuery(),\n        dashboardScopeQuery(),\n        't=' + Date.now()"),
-  'Item Cube must be exclusion-independent so item clicks can render instantly');
+assert(app.includes('Pick Detail เป็นกิจกรรม นำมาแมปด้วย Owner + Item'),
+  'Items page must LEFT JOIN Sheet master with BigQuery activity');
+// ตรวจที่ตัว query ของ loadCurrentItemCube โดยตรง
+// (assertion เดิมเทียบ string ที่มี \n ตรงๆ จึงเป็นจริงตลอดเมื่อไฟล์เป็น CRLF และไปแมตช์ slot cube แทน)
+(function assertItemCubeIsExclusionIndependent() {
+  const start = app.indexOf('async function loadCurrentItemCube(');
+  assert(start > 0, 'loadCurrentItemCube must exist');
+  const qStart = app.indexOf("'mode=item_cube'", start);
+  assert(qStart > start, 'loadCurrentItemCube must request mode=item_cube');
+  const query = app.slice(qStart, app.indexOf('].join', qStart));
+  assert(!query.includes('dashboardScopeQuery()'),
+    'Item Cube must be exclusion-independent so item clicks can render instantly');
+})();
 assert(/window\.toggleExcludeSku[\s\S]*?invalidateAggregationCache\(\);[\s\S]*?render\(\);[\s\S]*?scheduleExclusionBackgroundRefresh\(\);/.test(app),
   'Item exclusion must render locally before background synchronization');
 assert(/void Promise\.all\(\[\s*loadItemMaster\(false\),[\s\S]*?loadCurrentItemCube\(false, sys\)/.test(app),

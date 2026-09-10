@@ -75,23 +75,99 @@
       -webkit-text-fill-color: var(--muted)
     }
 
+    /* ── เมนูจัดกลุ่มตามลำดับการใช้งาน 4 หมวด ── */
+    .sidebar-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      margin: 0 -16px;
+      padding: 0 16px 4px 16px;
+      scrollbar-width: thin
+    }
+
+    .sidebar-scroll::-webkit-scrollbar {
+      width: 6px
+    }
+
+    .sidebar-scroll::-webkit-scrollbar-thumb {
+      background: #e2e8f0;
+      border-radius: 6px
+    }
+
+    .nav-group {
+      margin-bottom: 14px
+    }
+
+    .nav-group:last-child {
+      margin-bottom: 6px
+    }
+
+    .nav-group-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 10.5px;
+      font-weight: 800;
+      letter-spacing: .7px;
+      text-transform: uppercase;
+      color: #94a3b8;
+      padding: 0 6px;
+      margin-bottom: 6px
+    }
+
+    .nav-group-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 17px;
+      height: 17px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, var(--indigo), var(--violet));
+      color: #fff;
+      font-size: 10px;
+      font-weight: 800;
+      flex-shrink: 0
+    }
+
+    .nav-actions {
+      flex-shrink: 0;
+      padding-top: 10px;
+      border-top: 1px solid #eef2f7;
+      margin-top: 4px
+    }
+
     .nav {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 11px;
       border: 0;
       background: transparent;
       font-family: inherit;
-      font-size: 14.5px;
+      font-size: 13.5px;
       font-weight: 500;
       color: var(--muted);
-      padding: 12px 14px;
-      border-radius: 12px;
+      padding: 9px 12px;
+      border-radius: 11px;
       cursor: pointer;
       text-align: left;
       width: 100%;
       transition: .18s;
-      margin-bottom: 4px
+      margin-bottom: 2px
+    }
+
+    .nav-alert {
+      color: #be123c
+    }
+
+    .nav-alert:hover {
+      background: #fff1f2;
+      color: #9f1239
+    }
+
+    .nav-alert.active {
+      background: linear-gradient(90deg, #e11d48, #be123c);
+      box-shadow: 0 8px 18px -8px rgba(225, 29, 72, .7)
     }
 
     .nav:hover {
@@ -106,13 +182,14 @@
     }
 
     .nav svg {
-      width: 19px;
-      height: 19px;
+      width: 18px;
+      height: 18px;
       flex-shrink: 0
     }
 
     .sidebadge {
-      margin-top: auto;
+      flex-shrink: 0;
+      margin-top: 10px;
       background: #f0fdfa;
       color: #0f766e;
       border: 1px solid #99f6e4;
@@ -1440,6 +1517,49 @@
         display: none
       }
 
+      /* บนมือถือ sidebar เป็นแถบเลื่อนแนวนอน — คลี่กลุ่มเมนูออกเป็นแถวเดียว */
+      .sidebar-scroll {
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        flex: 0 0 auto;
+        overflow: visible;
+        margin: 0;
+        padding: 0;
+        gap: 4px
+      }
+
+      .nav-group {
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        margin: 0;
+        gap: 4px;
+        padding-left: 6px;
+        border-left: 1px solid #e2e8f0
+      }
+
+      .nav-group:first-child {
+        padding-left: 0;
+        border-left: 0
+      }
+
+      .nav-group-title {
+        display: none
+      }
+
+      .nav-actions {
+        display: flex;
+        flex-direction: row;
+        align-items: stretch;
+        flex: 0 0 auto;
+        border-top: 0;
+        border-left: 1px solid #e2e8f0;
+        padding: 0 0 0 6px;
+        margin: 0 0 0 4px;
+        gap: 4px
+      }
+
       .nav {
         flex: 0 0 auto;
         width: auto;
@@ -1457,11 +1577,12 @@
         height: 17px
       }
 
-      .upload-btn {
+      .upload-btn,
+      .nav-actions>button {
         flex: 0 0 auto;
         width: auto !important;
         min-width: max-content;
-        margin: 0 0 0 4px !important;
+        margin: 0 !important;
         padding: 10px 13px !important;
         font-size: 12px !important
       }
@@ -1817,75 +1938,120 @@
   <div class="layout">
     <nav class="sidebar">
       <div class="brand">Pick Productivity<span>คลังสินค้า · BPS / PTT</span></div>
-      <button class="nav active" data-page="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          stroke-width="2">
-          <rect x="3" y="3" width="7" height="7" rx="1" />
-          <rect x="14" y="3" width="7" height="7" rx="1" />
-          <rect x="3" y="14" width="7" height="7" rx="1" />
-          <rect x="14" y="14" width="7" height="7" rx="1" />
-        </svg> ภาพรวม</button>
-      <button class="nav" data-page="prod"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
-        </svg> Productivity</button>
-      <button class="nav" data-page="efficiency"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-          <polyline points="22 4 12 14.01 9 11.01" />
-        </svg> Efficiency</button>
-      <button class="nav" data-page="cycletime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10" />
-          <polyline points="12 6 12 12 16 14" />
-        </svg> Cycle Time</button>
-      <button class="nav" data-page="incentive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="8" r="6" />
-          <path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11" />
-        </svg> Incentive</button>
-      <button class="nav" data-page="zones"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21" />
-          <line x1="8" y1="3" x2="8" y2="18" />
-          <line x1="16" y1="6" x2="16" y2="21" />
-        </svg> โซน &amp; ผังคลัง</button>
-      <button class="nav" data-page="typebreak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          stroke-width="2">
-          <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-        </svg> Activity by Type Pick</button>
-      <button class="nav" data-page="pickers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          stroke-width="2">
-          <circle cx="12" cy="8" r="4" />
-          <path d="M4 21c0-4 4-6 8-6s8 2 8 6" />
-        </svg> พนักงาน (Picker)</button>
-      <button class="nav" data-page="training"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          stroke-width="2">
-          <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
-          <path d="M6 12v5c3 3 9 3 12 0v-5" />
-        </svg> พนักงานฝึกสอน (Training)</button>
-      <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 7v5l3 3" />
-        </svg> ช่วงเวลา</button>
-      <button class="nav" data-page="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 16V8l-9-5-9 5v8l9 5z" />
-          <path d="M3 8l9 5 9-5" />
-          <path d="M12 13v8" />
-        </svg> สินค้า (Items)</button>
-      <button class="nav" data-page="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          stroke-width="2">
-          <path d="M3 3v5h5" />
-          <path d="M3.8 8A9 9 0 1 1 6 18.5" />
-          <path d="M12 7v5l3 2" />
-        </svg> ข้อมูลย้อนหลัง V1</button>
-      <button class="nav" data-page="report"
-        style="margin-top:8px;background:linear-gradient(135deg,#7c3aed11,#6366f111);border:1px solid #c4b5fd;color:#6d28d9;font-weight:700;"><svg
-          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
-          <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-        </svg> 📊 สรุปผล & Insights</button>
-      <button class="nav" data-page="simulator"
-        style="margin-top:6px;background:linear-gradient(135deg,#eff6ff,#f8fbff);border:1px solid #bfdbfe;color:#1d4ed8;font-weight:700;"><svg
-          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 20V10" />
-          <path d="M12 20V4" />
-          <path d="M6 20v-6" />
-        </svg> Workforce Planning</button>
+
+      <div class="sidebar-scroll">
+      <!-- ══ 1. ดูก่อน: สรุปภาพรวมประจำวัน ══ -->
+      <div class="nav-group">
+        <div class="nav-group-title"><span class="nav-group-num">1</span>ดูก่อน · ภาพรวม</div>
+        <button class="nav active" data-page="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
+          </svg> ภาพรวมวันนี้</button>
+        <button class="nav" data-page="prod"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
+          </svg> Productivity</button>
+        <button class="nav" data-page="trend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <polyline points="3 17 9 11 13 15 21 7" />
+            <polyline points="15 7 21 7 21 13" />
+          </svg> เทรน สัปดาห์ / เดือน</button>
+      </div>
+
+      <!-- ══ 2. เจาะหาปัญหา: ใครและที่ไหนที่ต้องแก้ ══ -->
+      <div class="nav-group">
+        <div class="nav-group-title"><span class="nav-group-num">2</span>เจาะหาปัญหา</div>
+        <button class="nav nav-alert" data-page="belowtarget"><svg viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+            <line x1="12" y1="9" x2="12" y2="13" />
+            <line x1="12" y1="17" x2="12.01" y2="17" />
+          </svg> ไม่ถึงเป้า (รายโซน)</button>
+        <button class="nav" data-page="individual"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <circle cx="12" cy="7" r="4" />
+            <path d="M5.5 21a6.5 6.5 0 0 1 13 0" />
+          </svg> ภาพรวมรายบุคคล</button>
+        <button class="nav" data-page="zones"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21" />
+            <line x1="8" y1="3" x2="8" y2="18" />
+            <line x1="16" y1="6" x2="16" y2="21" />
+          </svg> โซน &amp; ผังคลัง</button>
+        <button class="nav" data-page="pickers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 21c0-4 4-6 8-6s8 2 8 6" />
+          </svg> พนักงาน (Picker)</button>
+        <button class="nav" data-page="typebreak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+          </svg> Activity by Type Pick</button>
+      </div>
+
+      <!-- ══ 3. วิเคราะห์ลึก: ตัวชี้วัดเชิงคุณภาพ ══ -->
+      <div class="nav-group">
+        <div class="nav-group-title"><span class="nav-group-num">3</span>วิเคราะห์ลึก</div>
+        <button class="nav" data-page="efficiency"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+            <polyline points="22 4 12 14.01 9 11.01" />
+          </svg> Efficiency</button>
+        <button class="nav" data-page="cycletime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg> Cycle Time</button>
+        <button class="nav" data-page="time"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 3" />
+          </svg> ช่วงเวลา</button>
+        <button class="nav" data-page="items"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M21 16V8l-9-5-9 5v8l9 5z" />
+            <path d="M3 8l9 5 9-5" />
+            <path d="M12 13v8" />
+          </svg> สินค้า (Items)</button>
+      </div>
+
+      <!-- ══ 4. จัดการ & อ้างอิง ══ -->
+      <div class="nav-group">
+        <div class="nav-group-title"><span class="nav-group-num">4</span>จัดการ &amp; อ้างอิง</div>
+        <button class="nav" data-page="incentive"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <circle cx="12" cy="8" r="6" />
+            <path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11" />
+          </svg> Incentive</button>
+        <button class="nav" data-page="training"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M22 10v6M2 10l10-5 10 5-10 5z" />
+            <path d="M6 12v5c3 3 9 3 12 0v-5" />
+          </svg> Training</button>
+        <button class="nav" data-page="simulator"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M18 20V10" />
+            <path d="M12 20V4" />
+            <path d="M6 20v-6" />
+          </svg> Workforce Planning</button>
+        <button class="nav" data-page="report"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+          </svg> สรุปผล &amp; Insights</button>
+        <button class="nav" data-page="history"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M3 3v5h5" />
+            <path d="M3.8 8A9 9 0 1 1 6 18.5" />
+            <path d="M12 7v5l3 2" />
+          </svg> ข้อมูลย้อนหลัง V1</button>
+      </div>
+      </div>
+
+      <div class="nav-actions">
       <button class="upload-btn" id="btnUploadModal"
         style="display:flex;align-items:center;gap:8px;padding:10px 14px;border:0;border-radius:12px;background:linear-gradient(90deg,#059669,#10b981);color:#fff;font-weight:600;font-size:13.5px;cursor:pointer;margin-top:10px;width:100%;box-shadow:0 4px 12px rgba(16,185,129,0.3);"><svg
           viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:19px;height:19px;">
@@ -1912,6 +2078,7 @@
           <line x1="16" y1="13" x2="8" y2="13" />
           <line x1="16" y1="17" x2="8" y2="17" />
         </svg> 📋 Export PDF Report</button>
+      </div>
       <div class="sidebadge"><span class="live-pulse-dot"></span>กำลังเชื่อมต่อ BigQuery…</div>
     </nav>
 
@@ -2548,6 +2715,18 @@
       <section class="page" data-page="incentive">
         <div id="incentivePage"></div>
       </section>
+
+      <section class="page" data-page="belowtarget">
+        <div id="belowtargetPage"></div>
+      </section>
+
+      <section class="page" data-page="trend">
+        <div id="trendPage"></div>
+      </section>
+
+      <section class="page" data-page="individual">
+        <div id="individualPage"></div>
+      </section>
     </main>
   </div>
   <!-- Modal สำหรับอัปโหลดไฟล์ CSV/Excel ตรงเข้า BigQuery -->
@@ -2641,7 +2820,7 @@
   <div id="targetSettingsModal" class="modal-overlay"
     style="display:none; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(11,15,25,0.78); backdrop-filter:blur(10px); z-index:10000; align-items:center; justify-content:center; padding:16px; box-sizing:border-box;">
     <div
-      style="background:linear-gradient(145deg, #0f172a 0%, #111827 50%, #0b0f19 100%); width:100%; max-width:540px; max-height:92vh; border-radius:24px; box-shadow:0 25px 60px -15px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.08); display:flex; flex-direction:column; overflow:hidden; animation:modalPop 0.22s ease-out; color:#e2e8f0;">
+      style="background:linear-gradient(145deg, #0f172a 0%, #111827 50%, #0b0f19 100%); width:100%; max-width:620px; max-height:92vh; border-radius:24px; box-shadow:0 25px 60px -15px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.08); display:flex; flex-direction:column; overflow:hidden; animation:modalPop 0.22s ease-out; color:#e2e8f0;">
 
       <!-- Modal Header -->
       <div
@@ -2656,7 +2835,8 @@
           <h2 style="margin:0; font-size:22px; font-weight:800; color:#f8fafc; letter-spacing:-0.5px;">ตั้งค่า Target
           </h2>
           <p style="margin:6px 0 0 0; font-size:12.5px; color:#94a3b8; line-height:1.4;">
-            เปลี่ยนค่า Target แล้ว Dashboard จะคำนวณสี สถานะ และคำสรุปใหม่ทันทีในเครื่องนี้
+            บันทึกแล้วเป็น <b style="color:#38bdf8;">ค่ากลาง</b> ทุกเครื่องเห็นเลขเดียวกัน · Target ราย Zone
+            ชนะ Target ตามประเภท
           </p>
         </div>
         <button id="btnCloseTargetSettings"
@@ -2749,13 +2929,19 @@
             onfocus="this.style.borderColor='#38bdf8';" onblur="this.style.borderColor='rgba(255,255,255,0.12)';">
         </div>
 
+        <!-- 🎯 Target แต่ละ Zone ย่อย (สร้างจาก Zone_V2 โดย app.js) -->
+        <div id="targetZoneListHost"></div>
+
         <!-- Info Callout Box -->
         <div
           style="background:rgba(30,58,138,0.25); border:1px solid rgba(59,130,246,0.3); border-radius:12px; padding:12px 14px; font-size:11.5px; color:#93c5fd; line-height:1.45; display:flex; gap:8px; align-items:flex-start; margin-top:4px;">
           <span style="font-size:14px; margin-top:1px;">ℹ️</span>
-          <div>Zone จะใช้ Target ตามประเภท Rack / EA, Pick to Sort ใช้ Target แยก และ Training ใช้ Target ของ Training
-            โดยตรง</div>
+          <div>ลำดับการใช้ Target: <b>Zone ย่อย</b> → ประเภท (Full / Half / Micro Rack, Pick to Sort, Mezzanine) →
+            Overall · ช่องโซนที่ปล่อยว่างจะกลับไปใช้ Target ตามประเภทอัตโนมัติ</div>
         </div>
+
+        <div id="targetSaveStatus"
+          style="font-size:11.5px; color:#94a3b8; min-height:16px; text-align:right; padding:0 2px;"></div>
 
       </div>
 
@@ -2806,7 +2992,7 @@
   <script src="picker_affiliation_fallback.js?v=20260727-affiliation-fallback-v1"></script>
   <script src="zone_master_fallback.js?v=20260727-zone-master-v1"></script>
   <script src="zone_layout.js?v=20260727-zone-layout-v1"></script>
-  <script src="app.js?v=20260905-efficiency-cycle-incentive-v94"></script>
+  <script src="app.js?v=20260910-zonetarget-belowtarget-trend-individual-v95"></script>
 </body>
 
 </html>

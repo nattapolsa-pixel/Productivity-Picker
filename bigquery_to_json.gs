@@ -40,6 +40,12 @@ const CACHE_REVISION_PROPERTY = 'dash_data_revision';
 const DASHBOARD_MIN_DATE_PROPERTY = 'dash_min_calendar_date_v4';
 const DASHBOARD_MAX_DATE_PROPERTY = 'dash_max_calendar_date_v4';
 const SHARED_EXCLUSIONS_PROPERTY = 'dashboard_shared_exclusions_v1';
+const SHARED_TARGETS_PROPERTY = 'dashboard_shared_targets_v1';
+// Target ต่อ Zone/Type เป็นค่ากลาง ทุกเครื่องต้องเห็นเลขเดียวกัน จึงเก็บใน ScriptProperties
+// โครงสร้าง: { version:1, types:{overall,fullRack,...}, zones:{ "<ZONE LABEL>": number }, updated_at }
+// ค่าเหล่านี้ไม่แตะ cache ของ dashboard เพราะเป็นเพียงเกณฑ์เปรียบเทียบฝั่งหน้าเว็บ
+const SHARED_TARGET_TYPE_KEYS = ['overall', 'fullRack', 'halfRack', 'microRack', 'pickToSort', 'mezzanine', 'training'];
+const SHARED_TARGET_MAX_ZONES = 200;
 const DASHBOARD_CACHE_FORMAT_VERSION = 'speed-v18-sheet-master-all-items';
 const CACHE_CHUNK_CHARS = 60000; // base64 เป็น ASCII; ต่ำกว่าขีดจำกัด 100 KB ต่อ key ของ CacheService
 const CACHE_CODEC = 'gzip-base64-v1';
@@ -76,6 +82,10 @@ function doGet(e) {
     const requestScope = getDashboardRequestScope_(e);
     if (mode === 'dashboard_exclusions') {
       return json_(getSharedDashboardExclusions_());
+    }
+    // Target ส่วนกลาง (ต่อ Type และต่อ Zone ย่อย) — payload เล็ก ไม่ Query BigQuery
+    if (mode === 'dashboard_targets') {
+      return json_(getSharedDashboardTargets_());
     }
     // Roster เป็น payload เล็กจาก Google Sheet โดยตรง ไม่ Query BigQuery
     // fresh=1 ใช้กับปุ่ม "อัปเดตรายชื่อ Picker" เพื่อบังคับอ่านชีตใหม่ทันที
@@ -287,6 +297,75 @@ function saveSharedDashboardExclusions_(postData) {
   lock.waitLock(10000);
   try {
     PropertiesService.getScriptProperties().setProperty(SHARED_EXCLUSIONS_PROPERTY, JSON.stringify(payload));
+  } finally {
+    lock.releaseLock();
+  }
+  return Object.assign({ status: 'success' }, payload);
+}
+
+function sharedTargetNumber_(value) {
+  const num = Number(value);
+  if (!isFinite(num) || num <= 0) return null;
+  return Math.round(num * 10) / 10;
+}
+
+function getSharedDashboardTargets_() {
+  const empty = { status: 'success', version: 1, initialized: false, types: {}, zones: {}, updated_at: '' };
+  const raw = PropertiesService.getScriptProperties().getProperty(SHARED_TARGETS_PROPERTY);
+  if (!raw) return empty;
+  try {
+    const parsed = JSON.parse(raw);
+    const types = {};
+    SHARED_TARGET_TYPE_KEYS.forEach(function(key) {
+      const num = sharedTargetNumber_(parsed && parsed.types ? parsed.types[key] : null);
+      if (num !== null) types[key] = num;
+    });
+    const zones = {};
+    const rawZones = parsed && parsed.zones && typeof parsed.zones === 'object' ? parsed.zones : {};
+    Object.keys(rawZones).slice(0, SHARED_TARGET_MAX_ZONES).forEach(function(key) {
+      const num = sharedTargetNumber_(rawZones[key]);
+      if (num !== null) zones[key] = num;
+    });
+    return {
+      status: 'success',
+      version: 1,
+      initialized: true,
+      types: types,
+      zones: zones,
+      updated_at: String(parsed.updated_at || '')
+    };
+  } catch (_) {
+    return empty;
+  }
+}
+
+function saveSharedDashboardTargets_(postData) {
+  const types = {};
+  const inTypes = postData && postData.types && typeof postData.types === 'object' ? postData.types : {};
+  SHARED_TARGET_TYPE_KEYS.forEach(function(key) {
+    const num = sharedTargetNumber_(inTypes[key]);
+    if (num !== null) types[key] = num;
+  });
+  const zones = {};
+  const inZones = postData && postData.zones && typeof postData.zones === 'object' ? postData.zones : {};
+  Object.keys(inZones).slice(0, SHARED_TARGET_MAX_ZONES).forEach(function(rawKey) {
+    // Zone label ใน Zone_V2 เป็นชื่อรวมได้ เช่น AL-BL-BM-AM จึงเก็บเป็น uppercase ตามที่ส่งมา
+    const key = String(rawKey == null ? '' : rawKey).replace(/ /g, ' ').trim().toUpperCase();
+    if (!key || key.length > 60) return;
+    const num = sharedTargetNumber_(inZones[rawKey]);
+    if (num !== null) zones[key] = num;
+  });
+  const payload = {
+    version: 1,
+    initialized: true,
+    types: types,
+    zones: zones,
+    updated_at: new Date().toISOString()
+  };
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    PropertiesService.getScriptProperties().setProperty(SHARED_TARGETS_PROPERTY, JSON.stringify(payload));
   } finally {
     lock.releaseLock();
   }
@@ -868,6 +947,9 @@ function doPost(e) {
     const postData = JSON.parse(e.postData.contents);
     if (postData.action === 'set_dashboard_exclusions') {
       return json_(saveSharedDashboardExclusions_(postData));
+    }
+    if (postData.action === 'set_dashboard_targets') {
+      return json_(saveSharedDashboardTargets_(postData));
     }
     // รุ่นใหม่: Browser อ่าน XLSX แล้วส่งเฉพาะ 11 คอลัมน์เป็น CSV UTF-8
     if (postData.action === 'upload_chunk_csv' && typeof postData.csv === 'string') {
