@@ -2701,7 +2701,7 @@ function renderAffiliationBreakdown() {
 // จึงอ่านเฉพาะ work cube (มีครบ 90 วันในเครื่องอยู่แล้ว = ไม่ยิง BigQuery เพิ่ม)
 // และ memo แยก cache ของตัวเอง
 //
-// ⚠️ ตัวเลขต้องตรงกับ aggregate().daily เป๊ะ — มี tests/chart_daily_series.test.js เทียบไว้
+// ⚠️ ตัวเลขต้องตรงกับ aggregate().daily เป๊ะ — มี dev/tests/chart_daily_series.test.js เทียบไว้
 // ถ้าแก้สูตร productivity ใน aggregate ต้องแก้ที่นี่ด้วย (ใช้ primitive ตัวเดียวกัน)
 // =========================================================================
 const chartDailyCache = new Map();

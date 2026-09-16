@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 
-require('../zone_layout.js');
+require('../../zone_layout.js');
 
 const layout = globalThis.ZONE_LAYOUT;
 assert.equal(layout.onFloor.length, 7);

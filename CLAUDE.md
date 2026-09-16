@@ -37,7 +37,7 @@ Dashboard **ไม่เคยอ่าน view โดยตรง** view มี
 | `apps-script-api.gs` (2,516) | Web App #2: Google Sheet "Results Master" → KPI (read-only) |
 | `pick_uom_master_pipeline.sql` (216) | runbook มือ: preflight → cutover view → post-check |
 | `zone_layout.js` / `zone_master_fallback.js` / `picker_names_fallback.js` / `picker_affiliation_fallback.js` | snapshot 2026-07-27 เป็น **พื้น** ไม่ใช่ตัว override |
-| `tests/*.test.js` (14) | plain Node ไม่มี framework — `node tests/xxx.test.js` |
+| `dev/tests/*.test.js` (14) | plain Node ไม่มี framework — `node dev/tests/xxx.test.js` (ย้ายจาก `tests/` มาที่นี่ 2026-09-16 เพื่อแยกไฟล์ dev-only ออกจากไฟล์ production ที่ root — path ภายใน 13/14 ไฟล์แก้เป็น `path.resolve(__dirname,'..','..')` แล้ว) |
 | `local_server.ps1` | static server `http://127.0.0.1:8088/` สำหรับทดสอบ local |
 
 ---
@@ -93,7 +93,7 @@ shift_minute: A = tmin-420, B(กลางคืน) = tmin-1140, B(เช้า
 - คำนวณใน **SQL ที่ JS สร้าง** (`dashboardShiftDateSql_` bq:457, `dashboardShiftCodeSql_` bq:465)
 - `v_pick_enriched.shift_date/.shift_code` คำนวณต่างกัน (ไม่เลื่อนวัน) และ **dashboard ไม่ใช้** — แก้ view แล้วหน้าเว็บไม่เปลี่ยน
 - Normalize เวลาต้นทาง: `pick_ts_local = pick_ts - 7 ชม.` เมื่อ `category='PTT'`, BPS ใช้ตามเดิม (`pick_uom_master_pipeline.sql:168`) — **บรรทัดสำคัญที่สุดของไฟล์นั้น**
-- test ล็อกค่าไว้ครบ 6 เคสใน `tests/shift_logic.test.js`
+- test ล็อกค่าไว้ครบ 6 เคสใน `dev/tests/shift_logic.test.js`
 
 ### 3.2 แยก "กะจริง" vs "Team รายงาน"
 | | มาจาก | ใช้ทำอะไร |
@@ -107,7 +107,7 @@ shift_minute: A = tmin-420, B(กลางคืน) = tmin-1140, B(เช้า
 ⚠️ **ตัวกรองกะต้องมีผลกับ Picker ที่มาจาก Sheet ด้วย** (แก้ 2026-09-10)
 บล็อกผสมข้อมูล Sheet เคยวน `s.pickers.all` ทั้งหมดแล้ว `push` เข้า `by_picker` โดยไม่เช็ค `sf`
 → เลือก "กะ A" แล้วยังเห็นคนกะ B โผล่มา ตอนนี้กรองด้วย `matchesReportTeam(null, userId, sf)` ตัวเดียวกับฝั่ง BigQuery
-`kpis.pickers` / `kpis.sheet_pickers` ก็นับหลังกรองแล้ว · `tests/shift_filter_sheet.test.js` ล็อกไว้
+`kpis.pickers` / `kpis.sheet_pickers` ก็นับหลังกรองแล้ว · `dev/tests/shift_filter_sheet.test.js` ล็อกไว้
 **ถ้าเพิ่มบล็อกที่เอาข้อมูลจาก Sheet มาผสมอีก ต้องกรอง `sf` เองทุกครั้ง**
 
 ### 3.2.1 ช่วงของ "ตาราง" vs ช่วงของ "กราฟ" — แยกกัน ⚠️ อัปเดต 2026-09-10
@@ -128,7 +128,7 @@ shift_minute: A = tmin-420, B(กลางคืน) = tmin-1140, B(เช้า
 
 ⚠️ **`dailySeriesForRange` ต้องผสม Sheet `monthlyTrend` ด้วย** (เหมือน `aggregate` §3.11)
 ไม่งั้นกราฟโชว์ยอด BigQuery ขณะที่ตารางโชว์ยอด Sheet = ไม่ตรงกัน
-`tests/chart_daily_series.test.js` เทียบ parity กับ `aggregate().daily` ไว้ **ทั้งกรณีมีและไม่มี Sheet**
+`dev/tests/chart_daily_series.test.js` เทียบ parity กับ `aggregate().daily` ไว้ **ทั้งกรณีมีและไม่มี Sheet**
 → ถ้าแก้สูตร productivity ใน `aggregate` ต้องแก้ที่นี่ด้วย test จะจับให้
 
 **เดือนของกราฟ** — `chartMonth` (`null` = auto ตามเดือนของ `dto`)
@@ -535,8 +535,8 @@ IndexedDB:    db 'pick_dashboard_cache_v1' store 'responses'  (TTL 30 วัน)
 ## 8. Tests — ต้องรันก่อน ship
 
 ```powershell
-cd "C:\Users\somka\Desktop\งาน\Pick Productivity_V2"
-Get-ChildItem tests\*.test.js | ForEach-Object { node $_.FullName }
+cd "D:\UserProfile\Desktop\งาน\Pick-Productivity-main_V2"
+Get-ChildItem dev\tests\*.test.js | ForEach-Object { node $_.FullName }
 ```
 ไม่มี package.json / framework — plain Node (**14 ไฟล์**: 12 ไฟล์ imperative assert, 2 ไฟล์ใช้ `node:test`)
 ควรรันข้าม timezone ด้วย เพราะมี logic เกี่ยวกับวันที่: `TZ=Asia/Bangkok`, `TZ=UTC`, `TZ=America/New_York`
@@ -628,7 +628,7 @@ Smoke test หลัง deploy:
 - [ ] เพิ่มฟังก์ชันที่ test ต้องเรียก → ต้องอยู่ **เหนือ** marker `// init`
 - [ ] เพิ่มค่าที่ user ควบคุมลง SQL → `sqlStringLiteral_` + allowlist ของตัวเอง (SQL ต่อ string ล้วน ไม่มี parameterization)
 - [ ] แก้ .gs → New deployment version
-- [ ] รัน `tests/` ทั้ง 10 ไฟล์
+- [ ] รัน `dev/tests/` ทั้ง 14 ไฟล์
 
 ---
 
@@ -651,7 +651,7 @@ Smoke test หลัง deploy:
 | 13 | slot cube width 6 เสีย picker identity → picker drilldown timeslot ว่างเงียบๆ | รู้ไว้ |
 | 14 | `app.js` เคยเป็น CRLF ในเครื่องแต่ LF ใน repo → `git diff` เป็นทั้งไฟล์ และ assertion ที่เทียบ string มี `\n` กลายเป็นจริงตลอด | ✅ **แก้แล้ว 2026-09-10** — normalize `app.js` เป็น LF แล้ว **อย่าเขียนกลับเป็น CRLF** และเลิกใช้ literal `\n` ใน assertion (ใช้ index/slice แทน) |
 | 15 | `fetchDailyItemCube` ส่ง `dashboardScopeQuery()` ต่างจาก `loadCurrentItemCube` ที่ไม่ส่ง | ตั้งใจหรือเปล่ายังไม่ยืนยัน — test บังคับเฉพาะ `loadCurrentItemCube` |
-| 16 | Picker จาก Sheet ถูก push เข้า `by_picker` โดยไม่เช็คตัวกรองกะ | ✅ **แก้แล้ว 2026-09-10** — `tests/shift_filter_sheet.test.js` ล็อกไว้ |
+| 16 | Picker จาก Sheet ถูก push เข้า `by_picker` โดยไม่เช็คตัวกรองกะ | ✅ **แก้แล้ว 2026-09-10** — `dev/tests/shift_filter_sheet.test.js` ล็อกไว้ |
 | 17 | **ยังเหลือ**: `kpis.qty` (`s.totalPick`), `kpis.avg_prod` (`s.overall.average`) และ `daily[]` (`s.monthlyTrend.days`) ยังเป็นค่า **รวมทุกกะ** ถึงจะเลือกกะ A/B อยู่ | ยังไม่แก้ — เป็นค่าที่ CLAUDE.md §3.11 ระบุว่า Sheet เป็นเจ้าของ ถ้าจะให้กรองตามกะต้องรวมจาก `sheetPickers` เอง **ต้องให้ผู้ใช้ตัดสินใจก่อน** เพราะเลขพาดหัวจะไม่ตรงกับยอดใน Sheet อีก |
 
 ---

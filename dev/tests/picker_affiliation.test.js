@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 
-require('../picker_affiliation_fallback.js');
+require('../../picker_affiliation_fallback.js');
 
 const map = globalThis.PICKER_AFFILIATION_FALLBACK;
 assert.equal(map['10090620'], 'PTG');

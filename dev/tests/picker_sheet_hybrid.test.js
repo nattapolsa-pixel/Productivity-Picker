@@ -5,7 +5,7 @@ const path = require('path');
 const vm = require('vm');
 
 test('Picker Sheet Hybrid mapping (Sheet primary volume + BigQuery actual zones)', () => {
-  const root = path.resolve(__dirname, '..');
+  const root = path.resolve(__dirname, '..', '..');
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
   const initMarker = source.search(/\/\/ init\r?\nloadExcludedSkusFromStorage\(\);/);
   assert(initMarker > 0, 'Unable to isolate dashboard functions');

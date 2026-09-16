@@ -5,7 +5,7 @@ const path = require('path');
 const vm = require('vm');
 
 test('Google Sheet Master persistence and immediate restoration on dashboard load', () => {
-  const root = path.resolve(__dirname, '..');
+  const root = path.resolve(__dirname, '..', '..');
   const source = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
   const initMarker = source.search(/\/\/ init\r?\nloadExcludedSkusFromStorage\(\);/);
   assert(initMarker > 0, 'Unable to isolate dashboard functions');

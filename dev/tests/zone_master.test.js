@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 
-require('../zone_master_fallback.js');
+require('../../zone_master_fallback.js');
 
 const master = globalThis.ZONE_MASTER_FALLBACK;
 assert.equal(Object.keys(master).length, 38);

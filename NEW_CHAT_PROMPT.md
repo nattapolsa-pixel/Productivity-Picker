@@ -53,7 +53,7 @@ V2 app.js     DATA_URL          → .../AKfycbyM0IVjD6Eo.../exec   (BigQuery)
 
 ## สถานะล่าสุด
 
-- **test V2 ผ่านหมด 14/14 ไฟล์** รันข้าม timezone แล้ว (Asia/Bangkok, UTC, America/New_York) — รันด้วย `node tests/xxx.test.js` ไม่มี framework ไม่มี package.json
+- **test V2 ผ่านหมด 14/14 ไฟล์** รันข้าม timezone แล้ว (Asia/Bangkok, UTC, America/New_York) — รันด้วย `node dev/tests/xxx.test.js` ไม่มี framework ไม่มี package.json (ย้ายจาก `tests/` มา `dev/tests/` แล้ว 2026-09-16 ดูรายละเอียดด้านล่าง)
 - **V1 แก้ไป 2 อย่างและ push ขึ้น GitHub แล้ว** (2026-09-15/16):
   1. เปลี่ยนปุ่ม "กลับค่าเริ่มต้น" ในหน้าตั้งค่า Target → ปุ่ม "ยกเลิก" (คนเผลอกดแล้ว Target หาย) + ใส่ตัวแปลง key เก่าใน `readStoredTargets()` กันค่าที่ผู้ใช้ตั้งไว้หาย
   2. ย้าย Zone AJ-AK จากกลุ่ม Full Rack → Half Rack (key `fullRackAjAk` → `halfRackAjAk`, Target คงไว้ 170 ตามที่เจ้าของงานเลือก) ใส่ `legacySource` fallback ฝั่ง client ไว้ **ทำให้ไม่ต้อง deploy .gs**
@@ -73,6 +73,13 @@ V2 app.js     DATA_URL          → .../AKfycbyM0IVjD6Eo.../exec   (BigQuery)
   6. bump cache-buster เป็น `app.js?v=20260916-remove-weighted-kpi-v100` + แก้ `performance_contract.test.js:11`
   7. อัปเดต CLAUDE.md §3.4 (ลบรายละเอียดสูตร weighted ทิ้ง เหลือ note ว่าตัดออกแล้ว) + checklist §10 + drift #4 ให้ตรงกับสถานะใหม่
   8. **Target ต่อโซน/ประเภท (§3.5, `zoneTargets`/`getTargetForZoneOrType`) ไม่ถูกแตะเลย** — อันนี้เป็นระบบ Target แยกจาก Weighted Productivity คนละเรื่องกัน ยังทำงานตามปกติ
+- **V2 ย้าย `tests/` → `dev/tests/` แล้ว** (2026-09-16, คนละรอบกับ AJ-AK และ Weighted KPI ข้างบน — ยังไม่ได้ push):
+  1. เจ้าของงานขอให้ลบไฟล์ที่ไม่ได้ใช้ (รวม tests/) เพราะเยอะ — สำรวจแล้วไม่มีไฟล์ไหน "ไม่ได้ใช้" จริง ๆ ทุกไฟล์ถูกอ้างอิงจากที่ใดที่หนึ่งเสมอ (script tag ใน index.html, .gitignore, หรือ test ที่ยังรันอยู่จริง) จึงเสนอย้าย `tests/` ออกไปแยกจากไฟล์ production แทนการลบ — เจ้าของงานตอบ "เก็บแยก" ยืนยันให้ย้าย ไม่ลบ
+  2. Copy ทั้ง 14 ไฟล์ไปที่ `dev/tests/` แล้วแก้ path ภายใน 13/14 ไฟล์ (ทุกไฟล์ยกเว้น `resigned_status.test.js` ที่ไม่มี relative path ให้แก้) จาก `path.resolve(__dirname,'..')` → `'..','..'` และ `require('../xxx.js')` → `require('../../xxx.js')` (ลึกขึ้นอีก 1 ชั้น)
+  3. รัน test ทั้ง 14 ไฟล์จาก `dev/tests/` ผ่านครบทั้ง 3 timezone ทั้งก่อนและหลังแก้ comment/cache-buster ด้านล่าง
+  4. แก้ comment ใน `app.js` ที่อ้างอิง `tests/chart_daily_series.test.js` → `dev/tests/...` + bump cache-buster เป็น `app.js?v=20260916-devtests-move-v101` + แก้ assertion บรรทัด 11 ใน `dev/tests/performance_contract.test.js` ให้ตรง
+  5. อัปเดต CLAUDE.md ทุกจุดที่เขียน `tests/` (ตารางไฟล์ §1, §3.2/§3.2.1, คำสั่งรัน test §8 — แก้ path เครื่อง/ชื่อโฟลเดอร์เก่าที่ค้างมาจากเครื่องอื่นไปด้วย, checklist §10, drift #16) เป็น `dev/tests/`
+  6. โฟลเดอร์ `tests/` เดิมถูกลบแล้วหลังยืนยันสิทธิ์ลบไฟล์ผ่าน Cowork (ดูสถานะจริงในหัวข้อนี้ครั้งถัดไปที่แก้)
 
 ---
 

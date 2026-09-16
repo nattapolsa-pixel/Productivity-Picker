@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
-require('../zone_layout.js');
-require('../zone_master_fallback.js');
+require('../../zone_layout.js');
+require('../../zone_master_fallback.js');
 
 const layout = globalThis.ZONE_LAYOUT;
 const master = globalThis.ZONE_MASTER_FALLBACK;
