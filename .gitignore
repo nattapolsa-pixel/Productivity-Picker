@@ -7,3 +7,7 @@ __pycache__/
 .codex_artifact_trial/
 outputs/
 
+sync-to-github.ps1
+sync-to-github.bat
+.sync-branch
+

@@ -1943,6 +1943,15 @@ function prepareZoneMaster() {
   };
   add(ZONE_MASTER_FALLBACK);
   add(DATA && DATA.meta && DATA.meta.zone_master);
+
+  // 2026-09-16: บังคับ AJ-AK เป็น Half Rack เสมอ ไม่ว่า Sheet Zone_V2 (live payload) จะยังเก็บว่า
+  // Full Rack อยู่หรือไม่ — เพราะ payload สดชนะ fallback ตามปกติ (ดู add() ด้านบน) และเราไม่มีสิทธิ์
+  // แก้ Sheet Zone_V2 ตรง ๆ จากที่นี่ ตั้งใจให้ตรงกับ PRODUCTIVITY_WEIGHT_CONFIG (HALF_RACK 30%)
+  // และตรงกับ V1 ที่ย้ายไปแล้ว ลบ override นี้เมื่อ Sheet Zone_V2 ถูกแก้ไขให้ตรงกันแล้วจริง ๆ
+  ['AJ', 'AK'].forEach(code => {
+    if (merged[code]) merged[code] = { ...merged[code], zone: 'AJ-AK', typePick: 'Half Rack' };
+  });
+
   ZONE_MASTER = merged;
 }
 

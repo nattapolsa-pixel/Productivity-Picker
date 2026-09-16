@@ -17,8 +17,10 @@
     AG: { zone: 'AG', typePick: 'Full Rack', owner: 'Punthai' },
     AH: { zone: 'AH-AI', typePick: 'Full Rack', owner: 'Punthai' },
     AI: { zone: 'AH-AI', typePick: 'Full Rack', owner: 'Punthai' },
-    AJ: { zone: 'AJ-AK', typePick: 'Full Rack', owner: 'Punthai' },
-    AK: { zone: 'AJ-AK', typePick: 'Full Rack', owner: 'Punthai' },
+    // 2026-09-16: ย้าย AJ-AK จาก Full Rack -> Half Rack ให้ตรงกับ PRODUCTIVITY_WEIGHT_CONFIG (app.js)
+    // ที่จัด AJ-AK เป็น HALF_RACK น้ำหนัก 30% อยู่แล้ว และให้ตรงกับ V1 ที่แก้ไปก่อนแล้ว
+    AJ: { zone: 'AJ-AK', typePick: 'Half Rack', owner: 'Punthai' },
+    AK: { zone: 'AJ-AK', typePick: 'Half Rack', owner: 'Punthai' },
     AL: { zone: 'AL-BL-BM-AM', typePick: 'Full Rack', owner: 'Max Mart' },
     AM: { zone: 'AL-BL-BM-AM', typePick: 'Full Rack', owner: 'Max Mart' },
     AN: { zone: 'AN-CA', typePick: 'Half Rack', owner: 'Max Mart' },
