@@ -165,20 +165,14 @@ support worker = responsibility มี `ช่วยงานส่วนอื�
 **กลุ่มลูก (zone / owner / type) ไม่มี productivity ของตัวเอง** — สืบทอดจาก parent picker×วันตรงๆ,
 `ot`/`wh` แบ่งตามสัดส่วน qty (`allocateParentHours` app.js:2897) ถ้า parent ไม่ countable → ลูกเป็น 0 ทั้งหมด
 
-**Weighted KPI (สูตร KPI Sheet 22 ส.ค.)** — `PRODUCTIVITY_WEIGHT_CONFIG` app.js:492
-```
-Overall = 0.37·FullRack + 0.48·HalfRack + 0.15·EA
-
-FULL_RACK : AH-AI 20% | AL-BL-AM-BM 30% | BE 50%
-HALF_RACK : AJ-AK 30% | AN-CA 10% | BN-DA 10% | BG-BH 5% | BI-BK 5%
-            CB-DB-DC-CC 15% | DD-DE 10% | CF-DF 15%
-EA        : EA 60% | FA 35% | YA 5%
-```
-กฎ: โซนที่ไม่มีข้อมูลนับเป็น **0**, **ไม่ normalize weight ใหม่**, Mezzanine HB ไม่มี weight = ตัดออกทั้งหมด
-สูตรนี้พิมพ์ซ้ำอยู่ใน index.html:2186 — **แก้ต้องแก้ทั้งสองที่**
-คำนวณ **ในเบราว์เซอร์เท่านั้น** (`calculateWeightedProductivity` app.js:2444)
-
-⚠️ `calculateCrossSystemWeightedProductivity` (app.js:2541) เป็น implementation ขนานที่ hardcode `PTT` และ **ไม่ถูกเรียกจาก `aggregate`** — แก้สูตร weight ต้องแก้ทั้งสองที่ ไม่งั้น drift
+**Weighted KPI — ตัดออกทั้งหมดแล้ว 2026-09-16** ⚠️
+เดิมมีสูตร `Overall = 0.37·FullRack + 0.48·HalfRack + 0.15·EA` (`PRODUCTIVITY_WEIGHT_CONFIG`) พร้อม toggle
+"หยิบจริง (Raw) / ถ่วงน้ำหนัก (Weighted KPI)" และแท็บ "สูตรถ่วงน้ำหนัก" ในหน้า Productivity — **ลบออกทั้งหมด
+ตามคำสั่งเจ้าของงาน**: `PRODUCTIVITY_WEIGHT_CONFIG`, `calculateWeightedProductivity`,
+`calculateCrossSystemWeightedProductivity` (dead code เดิม), `resolveProductivityWeightBucket`,
+`prodCalcMode`, ปุ่ม `.prodmodetog`, `renderWeightedProductivityBanner`, `renderWeightedKpiView`,
+แท็บย่อย `prodTabPanel-weighted`, โหมดกราฟ `rack` ใน `renderAnalyticsChart` (เดิม default, เปลี่ยนเป็น `target`)
+**Productivity ที่แสดงทุกที่ตอนนี้คือ Raw V2 (ค่าเฉลี่ยเลขคณิตของ prod รายคน×วัน) เท่านั้น** ไม่มีการถ่วงน้ำหนักตามโซนอีก
 
 ### 3.5 Target resolution ⚠️ อัปเดต 2026-09-10
 `getTargetForZoneOrType(typePick, zone)` — ลำดับความสำคัญ **3 ชั้น**:
@@ -623,7 +617,7 @@ Smoke test หลัง deploy:
 ## 10. เช็กลิสต์ก่อนแก้ (ห้ามพลาด)
 
 - [ ] แก้ `app.js` → bump cache-buster ที่ `<script src="app.js?v=...">` + แก้ `performance_contract.test.js:11`
-- [ ] แก้สูตร weighted KPI → แก้ **3 ที่**: `PRODUCTIVITY_WEIGHT_CONFIG` (492), `calculateCrossSystemWeightedProductivity` (2541), ข้อความใน index.html:2186
+- [ ] ~~แก้สูตร weighted KPI~~ — ตัดออกทั้งหมดแล้ว 2026-09-16 (ดู §3.4) ไม่มีสูตร weighted ให้แก้อีก
 - [ ] เพิ่ม owner สินค้า → `ALLOWED_ITEM_OWNERS` (app.js:457) **และ** allowlist ใน `buildItemMasterData_` (bq:548)
 - [ ] เพิ่มโซนใหม่ → `ZONE_GROUPS` (api:71) + `ALL_VALID_ZONES` (api:2067) + `zone_master_fallback.js` + `zone_layout.js` + test
 - [ ] เปลี่ยน payload width → `isValid*CubePayload` + `forEach*Row` + `dashboardPayloadRowCount` + `emptyData()`
@@ -645,7 +639,7 @@ Smoke test หลัง deploy:
 | 1 | revision bucket จริง **6 ชม.** ไม่ใช่ 15 นาที (bq:302, SETUP:84 เขียนผิด) | ต้องตัดสินใจว่าจะเอาพฤติกรรมไหน อย่าแก้แค่คอมเมนต์ |
 | 2 | เพดานแถว: SETUP:100 เขียน 50,000 / โค้ดจริง 100,000 | แก้เอกสาร |
 | 3 | `item_cube` ไม่มี `RECENT_DAYS` floor และกรอง `pick_date` ไม่ใช่ `shift_date` (ต่างจาก query อื่นทั้งหมด) | ตั้งใจหรือเปล่ายังไม่ยืนยัน |
-| 4 | `calculateCrossSystemWeightedProductivity` hardcode `PTT` และไม่ถูกเรียก | drift risk |
+| 4 | ~~`calculateCrossSystemWeightedProductivity` hardcode `PTT` และไม่ถูกเรียก~~ | ✅ **แก้แล้ว 2026-09-16** — ลบทั้งฟังก์ชันพร้อมระบบ Weighted KPI ทั้งหมด |
 | 5 | ~~Cycle Time `z.avg_pcs_prod \|\| z.pcs` — เอายอดมาใช้เป็นอัตรา~~ | ✅ **แก้แล้ว 2026-09-10** (คอลัมน์ Cycle Time ต่อชิ้น ถูกถอดออกพร้อมหน่วยชิ้น) |
 | 6 | Incentive: `isEligible` vs การ์ดสรุปนับ `reward>0` ไม่ตรงกัน | ต้องเลือกนิยามเดียว (ยังไม่แก้) |
 | 7 | `prodTarget` กับ `prodTargets.overall` เก็บค่าเดียวกันสองตัวแปร | เขียนผ่าน `saveProdTargetsToStorage` เท่านั้น |

@@ -90,18 +90,10 @@ vm.runInContext(`
 `, context);
 assert.equal(context.__masterSeeded.by_item_all.some(x => x.sku === 'ZERO1' && x.qty === 0 && x.status === 'NO_ACTIVITY'), true);
 
-vm.runInContext(`
-  prodCalcMode = 'raw';
-  aggregateCache.clear();
-  globalThis.__rawRes = aggregate('PTT','2026-08-01','2026-08-01','all');
-
-  prodCalcMode = 'weighted';
-  aggregateCache.clear();
-  globalThis.__weightedRes = aggregate('PTT','2026-08-01','2026-08-01','all');
-`, context);
-assert.equal(typeof context.__rawRes.kpis.avg_prod, 'number');
-assert.equal(typeof context.__weightedRes.kpis.avg_prod, 'number');
-assert.ok(context.__weightedRes.productivity_weighting);
-assert.ok(Array.isArray(context.__weightedRes.productivity_weighting.groups));
+// 2026-09-16: ตัดระบบ Weighted Productivity (prodCalcMode/productivity_weighting) ออกทั้งหมด
+// Productivity เป็น Raw V2 เสมอ — ยืนยันว่า kpis.avg_prod ยังเป็นเลขปกติ (ค่าจริงเช็คไปแล้วที่บรรทัด 56)
+assert.equal(typeof result.kpis.avg_prod, 'number');
+assert.equal(result.kpis.weighted_avg_prod, undefined);
+assert.equal(result.productivity_weighting, undefined);
 
 console.log('Compact cube aggregation tests passed');

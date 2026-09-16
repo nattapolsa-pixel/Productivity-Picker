@@ -121,8 +121,8 @@ function checkHtml(html, label) {
     if (!thead || !tbody) return;
     const thCount = (thead[0].match(/<th[\s>]/g) || []).length;
     if (!thCount) return;
-    // ตาราง Weighted KPI ใช้ rowspan จับกลุ่ม → แถวถัดไปมี td น้อยกว่า th อย่างถูกต้อง
-    // นับตรงๆ ไม่ได้ จึงข้ามทั้งตาราง
+    // ตารางที่ใช้ rowspan จับกลุ่ม (แถวถัดไปมี td น้อยกว่า th อย่างถูกต้อง) นับตรงๆ ไม่ได้ จึงข้ามทั้งตาราง
+    // (ไม่มีตารางไหนใช้ rowspan อยู่แล้วตอนนี้ — เผื่อไว้สำหรับตารางใหม่ในอนาคต)
     if (/rowspan=/.test(tbody[0])) return;
     [...tbody[0].matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].forEach((m, ri) => {
       const row = m[1];
@@ -149,7 +149,6 @@ const renderers = [
   'renderEfficiencyPage',
   'renderCycleTimePage',
   'renderIncentivePage',
-  'renderWeightedKpiView',
   'renderTopPickersView',
   'renderTargetDailyTable',
   'renderSheetAnalysisView',

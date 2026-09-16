@@ -64,6 +64,15 @@ V2 app.js     DATA_URL          → .../AKfycbyM0IVjD6Eo.../exec   (BigQuery)
   4. bump cache-buster เป็น `app.js?v=20260916-ajak-half-rack-v99` + แก้ `performance_contract.test.js:11` ให้ตรง แล้วรัน test ทั้ง 14 ไฟล์ผ่านครบทั้ง 3 timezone
   5. สร้าง `sync-to-github.bat` / `sync-to-github.ps1` ให้โฟลเดอร์ V2 แล้ว (ตาม pattern เดียวกับ V1) ชี้ไปที่ repo แยกของ V2: `https://github.com/nattapolsa-pixel/Productivity-Picker` — เพิ่ม `.gitignore` กันสองไฟล์นี้ (+ `.sync-branch`) ไม่ให้หลุดเข้า repo
   6. โฟลเดอร์นี้ยังไม่มี `.git` มาก่อน — รอบแรกที่กด `sync-to-github.bat` จะ `git init` + connect ไป repo ข้างบนให้เอง (ดูรายละเอียดใน skill `pick-productivity-github-sync`)
+- **V2 ตัดระบบ Weighted Productivity ออกทั้งหมดแล้ว** (2026-09-16, คนละรอบกับ AJ-AK ข้างบน — ยังไม่ได้ push):
+  1. ลบ `PRODUCTIVITY_WEIGHT_CONFIG`, `calculateWeightedProductivity`, `calculateCrossSystemWeightedProductivity` (dead code เดิม — แก้ drift #4 ไปในตัว), `resolveProductivityWeightBucket`, `normalizeProductivityWeightZone`
+  2. ลบ `prodCalcMode` state ทั้งหมด (ไม่มี toggle raw/weighted อีก) — `aggregate().kpis.avg_prod` เป็น Raw V2 เสมอ, ลบ `weighted_avg_prod`/`kpi_weighted_avg_prod`/`weight_coverage`/`productivity_weighting` ออกจาก payload ที่ `aggregate()` คืน
+  3. ลบ UI: ปุ่ม `.prodmodetog` ใน `.sysbar`, แท็บย่อย "สูตรถ่วงน้ำหนัก (Weighted KPI)" + panel `#prodTabPanel-weighted` ในหน้า Productivity, banner `#weightedProductivityBanner`, ข้อความ `Overall = (37%×Full Rack)+(48%×Half Rack)+(15%×EA)` ใน index.html
+  4. ลบโหมดกราฟ `rack` (FullRack/HalfRack/EA รายวัน) ใน `renderAnalyticsChart` — เปลี่ยน default ของ `prodAnalyticsMode` จาก `'rack'` เป็น `'target'` (โหมด Target vs Actual เดิม) ทั้งใน state และปุ่ม toggle `#prodChartModeTog` ใน index.html
+  5. อัปเดต `tests/cube_aggregation.test.js` (ลบ assertion ที่ทดสอบ prodCalcMode/productivity_weighting) และ `tests/table_columns.test.js` (ลบ `renderWeightedKpiView` ออกจาก list renderer ที่ทดสอบ) — รัน test ทั้ง 14 ไฟล์ผ่านครบ 3 timezone
+  6. bump cache-buster เป็น `app.js?v=20260916-remove-weighted-kpi-v100` + แก้ `performance_contract.test.js:11`
+  7. อัปเดต CLAUDE.md §3.4 (ลบรายละเอียดสูตร weighted ทิ้ง เหลือ note ว่าตัดออกแล้ว) + checklist §10 + drift #4 ให้ตรงกับสถานะใหม่
+  8. **Target ต่อโซน/ประเภท (§3.5, `zoneTargets`/`getTargetForZoneOrType`) ไม่ถูกแตะเลย** — อันนี้เป็นระบบ Target แยกจาก Weighted Productivity คนละเรื่องกัน ยังทำงานตามปกติ
 
 ---
 
